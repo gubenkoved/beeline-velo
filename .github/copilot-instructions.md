@@ -58,6 +58,7 @@ UI → Controller → (JobQueue · Store · BeelineApp) → Parsing → AdbDevic
 - **Parser tests** run against real captured Beeline screens in [tests/fixtures/recon/](../tests/fixtures/recon/) — reuse these dumps rather than hand-writing XML.
 - **Integration tests** drive a full `Controller` + `DemoAdb` (no phone). Wait for async work with `await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false))`.
 - Use the in-test `memStorage()` helper and a `makeController()` factory with an instant sleep — don't touch real `localStorage` or wall-clock delays in tests.
+- **Demo GPX downloads never trigger a browser "Save As"**: `saveGpxFile()` in [src/main.ts](../src/main.ts) short-circuits when `isDemo` (demo bytes are synthetic; the route is still drawn on the map from the stored track). This keeps the browser-driven demo/test flow prompt-free — Chromium's "ask where to save each file" would otherwise pop a dialog per ride. Only real-device GPX is written to disk. Preserve this guard when touching the GPX save path.
 
 ## Gotchas
 

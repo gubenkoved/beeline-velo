@@ -293,8 +293,8 @@ function mountMaps(): void {
 // the side panel still lists the rest, flagged, so nothing is silently hidden.
 // --------------------------------------------------------------------------- //
 const HOVER_PX = 8; // how close (in screen px) the cursor must be to "hit" a track
-const BASE_TRACK = { color: "#fc5200", weight: 3, opacity: 0.35, lineJoin: "round", lineCap: "round" } as const;
-const HOT_TRACK = { color: "#ffd24a", weight: 5, opacity: 1 } as const;
+const BASE_TRACK = { color: "#ff5a1f", weight: 3.5, opacity: 0.62, lineJoin: "round", lineCap: "round" } as const;
+const HOT_TRACK = { color: "#ffe066", weight: 6, opacity: 1 } as const;
 
 let allRidesMap: L.Map | null = null;
 let allRidesLayer: L.LayerGroup | null = null;
@@ -441,7 +441,7 @@ function mountAllRidesMap(): void {
     trackLines.clear();
     const all: L.LatLngExpression[] = [];
     for (const t of tracks) {
-      const line = L.polyline(t.points as L.LatLngExpression[], { ...BASE_TRACK }).addTo(allRidesLayer!);
+      const line = L.polyline(t.points as L.LatLngExpression[], { ...BASE_TRACK, className: "track-line" }).addTo(allRidesLayer!);
       trackLines.set(t.key, line);
       for (const p of t.points) all.push(p as L.LatLngExpression);
     }
@@ -460,6 +460,7 @@ function applyView(): void {
   document.getElementById("exploreView")?.classList.toggle("hidden", isMap);
   document.getElementById("mapView")?.classList.toggle("hidden", !isMap);
   document.getElementById("scanbar")?.classList.toggle("hidden", isMap);
+  if (!isMap && document.body.classList.contains("map-expanded")) setMapExpanded(false);
   document
     .querySelectorAll<HTMLButtonElement>("#viewTabs .vtab")
     .forEach((b) => b.classList.toggle("active", b.dataset.view === activeView));
@@ -476,6 +477,18 @@ function setView(v: ViewName): void {
   }
   applyView();
   render();
+}
+
+/** Toggle the Map view between inline and full-screen; resize Leaflet to match. */
+function setMapExpanded(on: boolean): void {
+  document.body.classList.toggle("map-expanded", on);
+  const btn = document.getElementById("btnMapExpand");
+  if (btn) btn.textContent = on ? "⤡ Exit full screen" : "⤢ Expand";
+  // The container changed size; let Leaflet re-measure and re-fit the hit-test grid.
+  requestAnimationFrame(() => {
+    allRidesMap?.invalidateSize();
+    reprojectTracks();
+  });
 }
 
 
@@ -1003,6 +1016,14 @@ function exportRides(): void {
 
 /** Trigger a browser "Save As" for a GPX file pulled off the phone. */
 function saveGpxFile(file: { filename: string; bytes: Uint8Array }): void {
+  // Demo GPX bytes are synthetic, and saving them would pop a browser "Save As"
+  // dialog for every ride (especially with "ask where to save each file" on),
+  // which makes the demo/test flow unusable. The route is already drawn on the
+  // map from the stored track, so just acknowledge it instead of downloading.
+  if (isDemo) {
+    toast(`Demo: skipped saving ${file.filename} (no real GPX in demo mode).`);
+    return;
+  }
   const copy = new Uint8Array(file.bytes); // own the buffer for the Blob
   const blob = new Blob([copy], { type: "application/gpx+xml" });
   const url = URL.createObjectURL(blob);
@@ -1057,6 +1078,10 @@ document.addEventListener("click", (e) => {
 
   if (t.dataset && t.dataset.view) {
     setView(t.dataset.view as ViewName);
+    return;
+  }
+  if (t.id === "btnMapExpand") {
+    setMapExpanded(!document.body.classList.contains("map-expanded"));
     return;
   }
   if (t.dataset && t.dataset.preset) {
@@ -1267,6 +1292,11 @@ window.addEventListener("beforeunload", (e) => {
     e.preventDefault();
     e.returnValue = ""; // required for Chromium to show the native confirm dialog
   }
+});
+
+// Esc leaves the full-screen map.
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("map-expanded")) setMapExpanded(false);
 });
 
 /** Show the build version in the header; hover reveals commit + build date. */
