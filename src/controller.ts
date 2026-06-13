@@ -346,6 +346,13 @@ export class Controller {
     return v;
   }
 
+  /** Update the average-speed outlier trim (slow/fast %, persisted). Returns the clamped pair. */
+  setSpeedTrim(slowPct: number, fastPct: number): { slowPct: number; fastPct: number } {
+    const v = this.store.setSpeedTrim(slowPct, fastPct);
+    this.notify();
+    return v;
+  }
+
   cancel(id: number | null): void {
     if (id === null) this.jobs.cancelAll();
     else this.jobs.cancel(id);

@@ -428,6 +428,46 @@ export function parseDurationSec(s: string): number {
 }
 
 /**
+ * Distance-weighted average speed (km/h) over a set of rides, after fractionally
+ * trimming the slowest `slowPct`% and fastest `fastPct`% of total DISTANCE.
+ *
+ * Rides are sorted by speed and laid out along a cumulative-distance axis; only
+ * the km that fall inside the kept window [low, high] count. A ride straddling a
+ * cut boundary contributes a fraction of its km AND seconds (so its speed is
+ * preserved), which makes ride count irrelevant — a single ride simply keeps its
+ * own speed. Returns 0 when there is no usable distance or `slowPct + fastPct >= 100`.
+ */
+export function trimmedSpeed(
+  rides: ReadonlyArray<{ km: number; sec: number }>,
+  slowPct: number,
+  fastPct: number,
+): number {
+  const usable = rides.filter((r) => r.km > 0 && r.sec > 0);
+  const total = usable.reduce((s, r) => s + r.km, 0);
+  if (total <= 0) return 0;
+  const low = (Math.max(0, slowPct) / 100) * total;
+  const high = total - (Math.max(0, fastPct) / 100) * total;
+  if (high <= low) return 0;
+
+  const sorted = [...usable].sort((a, b) => a.km / a.sec - b.km / b.sec);
+  let cursor = 0;
+  let keptKm = 0;
+  let keptSec = 0;
+  for (const r of sorted) {
+    const start = cursor;
+    const end = cursor + r.km;
+    cursor = end;
+    const lo = Math.max(start, low);
+    const hi = Math.min(end, high);
+    if (hi <= lo) continue;
+    const frac = (hi - lo) / r.km; // share of THIS ride inside the kept window
+    keptKm += r.km * frac;
+    keptSec += r.sec * frac;
+  }
+  return keptSec > 0 ? keptKm / (keptSec / 3600) : 0;
+}
+
+/**
  * Pick a sensible chart granularity from the span of ride dates so the chart
  * never collapses to a single lonely bar. Thresholds (on the min→max span):
  * ≤ 21 days → day, ≤ 120 days → week, ≤ ~3 years → month, otherwise year.

@@ -192,6 +192,14 @@ details.help kbd { background: var(--line); border-radius: 4px; padding: 1px 5px
 .sp-kpis { display: flex; gap: 22px; flex-wrap: wrap; margin-left: auto; }
 .sp-note { color: var(--muted); font-size: 11.5px; margin-top: 6px; opacity: .85; }
 .sp-note.hidden { display: none; }
+.sp-trim { display: flex; gap: 22px; flex-wrap: wrap; align-items: center;
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.sp-trim.hidden { display: none; }
+.sp-trim .trim { display: flex; align-items: center; gap: 8px;
+  color: var(--muted); font-size: 11.5px; }
+.sp-trim .trim input[type="range"] { width: 120px; accent-color: var(--accent); }
+.sp-trim .trim output { font-family: var(--mono); font-size: 12px; color: var(--text);
+  min-width: 3.4ch; text-align: right; }
 .kpi { display: flex; flex-direction: column; align-items: flex-end; }
 .kpi b { font-size: 16px; font-weight: 700; font-family: var(--mono); }
 .kpi span { color: var(--muted); font-size: 11.5px; }

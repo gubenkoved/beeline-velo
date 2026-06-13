@@ -16,7 +16,7 @@ import { DemoAdb } from "./adb/demo";
 import { AdbError, type AdbDevice } from "./adb/types";
 import { WebUsbAdb } from "./adb/webusb";
 import { Controller, type AppState } from "./controller";
-import { autoGranularity, bucketRide, compareRideKeysDesc, parseDurationSec, type Granularity } from "./parsing";
+import { autoGranularity, bucketRide, compareRideKeysDesc, parseDurationSec, trimmedSpeed, type Granularity } from "./parsing";
 import { LEGACY_STORAGE_KEY, STORAGE_KEY, Store } from "./store";
 import { decodePolyline } from "./track";
 
@@ -156,7 +156,7 @@ let STATE: AppState = {
   rides: [],
   jobs: { current: null, current_keys: [], queue: [], history: [], active_keys: [], busy: false },
   speed: "normal",
-  settings: { trackMaxPoints: 100 },
+  settings: { trackPointsPerKm: 10, speedTrimSlowPct: 0, speedTrimFastPct: 0 },
   connected: false,
   device: "",
 };
@@ -307,6 +307,20 @@ function fmtSpeed(v: number): string {
   return v.toFixed(1) + " km/h";
 }
 
+/** Push persisted trim percentages into the sliders/outputs (skip a slider being dragged). */
+function syncTrimControls(): void {
+  const slow = $<HTMLInputElement>("#trimSlow");
+  const fast = $<HTMLInputElement>("#trimFast");
+  if (slow && document.activeElement !== slow) {
+    slow.value = String(STATE.settings.speedTrimSlowPct);
+  }
+  if (fast && document.activeElement !== fast) {
+    fast.value = String(STATE.settings.speedTrimFastPct);
+  }
+  ($("#trimSlowOut") as HTMLOutputElement).value = `${STATE.settings.speedTrimSlowPct}%`;
+  ($("#trimFastOut") as HTMLOutputElement).value = `${STATE.settings.speedTrimFastPct}%`;
+}
+
 function renderStats(rides: AppState["rides"]): void {
   const panel = $("#statsPanel");
   if (!rides.length) {
@@ -323,34 +337,50 @@ function renderStats(rides: AppState["rides"]): void {
     .querySelectorAll<HTMLButtonElement>("#statMetric button")
     .forEach((b) => b.classList.toggle("active", b.dataset.metric === statMetric));
 
+  // Outlier-trim sliders belong to the speed view only.
+  $("#spTrim").classList.toggle("hidden", statMetric !== "speed");
+  syncTrimControls();
+
   // Per bucket we track distance (always) and the subset that also has a moving
-  // time (only "checked" rides whose detail was fetched). Speed is distance-weighted:
-  // bucketSpeed = Σ km(with time) / Σ hours — so a short fast ride can't skew it.
+  // time (only "checked" rides whose detail was fetched). Speed is distance-weighted
+  // and the per-ride (km, sec) pairs are kept so outlier trimming can run by distance.
   const byM = new Map<
     string,
-    { label: string; short: string; km: number; n: number; spKm: number; spSec: number; spN: number }
+    {
+      label: string;
+      short: string;
+      km: number;
+      n: number;
+      spKm: number;
+      spSec: number;
+      spN: number;
+      rides: { km: number; sec: number }[];
+    }
   >();
   for (const r of rides) {
     const km = parseKm(r.distance);
     const [bkey, label, short] = bucketRide(r.key, gran);
-    if (!byM.has(bkey)) byM.set(bkey, { label, short, km: 0, n: 0, spKm: 0, spSec: 0, spN: 0 });
+    if (!byM.has(bkey)) byM.set(bkey, { label, short, km: 0, n: 0, spKm: 0, spSec: 0, spN: 0, rides: [] });
     const e = byM.get(bkey)!;
     e.km += km;
     e.n += 1;
     const sec = parseDurationSec((r.stats && r.stats["Moving time"]) || "");
     if (sec > 0) {
       // Prefer the detail's own distance value when present; fall back to the list one.
-      e.spKm += parseKm((r.stats && r.stats["Distance"]) || r.distance);
+      const spKm = parseKm((r.stats && r.stats["Distance"]) || r.distance);
+      e.spKm += spKm;
       e.spSec += sec;
       e.spN += 1;
+      e.rides.push({ km: spKm, sec });
     }
   }
   const items = [...byM.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  const bucketSpeed = (e: { spKm: number; spSec: number }): number =>
-    e.spSec > 0 ? e.spKm / (e.spSec / 3600) : 0;
+  const slowPct = STATE.settings.speedTrimSlowPct;
+  const fastPct = STATE.settings.speedTrimFastPct;
+  const bucketSpeed = (e: StatBucket): number => trimmedSpeed(e.rides, slowPct, fastPct);
 
   if (statMetric === "speed") {
-    renderSpeed(gran, items, bucketSpeed, rides.length);
+    renderSpeed(gran, items, bucketSpeed, rides.length, slowPct, fastPct);
   } else {
     renderDistance(gran, items, rides.length);
   }
@@ -364,6 +394,7 @@ type StatBucket = {
   spKm: number;
   spSec: number;
   spN: number;
+  rides: { km: number; sec: number }[];
 };
 
 function renderDistance(gran: Granularity, items: [string, StatBucket][], rideCount: number): void {
@@ -398,14 +429,16 @@ function renderSpeed(
   items: [string, StatBucket][],
   bucketSpeed: (e: StatBucket) => number,
   rideCount: number,
+  slowPct: number,
+  fastPct: number,
 ): void {
   ($(".sp-title") as HTMLElement).textContent = `Average speed per ${gran}`;
 
-  // Overall distance-weighted average across every checked ride.
-  const totSpKm = items.reduce((s, [, e]) => s + e.spKm, 0);
-  const totSpSec = items.reduce((s, [, e]) => s + e.spSec, 0);
-  const ridesWithSpeed = items.reduce((s, [, e]) => s + e.spN, 0);
-  const overall = totSpSec > 0 ? totSpKm / (totSpSec / 3600) : 0;
+  // Headline average: pool every checked ride and trim by distance across the whole
+  // set, so one slow/fast ride anywhere is excluded (not just within its bucket).
+  const allRides = items.flatMap(([, e]) => e.rides);
+  const ridesWithSpeed = allRides.length;
+  const overall = trimmedSpeed(allRides, slowPct, fastPct);
   const speeds = items.filter(([, e]) => e.spN > 0).map(([, e]) => bucketSpeed(e));
   const fastest = speeds.length ? Math.max(...speeds) : 0;
   const slowest = speeds.length ? Math.min(...speeds) : 0;
@@ -414,9 +447,18 @@ function renderSpeed(
   // Subtle warning: speed only covers rides we've "checked" (detail fetched).
   const note = $("#spNote");
   const missing = rideCount - ridesWithSpeed;
+  const trimmed = slowPct > 0 || fastPct > 0;
+  const notes: string[] = [];
   if (missing > 0) {
-    note.textContent =
-      `Speed uses ${ridesWithSpeed} of ${rideCount} rides — Check the rest to include their moving time.`;
+    notes.push(
+      `Speed uses ${ridesWithSpeed} of ${rideCount} rides — Check the rest to include their moving time.`,
+    );
+  }
+  if (trimmed) {
+    notes.push(`Excluding slowest ${slowPct}% and fastest ${fastPct}% of distance.`);
+  }
+  if (notes.length) {
+    note.textContent = notes.join(" ");
     note.classList.remove("hidden");
   } else {
     note.classList.add("hidden");
@@ -514,7 +556,7 @@ function render(): void {
   }
 
   const tp = $<HTMLInputElement>("#trackPoints");
-  if (tp && document.activeElement !== tp) tp.value = String(STATE.settings.trackMaxPoints);
+  if (tp && document.activeElement !== tp) tp.value = String(STATE.settings.trackPointsPerKm);
 
   const allSelState = (keys: string[]): boolean | null => {
     const sel = keys.filter((k) => selected.has(k)).length;
@@ -948,8 +990,19 @@ document.addEventListener("change", (e) => {
   }
   if (cb.id === "trackPoints") {
     const v = parseInt(cb.value, 10);
-    if (Number.isFinite(v)) run(() => controller.setTrackMaxPoints(v));
+    if (Number.isFinite(v)) run(() => controller.setTrackPointsPerKm(v));
   }
+});
+
+// Live outlier-trim sliders: update labels and recompute the speed view as they move.
+document.addEventListener("input", (e) => {
+  const el = e.target as HTMLInputElement;
+  if (el.id !== "trimSlow" && el.id !== "trimFast") return;
+  const slow = parseInt($<HTMLInputElement>("#trimSlow").value, 10) || 0;
+  const fast = parseInt($<HTMLInputElement>("#trimFast").value, 10) || 0;
+  ($("#trimSlowOut") as HTMLOutputElement).value = `${slow}%`;
+  ($("#trimFastOut") as HTMLOutputElement).value = `${fast}%`;
+  run(() => controller.setSpeedTrim(slow, fast));
 });
 
 /** Keep the custom "last N days" pill in sync: highlight when set, grow to fit. */

@@ -25,13 +25,26 @@ function clampPointsPerKm(n: number): number {
   return Math.max(TRACK_MIN_POINTS_PER_KM, Math.min(TRACK_MAX_POINTS_PER_KM, Math.round(n)));
 }
 
+/** Largest share of distance trimmable from a single (slow or fast) end of the speed view. */
+export const SPEED_TRIM_MAX_PCT = 45;
+
+/** Clamp one end's trim percentage into [0, SPEED_TRIM_MAX_PCT] (0 = no trimming). */
+function clampTrimPct(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(SPEED_TRIM_MAX_PCT, Math.round(n)));
+}
+
 export interface Settings {
   /** Points kept per kilometre when simplifying a downloaded GPX into a rough track. */
   trackPointsPerKm: number;
+  /** Share of slowest distance (%) to drop from the average-speed view. */
+  speedTrimSlowPct: number;
+  /** Share of fastest distance (%) to drop from the average-speed view. */
+  speedTrimFastPct: number;
 }
 
 function defaultSettings(): Settings {
-  return { trackPointsPerKm: DEFAULT_TRACK_POINTS_PER_KM };
+  return { trackPointsPerKm: DEFAULT_TRACK_POINTS_PER_KM, speedTrimSlowPct: 0, speedTrimFastPct: 0 };
 }
 
 // UI chrome labels that must never be stored as a ride title.
@@ -151,8 +164,16 @@ export class Store {
   /** Merge a persisted payload (from storage or an imported file) into memory. */
   private ingest(data: unknown): void {
     const settings = (data as Partial<Persisted>)?.settings;
-    if (settings && typeof settings === "object" && "trackPointsPerKm" in settings) {
-      this.settings.trackPointsPerKm = clampPointsPerKm(Number(settings.trackPointsPerKm));
+    if (settings && typeof settings === "object") {
+      if ("trackPointsPerKm" in settings) {
+        this.settings.trackPointsPerKm = clampPointsPerKm(Number(settings.trackPointsPerKm));
+      }
+      if ("speedTrimSlowPct" in settings) {
+        this.settings.speedTrimSlowPct = clampTrimPct(Number(settings.speedTrimSlowPct));
+      }
+      if ("speedTrimFastPct" in settings) {
+        this.settings.speedTrimFastPct = clampTrimPct(Number(settings.speedTrimFastPct));
+      }
     }
     const rides = (data as Partial<Persisted>)?.rides;
     if (!rides || typeof rides !== "object") return;
@@ -236,6 +257,14 @@ export class Store {
     this.settings.trackPointsPerKm = clampPointsPerKm(n);
     this.save();
     return this.settings.trackPointsPerKm;
+  }
+
+  /** Update the average-speed outlier trim (slow/fast %) and persist. Returns the clamped pair. */
+  setSpeedTrim(slowPct: number, fastPct: number): { slowPct: number; fastPct: number } {
+    this.settings.speedTrimSlowPct = clampTrimPct(slowPct);
+    this.settings.speedTrimFastPct = clampTrimPct(fastPct);
+    this.save();
+    return { slowPct: this.settings.speedTrimSlowPct, fastPct: this.settings.speedTrimFastPct };
   }
 
   /**

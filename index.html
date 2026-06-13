@@ -99,6 +99,16 @@
       </div>
       <div class="sp-kpis" id="spKpis"></div>
     </div>
+    <div class="sp-trim hidden" id="spTrim">
+      <label class="trim slow">Trim slowest
+        <input type="range" id="trimSlow" min="0" max="45" step="1" value="0" />
+        <output id="trimSlowOut">0%</output>
+      </label>
+      <label class="trim fast">Trim fastest
+        <input type="range" id="trimFast" min="0" max="45" step="1" value="0" />
+        <output id="trimFastOut">0%</output>
+      </label>
+    </div>
     <div class="sp-note hidden" id="spNote"></div>
     <div class="chart" id="chart"></div>
   </div>
