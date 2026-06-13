@@ -101,6 +101,20 @@ async function goDemo(): Promise<void> {
   }
 }
 
+/**
+ * Offline mode: show the user's real, persisted rides from LocalStorage without a
+ * phone. Viewing works; any device action (scan/check/upload/GPX) fails gracefully
+ * with "No device connected". This is the default when there's no remembered phone
+ * or a remembered phone isn't reachable — we never silently drop into demo anymore.
+ */
+async function goOffline(): Promise<void> {
+  const transport = async (): Promise<AdbDevice> => {
+    throw new AdbError("No device connected — click Connect phone first.");
+  };
+  const c = new Controller(transport, Store.load());
+  activate(c, false);
+}
+
 async function goReal(): Promise<void> {
   let serial = "";
   const transport = async (): Promise<AdbDevice> => {
@@ -116,7 +130,7 @@ async function goReal(): Promise<void> {
     toast(`Connected: ${controller.state().device}`);
   } catch (err) {
     toast(err instanceof AdbError ? err.message : String(err), true);
-    void goDemo(); // keep the app usable
+    void goOffline(); // keep the app usable, showing stored rides
   }
 }
 
@@ -139,14 +153,14 @@ async function tryAutoReconnect(): Promise<void> {
     rememberReal(serial);
     toast(`Reconnected: ${controller.state().device}`);
   } catch {
-    // Device not plugged in / not authorized this session — quietly use demo.
-    void goDemo();
+    // Device not plugged in / not authorized this session — show stored rides offline.
+    void goOffline();
   }
 }
 
 async function leaveReal(): Promise<void> {
   forgetReal(); // stop auto-reconnecting on future loads
-  await goDemo();
+  await goOffline(); // keep showing the user's stored rides, just without a phone
 }
 
 
@@ -722,24 +736,30 @@ function renderSpeed(
 function renderConn(): void {
   const el = $("#connState");
   const connectBtn = $<HTMLButtonElement>("#btnConnect");
+  const demoBtn = $<HTMLButtonElement>("#btnDemo");
   const disconnectBtn = $<HTMLButtonElement>("#btnDisconnect");
   const notice = $("#demoNotice");
   if (isDemo) {
     el.textContent = "demo";
     el.className = "cstate demo";
     connectBtn.style.display = "";
+    demoBtn.style.display = "none";
     disconnectBtn.style.display = "none";
     notice.classList.remove("hidden");
   } else if (STATE.connected) {
     el.textContent = STATE.device || "connected";
     el.className = "cstate on";
     connectBtn.style.display = "none";
+    demoBtn.style.display = "none";
     disconnectBtn.style.display = "";
     notice.classList.add("hidden");
   } else {
+    // Offline: no phone, but we still show the user's stored rides. Offer both
+    // "Connect phone" and an explicit "Demo" entry.
     el.textContent = "not connected";
     el.className = "cstate off";
     connectBtn.style.display = "";
+    demoBtn.style.display = "";
     disconnectBtn.style.display = "none";
     notice.classList.add("hidden");
   }
@@ -1067,7 +1087,7 @@ async function resetEverything(): Promise<void> {
     /* private mode / storage disabled — non-fatal */
   }
   forgetReal(); // stop auto-reconnecting to the phone on future loads
-  await goDemo(); // rebuild a fresh demo controller with empty storage
+  await goOffline(); // rebuild a fresh controller over the now-empty LocalStorage
   toast("Local data cleared.");
 }
 
@@ -1121,6 +1141,7 @@ document.addEventListener("click", (e) => {
     return;
   }
   if (t.id === "btnConnect") return void goReal();
+  if (t.id === "btnDemo") return void goDemo();
   if (t.id === "btnDisconnect") return void leaveReal();
   if (t.id === "btnImport") return void ($("#importFile") as HTMLInputElement).click();
   if (t.id === "btnExport") return exportRides();
@@ -1315,6 +1336,6 @@ showVersion();
 // Reflect the remembered view before the first render so the right tab is shown.
 applyView();
 
-// Boot: silently reconnect a remembered phone (no prompt), else demo mode.
+// Boot: silently reconnect a remembered phone (no prompt), else offline (stored rides).
 if (wantsReal()) void tryAutoReconnect();
-else void goDemo();
+else void goOffline();
