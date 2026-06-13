@@ -16,7 +16,8 @@ import { DemoAdb } from "./adb/demo";
 import { AdbError, type AdbDevice } from "./adb/types";
 import { WebUsbAdb } from "./adb/webusb";
 import { Controller, type AppState } from "./controller";
-import { autoGranularity, bucketRide, compareRideKeysDesc, parseDurationSec, trimmedSpeed, type Granularity } from "./parsing";
+import { ridesWithTracks, nearestRides, type PixelPoint, type ProjectedTrack, type RideTrack } from "./mapview";
+import { autoGranularity, bucketRide, compareRideKeysDesc, parseDurationSec, rideShortLabel, trimmedSpeed, type Granularity } from "./parsing";
 import { LEGACY_STORAGE_KEY, STORAGE_KEY, Store } from "./store";
 import { decodePolyline } from "./track";
 
@@ -180,6 +181,25 @@ function setChecked(el: HTMLInputElement | null, on: boolean | null): void {
 function esc(s: string): string {
   return (s || "").replace(/[^a-zA-Z0-9]/g, "_");
 }
+/** Escape text/attribute values for safe interpolation into innerHTML. */
+function escHtml(s: string): string {
+  return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// --------------------------------------------------------------------------- //
+// Top-level view ("Explore" = the rides list/stats; "Map" = all-rides heatmap).
+// Remembered across reloads; defaults to Explore on first run.
+// --------------------------------------------------------------------------- //
+type ViewName = "explore" | "map";
+const VIEW_KEY = "beeline_uploader.view";
+const readView = (): ViewName => {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "map" ? "map" : "explore";
+  } catch {
+    return "explore";
+  }
+};
+let activeView: ViewName = readView();
 
 // --------------------------------------------------------------------------- //
 // Rough-track mini-map (Leaflet). The stored track is a heavily simplified
@@ -263,6 +283,201 @@ function mountMaps(): void {
     mapRegistry.set(host.dataset.map!, map);
   });
 }
+
+// --------------------------------------------------------------------------- //
+// All-rides heatmap ("Map" view). One interactive Leaflet map draws every
+// downloaded track as a translucent line, so stretches you ride often stack up
+// brighter. Hovering a track (or an area where several overlap) highlights the
+// matching rides and lists them in the side panel; clicking jumps to that ride's
+// details in the Explore view. Only rides with a downloaded route can be drawn;
+// the side panel still lists the rest, flagged, so nothing is silently hidden.
+// --------------------------------------------------------------------------- //
+const HOVER_PX = 8; // how close (in screen px) the cursor must be to "hit" a track
+const BASE_TRACK = { color: "#fc5200", weight: 3, opacity: 0.35, lineJoin: "round", lineCap: "round" } as const;
+const HOT_TRACK = { color: "#ffd24a", weight: 5, opacity: 1 } as const;
+
+let allRidesMap: L.Map | null = null;
+let allRidesLayer: L.LayerGroup | null = null;
+const trackLines = new Map<string, L.Polyline>();
+let currentTracks: RideTrack[] = [];
+let projectedTracks: ProjectedTrack[] = [];
+let hotKeys: string[] = [];
+let lastCursor: PixelPoint | null = null;
+let hoverRaf = 0;
+let lastTrackSig = "";
+
+const sameKeys = (a: string[], b: string[]): boolean =>
+  a.length === b.length && a.every((k, i) => k === b[i]);
+
+/** Recompute each track's pixel polyline for the current map view (for hit-testing). */
+function reprojectTracks(): void {
+  if (!allRidesMap) return;
+  projectedTracks = currentTracks.map((t) => ({
+    key: t.key,
+    pts: t.points.map(([lat, lon]) => {
+      const p = allRidesMap!.latLngToContainerPoint([lat, lon]);
+      return { x: p.x, y: p.y };
+    }),
+  }));
+}
+
+/** Emphasize the given rides on the map + side panel (empty list clears it). */
+function setHot(keys: string[]): void {
+  if (sameKeys(keys, hotKeys)) return;
+  for (const k of hotKeys) trackLines.get(k)?.setStyle(BASE_TRACK);
+  hotKeys = keys;
+  for (const k of keys) {
+    const pl = trackLines.get(k);
+    if (pl) {
+      pl.setStyle(HOT_TRACK);
+      pl.bringToFront();
+    }
+  }
+  document.querySelectorAll<HTMLElement>("#mapSide .ms-item").forEach((el) => {
+    el.classList.toggle("hot", !!el.dataset.key && keys.includes(el.dataset.key));
+  });
+  const cnt = document.getElementById("msCount");
+  if (cnt) cnt.textContent = keys.length ? `${keys.length} under cursor` : "";
+  const host = allRidesMap?.getContainer();
+  if (host) host.style.cursor = keys.length ? "pointer" : "";
+}
+
+function onMapMove(e: L.LeafletMouseEvent): void {
+  lastCursor = { x: e.containerPoint.x, y: e.containerPoint.y };
+  if (hoverRaf) return;
+  hoverRaf = requestAnimationFrame(() => {
+    hoverRaf = 0;
+    if (lastCursor) setHot(nearestRides(projectedTracks, lastCursor, HOVER_PX));
+  });
+}
+
+function onMapClick(e: L.LeafletMouseEvent): void {
+  const keys = nearestRides(projectedTracks, { x: e.containerPoint.x, y: e.containerPoint.y }, HOVER_PX);
+  if (keys.length) openRideInExplore(keys[0]);
+}
+
+/** Switch to the Explore view and reveal a specific ride's details. */
+function openRideInExplore(key: string): void {
+  const ride = STATE.rides.find((r) => r.key === key);
+  if (!ride) return;
+  openYears.delete("c" + yearOf(ride.month_key)); // a year is open when NOT collapsed
+  openMonths.add(ride.month_key);
+  openStats.add(key);
+  setView("explore");
+  requestAnimationFrame(() => {
+    for (const el of document.querySelectorAll<HTMLElement>(".rrow")) {
+      if (el.dataset.key === key) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        break;
+      }
+    }
+  });
+}
+
+/** Build the side panel: every non-deleted ride, with the ones on the map clickable. */
+function renderMapSide(tracks: RideTrack[], missing: number): void {
+  const side = document.getElementById("mapSide");
+  if (!side) return;
+  const haveKeys = new Set(tracks.map((t) => t.key));
+  const rides = STATE.rides.filter((r) => !r.deleted).slice().sort((a, b) => compareRideKeysDesc(a.key, b.key));
+  if (rides.length === 0) {
+    side.innerHTML =
+      `<div class="ms-empty">No rides yet. Press <b>Scan</b> in the Explore tab to read your phone, ` +
+      `then <b>GPX</b> on a ride to download its route and see it here.</div>`;
+    return;
+  }
+  const items = rides
+    .map((r) => {
+      const when = escHtml(rideShortLabel(r.key) || r.key);
+      const name = escHtml((r.title || "Ride") + (r.location || ""));
+      if (!haveKeys.has(r.key)) {
+        return (
+          `<div class="ms-item no-track"><span class="ms-when">${when}</span>` +
+          `<span class="ms-name">${name}</span><span class="ms-flag">no route</span></div>`
+        );
+      }
+      return (
+        `<div class="ms-item" data-key="${escHtml(r.key)}"><span class="ms-when">${when}</span>` +
+        `<span class="ms-name">${name}</span></div>`
+      );
+    })
+    .join("");
+  const sub = missing
+    ? `${tracks.length} on map · ${missing} without a route — press <b>GPX</b> to add them`
+    : `${tracks.length} on map`;
+  side.innerHTML =
+    `<div class="ms-head"><h2>All rides</h2><span class="ms-count" id="msCount"></span></div>` +
+    `<div class="ms-sub">${sub}</div><div class="ms-list">${items}</div>`;
+}
+
+/** (Re)draw the all-rides map for the current state; lazily creates the map. */
+function mountAllRidesMap(): void {
+  const host = document.getElementById("allRidesMap");
+  if (!host) return;
+  const { tracks, missing } = ridesWithTracks(STATE.rides);
+  currentTracks = tracks;
+  renderMapSide(tracks, missing);
+
+  if (!allRidesMap) {
+    allRidesMap = L.map(host, { attributionControl: true, zoomControl: true, fadeAnimation: false });
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "© OpenStreetMap",
+      className: "map-tiles",
+    }).addTo(allRidesMap);
+    allRidesLayer = L.layerGroup().addTo(allRidesMap);
+    allRidesMap.setView([20, 0], 2); // sane default until the first track is drawn
+    allRidesMap.on("mousemove", onMapMove);
+    allRidesMap.on("mouseout", () => setHot([]));
+    allRidesMap.on("click", onMapClick);
+    allRidesMap.on("moveend zoomend", reprojectTracks);
+  }
+
+  const sig = tracks.map((t) => t.key).join("|");
+  if (sig !== lastTrackSig) {
+    lastTrackSig = sig;
+    hotKeys = [];
+    allRidesLayer!.clearLayers();
+    trackLines.clear();
+    const all: L.LatLngExpression[] = [];
+    for (const t of tracks) {
+      const line = L.polyline(t.points as L.LatLngExpression[], { ...BASE_TRACK }).addTo(allRidesLayer!);
+      trackLines.set(t.key, line);
+      for (const p of t.points) all.push(p as L.LatLngExpression);
+    }
+    if (all.length) allRidesMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
+  }
+  // The container is only correctly sized once its view becomes visible.
+  setTimeout(() => {
+    allRidesMap!.invalidateSize();
+    reprojectTracks();
+  }, 0);
+}
+
+/** Reflect the active view in the DOM (visibility, tab state, scan bar). */
+function applyView(): void {
+  const isMap = activeView === "map";
+  document.getElementById("exploreView")?.classList.toggle("hidden", isMap);
+  document.getElementById("mapView")?.classList.toggle("hidden", !isMap);
+  document.getElementById("scanbar")?.classList.toggle("hidden", isMap);
+  document
+    .querySelectorAll<HTMLButtonElement>("#viewTabs .vtab")
+    .forEach((b) => b.classList.toggle("active", b.dataset.view === activeView));
+}
+
+/** Switch the active view, persist the choice, and re-render. */
+function setView(v: ViewName): void {
+  if (v === activeView) return;
+  activeView = v;
+  try {
+    localStorage.setItem(VIEW_KEY, v);
+  } catch {
+    /* private mode / storage disabled — non-fatal */
+  }
+  applyView();
+  render();
+}
+
 
 // --------------------------------------------------------------------------- //
 // Small render helpers (ported verbatim)
@@ -651,7 +866,8 @@ function render(): void {
     }
   }
   renderJob();
-  mountMaps();
+  if (activeView === "map") mountAllRidesMap();
+  else mountMaps();
   lastSig = stateSig();
 }
 
@@ -839,6 +1055,10 @@ document.addEventListener("click", (e) => {
   if (target && target.tagName === "INPUT") return; // checkboxes handled on 'change'
   const t = (target.closest("button, a, .mhead, .yhead") as HTMLElement) || target;
 
+  if (t.dataset && t.dataset.view) {
+    setView(t.dataset.view as ViewName);
+    return;
+  }
   if (t.dataset && t.dataset.preset) {
     preset = t.dataset.preset;
     ($("#days") as HTMLInputElement).value = "";
@@ -1024,6 +1244,21 @@ function syncDaysField(): void {
 $("#days").addEventListener("input", syncDaysField);
 syncDaysField();
 
+// Map view side panel: hovering an entry highlights its track; clicking opens the
+// ride in the Explore view. no-track entries carry no data-key, so they're inert.
+const mapSideEl = document.getElementById("mapSide");
+if (mapSideEl) {
+  mapSideEl.addEventListener("mouseover", (e) => {
+    const item = (e.target as HTMLElement).closest(".ms-item") as HTMLElement | null;
+    if (item?.dataset.key) setHot([item.dataset.key]);
+  });
+  mapSideEl.addEventListener("mouseleave", () => setHot([]));
+  mapSideEl.addEventListener("click", (e) => {
+    const item = (e.target as HTMLElement).closest(".ms-item") as HTMLElement | null;
+    if (item?.dataset.key) openRideInExplore(item.dataset.key);
+  });
+}
+
 // Warn before leaving while phone work is in progress — closing/reloading the tab
 // kills the in-browser worker, abandoning the running task and anything queued.
 window.addEventListener("beforeunload", (e) => {
@@ -1043,6 +1278,9 @@ function showVersion(): void {
   el.title = `commit ${__APP_COMMIT__} · built ${__APP_BUILD_DATE__}`;
 }
 showVersion();
+
+// Reflect the remembered view before the first render so the right tab is shown.
+applyView();
 
 // Boot: silently reconnect a remembered phone (no prompt), else demo mode.
 if (wantsReal()) void tryAutoReconnect();

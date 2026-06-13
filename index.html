@@ -28,7 +28,7 @@
     <button class="primary small" id="btnUploadPending">Upload all pending to Strava</button>
     <input type="file" id="importFile" accept="application/json,.json" style="display:none" />
   </div>
-  <div class="row scanbar">
+  <div class="row scanbar" id="scanbar">
     <span class="totals">Scan</span>
     <div class="seg" id="presets">
       <button data-preset="today">Today</button>
@@ -62,6 +62,10 @@
     <button class="small ghost" id="errDismiss">Dismiss</button>
   </div>
   <pre class="errfull" id="errFull"></pre>
+  <div class="viewtabs" id="viewTabs" role="tablist">
+    <button class="vtab active" data-view="explore" role="tab">Explore</button>
+    <button class="vtab" data-view="map" role="tab">Map</button>
+  </div>
   <div class="notice" id="demoNotice">
     <span>🧪</span>
     <span><b>Demo mode</b> — using a simulated phone so you can explore without hardware.
@@ -83,6 +87,7 @@
         — run <kbd>adb kill-server</kbd> in a terminal, then click <b>Connect phone</b> again.</div>
     </details></span>
   </div>
+  <div id="exploreView">
   <div class="stats-panel hidden" id="statsPanel">
     <div class="sp-head">
       <span class="sp-title">Distance per month</span>
@@ -112,9 +117,16 @@
     <div class="sp-note hidden" id="spNote"></div>
     <div class="chart" id="chart"></div>
   </div>
-  <div id="months"></div>
-  <div class="empty" id="empty">
-    Pick a range and press <b>Scan</b> to read your rides from the phone.
+    <div id="months"></div>
+    <div class="empty" id="empty">
+      Pick a range and press <b>Scan</b> to read your rides from the phone.
+    </div>
+  </div>
+  <div id="mapView" class="hidden">
+    <div class="map-wrap">
+      <div id="allRidesMap"></div>
+      <aside class="map-side" id="mapSide"></aside>
+    </div>
   </div>
 </main>
 
