@@ -467,7 +467,7 @@ function render(): void {
         el.innerHTML = `
           <input type="checkbox" class="chk" data-key="${r.key}" ${selected.has(r.key) ? "checked" : ""}>
           <div class="rmain">
-            <div class="rtitle"><span class="rname"><span class="rtitle-text">${esc(r.title) || "Ride"}</span>${r.location ? `<span class="rtitle-loc">${esc(r.location)}</span>` : ""}</span> ${badge(r.status)} ${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}</div>
+            <div class="rtitle"><span class="rname"><span class="rtitle-text">${r.title || "Ride"}</span>${r.location ? `<span class="rtitle-loc">${r.location}</span>` : ""}</span> ${badge(r.status)} ${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}</div>
             <div class="rmeta">${r.key} · ${r.distance || "?"} · ${r.duration || "?"}
               <a href="#" data-stats="${r.key}">${so ? "hide" : "details"}</a></div>
             <div class="stats ${so ? "open" : ""}" id="st-${esc(r.key)}">${fmtStats(r.stats)}</div>
