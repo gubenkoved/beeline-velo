@@ -483,7 +483,7 @@ function renderSpeed(
       }
       const h = Math.round((v / maxSpeed) * 96);
       return `<div class="col" title="${e.label}: ${v.toFixed(1)} km/h over ${e.spN} rides">
-      <span class="cval">${Math.round(v)}</span>
+      <span class="cval">${v.toFixed(1)}</span>
       <div class="bar" style="height:${h}px"></div>
       <span class="clab">${e.short}</span>
     </div>`;
