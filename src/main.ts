@@ -368,8 +368,10 @@ function renderDistance(gran: Granularity, items: [string, StatBucket][], rideCo
     .map(([, e]) => {
       const h = Math.round((e.km / maxKm) * 96);
       return `<div class="col" title="${e.label}: ${e.km.toFixed(1)} km over ${e.n} rides">
-      <span class="cval">${Math.round(e.km)}</span>
-      <div class="bar" style="height:${h}px"></div>
+      <div class="plot">
+        <span class="cval">${Math.round(e.km)}</span>
+        <div class="bar" style="height:${h}px"></div>
+      </div>
       <span class="clab">${e.short}</span>
     </div>`;
     })
@@ -417,15 +419,19 @@ function renderSpeed(
       const v = bucketSpeed(e);
       if (e.spN === 0) {
         return `<div class="col" title="${e.label}: no speed data">
-      <span class="cval">—</span>
-      <div class="bar empty" style="height:2px"></div>
+      <div class="plot">
+        <span class="cval">—</span>
+        <div class="bar empty" style="height:2px"></div>
+      </div>
       <span class="clab">${e.short}</span>
     </div>`;
       }
       const h = Math.round((v / maxSpeed) * 96);
       return `<div class="col" title="${e.label}: ${v.toFixed(1)} km/h over ${e.spN} rides">
-      <span class="cval">${Math.round(v)}</span>
-      <div class="bar" style="height:${h}px"></div>
+      <div class="plot">
+        <span class="cval">${v.toFixed(1)}</span>
+        <div class="bar" style="height:${h}px"></div>
+      </div>
       <span class="clab">${e.short}</span>
     </div>`;
     })
