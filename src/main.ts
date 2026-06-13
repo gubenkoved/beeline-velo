@@ -199,6 +199,28 @@ function trackBlock(key: string, track: string): string {
   );
 }
 
+/**
+ * Expanded-details body for an open ride. When a ride has never been Checked its
+ * `stats` are empty, so instead of an empty bordered grid we show a clear prompt
+ * with an inline Check button (which runs the same `status-one` action).
+ */
+function detailsBlock(key: string, stats: Record<string, string> | undefined, track: string): string {
+  const hasStats = !!stats && Object.keys(stats).length > 0;
+  if (!hasStats) {
+    const checking = RUNNING.has(key) || ACTIVE.has(key);
+    const cta = checking
+      ? `<span class="rdetailhint-busy">Checking…</span>`
+      : `<button class="small ghost" data-act="status-one" data-key="${esc(key)}">Check</button>`;
+    return (
+      `<div class="rdetailhint">` +
+      `<span>No details yet — press <b>Check</b> to load this ride's stats and route.</span>` +
+      cta +
+      `</div>`
+    );
+  }
+  return `<div class="stats open" id="st-${esc(key)}">${fmtStats(stats)}</div>` + trackBlock(key, track);
+}
+
 /** (Re)create Leaflet maps for every visible track container after a render. */
 function mountMaps(): void {
   // Tear down any maps whose container no longer exists (collapsed/replaced DOM).
@@ -368,10 +390,8 @@ function renderDistance(gran: Granularity, items: [string, StatBucket][], rideCo
     .map(([, e]) => {
       const h = Math.round((e.km / maxKm) * 96);
       return `<div class="col" title="${e.label}: ${e.km.toFixed(1)} km over ${e.n} rides">
-      <div class="plot">
-        <span class="cval">${Math.round(e.km)}</span>
-        <div class="bar" style="height:${h}px"></div>
-      </div>
+      <span class="cval">${Math.round(e.km)}</span>
+      <div class="bar" style="height:${h}px"></div>
       <span class="clab">${e.short}</span>
     </div>`;
     })
@@ -419,19 +439,15 @@ function renderSpeed(
       const v = bucketSpeed(e);
       if (e.spN === 0) {
         return `<div class="col" title="${e.label}: no speed data">
-      <div class="plot">
-        <span class="cval">—</span>
-        <div class="bar empty" style="height:2px"></div>
-      </div>
+      <span class="cval">—</span>
+      <div class="bar empty" style="height:2px"></div>
       <span class="clab">${e.short}</span>
     </div>`;
       }
       const h = Math.round((v / maxSpeed) * 96);
       return `<div class="col" title="${e.label}: ${v.toFixed(1)} km/h over ${e.spN} rides">
-      <div class="plot">
-        <span class="cval">${v.toFixed(1)}</span>
-        <div class="bar" style="height:${h}px"></div>
-      </div>
+      <span class="cval">${Math.round(v)}</span>
+      <div class="bar" style="height:${h}px"></div>
       <span class="clab">${e.short}</span>
     </div>`;
     })
@@ -581,8 +597,7 @@ function render(): void {
             <div class="rtitle"><span class="rname"><span class="rtitle-text">${r.title || "Ride"}</span>${r.location ? `<span class="rtitle-loc">${r.location}</span>` : ""}</span> ${badge(r.status)} ${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}</div>
             <div class="rmeta">${r.key} · ${r.distance || "?"} · ${r.duration || "?"}
               <a href="#" data-stats="${r.key}">${so ? "hide" : "details"}</a></div>
-            <div class="stats ${so ? "open" : ""}" id="st-${esc(r.key)}">${fmtStats(r.stats)}</div>
-            ${so ? trackBlock(r.key, r.track) : ""}
+            ${so ? detailsBlock(r.key, r.stats, r.track) : ""}
           </div>
           <div class="rbtns">
             <button class="small ghost" data-act="status-one" data-key="${r.key}">Check</button>
@@ -891,7 +906,7 @@ document.addEventListener("click", (e) => {
   // Clicking anywhere on a ride tile toggles its details — except on the
   // interactive bits (buttons, links, checkbox) or inside the already-open
   // details/map area, so the user can interact with those without collapsing.
-  if (!target.closest("button, a, input, .stats, .rmap, .rmapnote, .rmaphint")) {
+  if (!target.closest("button, a, input, .stats, .rmap, .rmapnote, .rmaphint, .rdetailhint")) {
     const rrow = target.closest(".rrow") as HTMLElement | null;
     if (rrow && rrow.dataset.key) {
       const k = rrow.dataset.key;
