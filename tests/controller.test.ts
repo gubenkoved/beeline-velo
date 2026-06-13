@@ -198,25 +198,25 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     expect(rec.track.length).toBeGreaterThan(0); // a rough track was stored
   });
 
-  it("honours the track-detail setting when simplifying", async () => {
+  it("honours the track-detail density when simplifying", async () => {
     const c = makeController(new DemoAdb());
     await c.connect();
     c.scan("all", null);
     await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
 
-    c.setTrackMaxPoints(20);
+    c.setTrackPointsPerKm(1);
     const keyA = "Sat Jun 13 2026 at 14:22";
     c.downloadGpx([keyA]);
     await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 8000 });
     const coarse = c.state().rides.find((r) => r.key === keyA)!.track;
 
-    c.setTrackMaxPoints(500);
+    c.setTrackPointsPerKm(100);
     const keyB = "Fri Jun 12 2026 at 09:10";
     c.downloadGpx([keyB]);
     await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 8000 });
     const fine = c.state().rides.find((r) => r.key === keyB)!.track;
 
-    // Same synthetic source shape; a higher cap keeps at least as many points.
+    // Same synthetic source shape; a higher density keeps at least as many points.
     expect(fine.length).toBeGreaterThanOrEqual(coarse.length);
   });
 

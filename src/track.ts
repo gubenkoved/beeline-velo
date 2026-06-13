@@ -26,6 +26,26 @@ export function extractTrack(gpx: string): LatLon[] {
   return out;
 }
 
+/** Great-circle distance between two lat/lon points, in kilometres (haversine). */
+function haversineKm(a: LatLon, b: LatLon): number {
+  const R = 6371; // mean Earth radius (km)
+  const toRad = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * toRad;
+  const dLon = (b[1] - a[1]) * toRad;
+  const lat1 = a[0] * toRad;
+  const lat2 = b[0] * toRad;
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** Total length of a track in kilometres (sum of consecutive great-circle hops). */
+export function trackLengthKm(points: LatLon[]): number {
+  let km = 0;
+  for (let i = 1; i < points.length; i++) km += haversineKm(points[i - 1], points[i]);
+  return km;
+}
+
 /** Perpendicular distance from point `p` to the segment `a`–`b` (planar approx). */
 function segDistance(p: LatLon, a: LatLon, b: LatLon): number {
   const [py, px] = p;
@@ -143,13 +163,39 @@ export function decodePolyline(encoded: string, precision = 5): LatLon[] {
   return points;
 }
 
+/** Metadata about a GPX captured into a rough track. */
+export interface RoughTrack {
+  /** Google-style encoded polyline of the simplified route. "" when no usable track. */
+  polyline: string;
+  /** Number of lat/lon points read from the source GPX. */
+  srcPoints: number;
+  /** Number of points kept after simplification. */
+  keptPoints: number;
+  /** Computed length of the source track, in kilometres. */
+  km: number;
+}
+
 /**
- * Full pipeline: GPX bytes → rough encoded polyline. Returns "" when the GPX has
- * no usable track (so callers can simply skip storing a track).
+ * Full pipeline: GPX bytes → rough encoded polyline + capture metadata.
+ *
+ * The kept-point target scales with the track's length (`pointsPerKm`), so a long
+ * ride keeps proportionally more shape than a short one. Endpoints are always
+ * preserved (see `simplify`). `polyline` is "" when the GPX has no usable track,
+ * so callers can simply skip storing a track.
  */
-export function gpxToRoughPolyline(bytes: Uint8Array, maxPoints: number): string {
+export function gpxToRoughTrack(bytes: Uint8Array, pointsPerKm: number): RoughTrack {
   const text = new TextDecoder().decode(bytes);
   const pts = extractTrack(text);
-  if (pts.length < 2) return "";
-  return encodePolyline(simplify(pts, maxPoints));
+  if (pts.length < 2) {
+    return { polyline: "", srcPoints: pts.length, keptPoints: 0, km: 0 };
+  }
+  const km = trackLengthKm(pts);
+  const target = Math.max(2, Math.round(pointsPerKm * km));
+  const kept = simplify(pts, target);
+  return {
+    polyline: encodePolyline(kept),
+    srcPoints: pts.length,
+    keptPoints: kept.length,
+    km,
+  };
 }

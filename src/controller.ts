@@ -13,7 +13,7 @@ import { BeelineApp, DEFAULT_PROFILE, PROFILES, type GpxFile } from "./beeline";
 import { JobQueue, type JobsSnapshot, type Report, type Task } from "./jobs";
 import { rideDatetime, rideMonth, sinceFromPreset } from "./parsing";
 import { monthKey, monthLabel, Store, type Settings } from "./store";
-import { gpxToRoughPolyline } from "./track";
+import { gpxToRoughTrack } from "./track";
 
 export interface RideView {
   key: string;
@@ -25,6 +25,14 @@ export interface RideView {
   status: string;
   stats: Record<string, string>;
   track: string;
+  /** Lat/lon points read from the downloaded GPX (0 when none captured). */
+  track_src_points: number;
+  /** Points kept in the rough track after simplification (0 when none). */
+  track_points: number;
+  /** Length of the source GPX track in kilometres (0 when unknown). */
+  track_km: number;
+  /** Size of the downloaded GPX file in bytes (0 when unknown). */
+  track_bytes: number;
   month_key: string;
   month_label: string;
   uploaded_at: string;
@@ -156,6 +164,10 @@ export class Controller {
         status: r.strava_status,
         stats: r.stats,
         track: r.track,
+        track_src_points: r.track_src_points,
+        track_points: r.track_points,
+        track_km: r.track_km,
+        track_bytes: r.track_bytes,
         month_key: monthKey(r),
         month_label: monthLabel(r),
         uploaded_at: r.uploaded_at,
@@ -268,9 +280,15 @@ export class Controller {
       (msg) => report(msg),
       (file) => {
         // Keep only a rough, compressed sketch of the route — never the full GPX.
-        const track = gpxToRoughPolyline(file.bytes, this.store.settings.trackMaxPoints);
-        if (track) {
-          this.store.upsert(file.key, { track });
+        const rough = gpxToRoughTrack(file.bytes, this.store.settings.trackPointsPerKm);
+        if (rough.polyline) {
+          this.store.upsert(file.key, {
+            track: rough.polyline,
+            track_src_points: rough.srcPoints,
+            track_points: rough.keptPoints,
+            track_km: rough.km,
+            track_bytes: file.bytes.length,
+          });
           this.store.save();
           this.notify();
         } else {
@@ -321,9 +339,9 @@ export class Controller {
     return this.jobs.submit("download-gpx", { label: label || `${keys.length} rides`, keys });
   }
 
-  /** Update the rough-track point cap (persisted). Returns the clamped value. */
-  setTrackMaxPoints(n: number): number {
-    const v = this.store.setTrackMaxPoints(n);
+  /** Update the rough-track density (points/km, persisted). Returns the clamped value. */
+  setTrackPointsPerKm(n: number): number {
+    const v = this.store.setTrackPointsPerKm(n);
     this.notify();
     return v;
   }

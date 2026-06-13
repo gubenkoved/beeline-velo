@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_TRACK_MAX_POINTS, LEGACY_STORAGE_KEY, STORAGE_KEY, Store } from "../src/store";
+import { DEFAULT_TRACK_POINTS_PER_KM, LEGACY_STORAGE_KEY, STORAGE_KEY, Store } from "../src/store";
 
 function memStorage(): Storage {
   const map = new Map<string, string>();
@@ -137,11 +137,11 @@ describe("Store", () => {
 
   it("defaults, clamps, and round-trips the track-detail setting", () => {
     const s = Store.load(storage);
-    expect(s.settings.trackMaxPoints).toBe(DEFAULT_TRACK_MAX_POINTS);
-    expect(s.setTrackMaxPoints(5)).toBe(20); // clamped up to the minimum
-    expect(s.setTrackMaxPoints(9999)).toBe(500); // clamped down to the maximum
-    s.setTrackMaxPoints(150);
-    expect(Store.load(storage).settings.trackMaxPoints).toBe(150);
+    expect(s.settings.trackPointsPerKm).toBe(DEFAULT_TRACK_POINTS_PER_KM);
+    expect(s.setTrackPointsPerKm(0)).toBe(1); // clamped up to the minimum
+    expect(s.setTrackPointsPerKm(9999)).toBe(100); // clamped down to the maximum
+    s.setTrackPointsPerKm(25);
+    expect(Store.load(storage).settings.trackPointsPerKm).toBe(25);
   });
 
   it("persists a per-ride rough track", () => {
@@ -151,18 +151,35 @@ describe("Store", () => {
     expect(Store.load(storage).rides.get("k")!.track).toBe("abc123");
   });
 
+  it("persists per-ride GPX capture metadata", () => {
+    const s = Store.load(storage);
+    s.upsert("k", {
+      track: "abc123",
+      track_src_points: 1432,
+      track_points: 87,
+      track_km: 12.3,
+      track_bytes: 24576,
+    });
+    s.save();
+    const rec = Store.load(storage).rides.get("k")!;
+    expect(rec.track_src_points).toBe(1432);
+    expect(rec.track_points).toBe(87);
+    expect(rec.track_km).toBe(12.3);
+    expect(rec.track_bytes).toBe(24576);
+  });
+
   it("clear() wipes rides, restores default settings, and removes the storage keys", () => {
     storage.setItem(LEGACY_STORAGE_KEY, "{}"); // stale legacy payload must go too
     const s = Store.load(storage);
     s.upsert("k", { title: "Ride" });
-    s.setTrackMaxPoints(300);
+    s.setTrackPointsPerKm(30);
     s.save();
     expect(storage.getItem(STORAGE_KEY)).not.toBeNull();
 
     s.clear();
 
     expect(s.rides.size).toBe(0);
-    expect(s.settings.trackMaxPoints).toBe(DEFAULT_TRACK_MAX_POINTS);
+    expect(s.settings.trackPointsPerKm).toBe(DEFAULT_TRACK_POINTS_PER_KM);
     expect(storage.getItem(STORAGE_KEY)).toBeNull();
     expect(storage.getItem(LEGACY_STORAGE_KEY)).toBeNull();
     // A fresh load now starts empty.

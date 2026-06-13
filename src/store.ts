@@ -15,23 +15,23 @@ export const STORAGE_KEY = "beeline-toolkit-state";
 /** Pre-rename key; migrated into STORAGE_KEY on first load so users keep their cache. */
 export const LEGACY_STORAGE_KEY = "beeline_uploader.rides";
 
-/** Default cap on the number of points kept for a rough track. */
-export const DEFAULT_TRACK_MAX_POINTS = 100;
-const TRACK_MIN_POINTS = 20;
-const TRACK_MAX_POINTS = 500;
+/** Default rough-track density: points kept per kilometre of route. */
+export const DEFAULT_TRACK_POINTS_PER_KM = 10;
+const TRACK_MIN_POINTS_PER_KM = 1;
+const TRACK_MAX_POINTS_PER_KM = 100;
 
-function clampTrackPoints(n: number): number {
-  if (!Number.isFinite(n)) return DEFAULT_TRACK_MAX_POINTS;
-  return Math.max(TRACK_MIN_POINTS, Math.min(TRACK_MAX_POINTS, Math.round(n)));
+function clampPointsPerKm(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_TRACK_POINTS_PER_KM;
+  return Math.max(TRACK_MIN_POINTS_PER_KM, Math.min(TRACK_MAX_POINTS_PER_KM, Math.round(n)));
 }
 
 export interface Settings {
-  /** Max points kept when simplifying a downloaded GPX into a rough track. */
-  trackMaxPoints: number;
+  /** Points kept per kilometre when simplifying a downloaded GPX into a rough track. */
+  trackPointsPerKm: number;
 }
 
 function defaultSettings(): Settings {
-  return { trackMaxPoints: DEFAULT_TRACK_MAX_POINTS };
+  return { trackPointsPerKm: DEFAULT_TRACK_POINTS_PER_KM };
 }
 
 // UI chrome labels that must never be stored as a ride title.
@@ -55,6 +55,14 @@ export interface RideRecord {
   stats: Record<string, string>;
   /** Rough encoded-polyline sketch of the route (see track.ts). Empty when unknown. */
   track: string;
+  /** Lat/lon points read from the downloaded GPX (0 when unknown). */
+  track_src_points: number;
+  /** Points kept in the rough track after simplification (0 when unknown). */
+  track_points: number;
+  /** Length of the source GPX track in kilometres (0 when unknown). */
+  track_km: number;
+  /** Size of the downloaded GPX file in bytes (0 when unknown). */
+  track_bytes: number;
   last_seen: string;
   uploaded_at: string;
   /** True when the ride was known locally but has since vanished from the phone. */
@@ -72,6 +80,10 @@ function blankRecord(key: string): RideRecord {
     strava_status: "unknown",
     stats: {},
     track: "",
+    track_src_points: 0,
+    track_points: 0,
+    track_km: 0,
+    track_bytes: 0,
     last_seen: "",
     uploaded_at: "",
     deleted: false,
@@ -101,6 +113,10 @@ export interface UpsertFields {
   strava_status?: StravaStatus;
   stats?: Record<string, string>;
   track?: string;
+  track_src_points?: number;
+  track_points?: number;
+  track_km?: number;
+  track_bytes?: number;
 }
 
 export class Store {
@@ -135,8 +151,8 @@ export class Store {
   /** Merge a persisted payload (from storage or an imported file) into memory. */
   private ingest(data: unknown): void {
     const settings = (data as Partial<Persisted>)?.settings;
-    if (settings && typeof settings === "object" && "trackMaxPoints" in settings) {
-      this.settings.trackMaxPoints = clampTrackPoints(Number(settings.trackMaxPoints));
+    if (settings && typeof settings === "object" && "trackPointsPerKm" in settings) {
+      this.settings.trackPointsPerKm = clampPointsPerKm(Number(settings.trackPointsPerKm));
     }
     const rides = (data as Partial<Persisted>)?.rides;
     if (!rides || typeof rides !== "object") return;
@@ -146,6 +162,10 @@ export class Store {
       if (BAD_TITLES.has(rec.title_base)) rec.title_base = "";
       if (!rec.stats || typeof rec.stats !== "object") rec.stats = {};
       if (typeof rec.track !== "string") rec.track = "";
+      rec.track_src_points = Number(rec.track_src_points) || 0;
+      rec.track_points = Number(rec.track_points) || 0;
+      rec.track_km = Number(rec.track_km) || 0;
+      rec.track_bytes = Number(rec.track_bytes) || 0;
       rec.deleted = rec.deleted === true; // coerce missing/odd values to a real boolean
       this.rides.set(key, rec);
     }
@@ -175,6 +195,10 @@ export class Store {
       rec.stats = { ...rec.stats, ...fields.stats };
     }
     if (fields.track) rec.track = fields.track;
+    if (fields.track_src_points != null) rec.track_src_points = fields.track_src_points;
+    if (fields.track_points != null) rec.track_points = fields.track_points;
+    if (fields.track_km != null) rec.track_km = fields.track_km;
+    if (fields.track_bytes != null) rec.track_bytes = fields.track_bytes;
     if (fields.strava_status && fields.strava_status !== "unknown") {
       if (fields.strava_status === "uploaded" && rec.strava_status !== "uploaded") {
         rec.uploaded_at = nowIso();
@@ -207,11 +231,11 @@ export class Store {
     return [...this.rides.values()].filter((r) => r.strava_status === "pending" && !r.deleted);
   }
 
-  /** Update the rough-track point cap and persist. Returns the clamped value. */
-  setTrackMaxPoints(n: number): number {
-    this.settings.trackMaxPoints = clampTrackPoints(n);
+  /** Update the rough-track density (points/km) and persist. Returns the clamped value. */
+  setTrackPointsPerKm(n: number): number {
+    this.settings.trackPointsPerKm = clampPointsPerKm(n);
     this.save();
-    return this.settings.trackMaxPoints;
+    return this.settings.trackPointsPerKm;
   }
 
   /**

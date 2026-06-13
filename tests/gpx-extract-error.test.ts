@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 // must surface this as a real, persistent error rather than silently swallowing it.
 vi.mock("../src/track", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/track")>();
-  return { ...actual, gpxToRoughPolyline: () => "" };
+  return {
+    ...actual,
+    gpxToRoughTrack: () => ({ polyline: "", srcPoints: 0, keptPoints: 0, km: 0 }),
+  };
 });
 
 import { DemoAdb } from "../src/adb/demo";

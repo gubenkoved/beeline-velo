@@ -254,6 +254,7 @@ details.help kbd { background: var(--line); border-radius: 4px; padding: 1px 5px
    orange/red roads and POIs. */
 .rmap .leaflet-tile.rmap-tiles { filter: grayscale(60%) contrast(92%) brightness(104%); }
 .rmapnote { margin-top: 5px; color: var(--muted); font-size: 11.5px; font-style: italic; }
+.gpxinfo { display: block; margin-top: 2px; font-style: normal; font-variant-numeric: tabular-nums; }
 .rmaphint { margin-top: 8px; padding: 8px 11px; border: 1px dashed var(--line); border-radius: 9px;
   color: var(--muted); font-size: 12px; }
 .rmaphint b { color: var(--text); }

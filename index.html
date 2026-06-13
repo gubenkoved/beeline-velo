@@ -47,9 +47,9 @@
       <button data-speed="fast">Fast</button>
       <button data-speed="turbo">Turbo</button>
     </div>
-    <label class="custom" id="trackPointsBox" title="Max points kept for the rough map preview of a downloaded GPX. The stored track is only a lightweight approximation — not the full GPX.">
+    <label class="custom" id="trackPointsBox" title="How densely the rough map preview keeps points from a downloaded GPX, in points per kilometre. Start and end are always kept. The stored track is only a lightweight approximation — not the full GPX.">
       Track detail
-      <input id="trackPoints" type="number" min="20" max="500" step="10" inputmode="numeric" /> pts
+      <input id="trackPoints" type="number" min="1" max="100" step="1" inputmode="numeric" /> pts/km
     </label>
   </div>
 </header>

@@ -4,8 +4,9 @@ import {
   decodePolyline,
   encodePolyline,
   extractTrack,
-  gpxToRoughPolyline,
+  gpxToRoughTrack,
   simplify,
+  trackLengthKm,
   type LatLon,
 } from "../src/track";
 
@@ -74,17 +75,58 @@ describe("encode/decode polyline", () => {
   });
 });
 
-describe("gpxToRoughPolyline", () => {
-  it("produces a compact, decodable polyline", () => {
+describe("trackLengthKm", () => {
+  it("sums consecutive great-circle hops", () => {
+    // ~1.11 km per 0.01° of latitude.
+    const km = trackLengthKm([
+      [52.0, 4.0],
+      [52.01, 4.0],
+      [52.02, 4.0],
+    ]);
+    expect(km).toBeGreaterThan(2.1);
+    expect(km).toBeLessThan(2.3);
+  });
+
+  it("is zero for fewer than two points", () => {
+    expect(trackLengthKm([])).toBe(0);
+    expect(trackLengthKm([[1, 1]])).toBe(0);
+  });
+});
+
+describe("gpxToRoughTrack", () => {
+  it("produces a compact, decodable polyline with capture metadata", () => {
     const bytes = new TextEncoder().encode(GPX);
-    const encoded = gpxToRoughPolyline(bytes, 100);
-    expect(encoded.length).toBeGreaterThan(0);
-    const decoded = decodePolyline(encoded);
-    expect(decoded.length).toBeGreaterThanOrEqual(2);
+    const rough = gpxToRoughTrack(bytes, 10);
+    expect(rough.polyline.length).toBeGreaterThan(0);
+    expect(rough.srcPoints).toBe(4);
+    expect(rough.keptPoints).toBeGreaterThanOrEqual(2);
+    expect(rough.km).toBeGreaterThan(0);
+    const decoded = decodePolyline(rough.polyline);
+    expect(decoded.length).toBe(rough.keptPoints);
     expect(decoded[0][0]).toBeCloseTo(52.37, 4);
   });
 
-  it("returns empty string when there is no usable track", () => {
-    expect(gpxToRoughPolyline(new TextEncoder().encode("<gpx></gpx>"), 100)).toBe("");
+  it("keeps more points at a higher density", () => {
+    const pts: LatLon[] = [];
+    for (let i = 0; i < 400; i++) pts.push([52 + i * 0.001, 4 + Math.sin(i / 8) * 0.01]);
+    const gpx =
+      `<gpx><trk><trkseg>` +
+      pts.map(([lat, lon]) => `<trkpt lat="${lat}" lon="${lon}"></trkpt>`).join("") +
+      `</trkseg></trk></gpx>`;
+    const bytes = new TextEncoder().encode(gpx);
+    const coarse = gpxToRoughTrack(bytes, 2);
+    const fine = gpxToRoughTrack(bytes, 20);
+    expect(fine.keptPoints).toBeGreaterThanOrEqual(coarse.keptPoints);
+    // Endpoints are always preserved.
+    const decoded = decodePolyline(coarse.polyline);
+    expect(decoded[0][0]).toBeCloseTo(pts[0][0], 4);
+    expect(decoded[decoded.length - 1][0]).toBeCloseTo(pts[pts.length - 1][0], 4);
+  });
+
+  it("returns an empty polyline when there is no usable track", () => {
+    const rough = gpxToRoughTrack(new TextEncoder().encode("<gpx></gpx>"), 10);
+    expect(rough.polyline).toBe("");
+    expect(rough.keptPoints).toBe(0);
+    expect(rough.km).toBe(0);
   });
 });
