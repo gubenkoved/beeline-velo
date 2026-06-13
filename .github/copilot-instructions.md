@@ -27,6 +27,7 @@ UI → Controller → (JobQueue · Store · BeelineApp) → Parsing → AdbDevic
 | [src/jobs.ts](../src/jobs.ts) | Single-worker background queue with coalescing | `JobQueue`, `Task`, `TaskSnapshot` |
 | [src/store.ts](../src/store.ts) | LocalStorage status cache (Python `rides.json`-compatible) | `Store`, `RideRecord`, `upsert()` |
 | [src/track.ts](../src/track.ts) | GPS track decode/simplify/render | `extractTrack()`, `simplify()` (Douglas–Peucker), encoded polylines |
+| [src/mapview.ts](../src/mapview.ts) | Map-view geometry: pick drawable tracks + hover/overlap hit-testing | `ridesWithTracks()`, `nearestRides()`, `RideTrack`, `ProjectedTrack` |
 | [src/adb/types.ts](../src/adb/types.ts) | Transport-agnostic device contract | `AdbDevice`, `AdbError`, `shellQuote()` |
 | [src/adb/webusb.ts](../src/adb/webusb.ts) | Real transport via Tango | `WebUsbAdb` |
 | [src/adb/demo.ts](../src/adb/demo.ts) | Stateful fake device (no phone needed) | `DemoAdb` |
@@ -42,6 +43,7 @@ UI → Controller → (JobQueue · Store · BeelineApp) → Parsing → AdbDevic
 - **Immutable-ish state**: mutate the `Store` only via `store.upsert(key, partial)`; let the Controller emit a change event to re-render.
 - **No hardcoded screen coordinates**: derive every tap/swipe from `Geometry` (computed from `screenSize()`), so it works on any device resolution.
 - **Transport abstraction**: code against the `AdbDevice` interface, never `WebUsbAdb`/`DemoAdb` directly — this is what keeps demo mode and tests working.
+- **Unified map look & feel**: both Leaflet basemaps — the Explore per-ride mini-maps (`.rmap`) and the all-rides Map view (`#allRidesMap`) — share one dark, desaturated tile treatment (`.leaflet-tile-pane { filter: grayscale(85%) brightness(.6) contrast(1.1) }` over a `#05070a` container) so colored tracks pop consistently. Keep the two filter rules in sync; mini-maps draw a single ride with a white casing + solid orange line for legibility, while the Map view uses translucent overlapping lines as a heatmap.
 - **Status/progress messages**: say exactly WHAT is happening and WHY, verbosely if needed — never vague counts. When acting on a specific ride, name it with the params we know (e.g. `rideShortLabel(key)` → "Jun 13 14:22"), not "1 ride". Prefer "scrolling down to find Jun 13 14:22…" over "scrolling down — looking for 1 ride…". When several rides are involved, name the first couple and append "(+N more)".
 - **Error handling**: throw/catch `AdbError` for device issues; wrap `localStorage` access in `try/catch` (private mode can throw — non-fatal); surface failures to the user via `toast(message, isError)` and fall back to demo mode rather than crashing.
 
