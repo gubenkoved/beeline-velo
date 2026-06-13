@@ -214,6 +214,22 @@ export class Store {
     return this.settings.trackMaxPoints;
   }
 
+  /**
+   * Wipe all cached rides and restore default settings, removing the persisted
+   * payload (and any legacy key) from storage. Local browser state only — this
+   * never touches the phone.
+   */
+  clear(): void {
+    this.rides.clear();
+    this.settings = defaultSettings();
+    try {
+      this.storage.removeItem(STORAGE_KEY);
+      this.storage.removeItem(LEGACY_STORAGE_KEY);
+    } catch {
+      /* private mode / storage disabled — non-fatal */
+    }
+  }
+
   // -- import / export ---------------------------------------------------
 
   /** Serialized JSON identical to the Python tool's rides.json (for download). */

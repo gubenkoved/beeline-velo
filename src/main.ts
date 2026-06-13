@@ -17,7 +17,7 @@ import { AdbError, type AdbDevice } from "./adb/types";
 import { WebUsbAdb } from "./adb/webusb";
 import { Controller, type AppState } from "./controller";
 import { autoGranularity, bucketRide, compareRideKeysDesc, type Granularity } from "./parsing";
-import { Store } from "./store";
+import { LEGACY_STORAGE_KEY, STORAGE_KEY, Store } from "./store";
 import { decodePolyline } from "./track";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string): T =>
@@ -632,6 +632,27 @@ function importRides(file: File): void {
   reader.readAsText(file);
 }
 
+/**
+ * Erase every trace of local state: the ride cache + settings, the queued jobs,
+ * and the remembered phone — then fall back to demo mode. Browser-only; the
+ * phone is never touched. Guarded by a single confirm().
+ */
+async function resetEverything(): Promise<void> {
+  if (!confirm("Erase all locally stored rides, settings, and the remembered phone? This cannot be undone and returns the app to demo mode. Nothing on your phone is deleted.")) {
+    return;
+  }
+  controller.reset(); // clear the active controller's cache + job queue
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+  } catch {
+    /* private mode / storage disabled — non-fatal */
+  }
+  forgetReal(); // stop auto-reconnecting to the phone on future loads
+  await goDemo(); // rebuild a fresh demo controller with empty storage
+  toast("Local data cleared.");
+}
+
 // --------------------------------------------------------------------------- //
 // Events
 // --------------------------------------------------------------------------- //
@@ -669,6 +690,7 @@ document.addEventListener("click", (e) => {
   if (t.id === "btnDisconnect") return void leaveReal();
   if (t.id === "btnImport") return void ($("#importFile") as HTMLInputElement).click();
   if (t.id === "btnExport") return exportRides();
+  if (t.id === "btnReset") return void resetEverything();
   if (t.id === "btnScan") return doScan();
   if (t.id === "btnCancel") return run(() => controller.cancel(null));
   if (t.id === "btnClear") return run(() => controller.clear());

@@ -322,6 +322,17 @@ export class Controller {
     return this.jobs.clear();
   }
 
+  /**
+   * Wipe all local state: cancel/clear the job queue and empty the ride cache.
+   * Destroys browser-side data only; nothing on the phone is affected.
+   */
+  reset(): void {
+    this.jobs.cancelAll();
+    this.jobs.clear();
+    this.store.clear();
+    this.notify();
+  }
+
   // -- import / export ---------------------------------------------------
 
   exportJson(): string {

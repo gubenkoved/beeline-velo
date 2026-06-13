@@ -150,4 +150,22 @@ describe("Store", () => {
     s.save();
     expect(Store.load(storage).rides.get("k")!.track).toBe("abc123");
   });
+
+  it("clear() wipes rides, restores default settings, and removes the storage keys", () => {
+    storage.setItem(LEGACY_STORAGE_KEY, "{}"); // stale legacy payload must go too
+    const s = Store.load(storage);
+    s.upsert("k", { title: "Ride" });
+    s.setTrackMaxPoints(300);
+    s.save();
+    expect(storage.getItem(STORAGE_KEY)).not.toBeNull();
+
+    s.clear();
+
+    expect(s.rides.size).toBe(0);
+    expect(s.settings.trackMaxPoints).toBe(DEFAULT_TRACK_MAX_POINTS);
+    expect(storage.getItem(STORAGE_KEY)).toBeNull();
+    expect(storage.getItem(LEGACY_STORAGE_KEY)).toBeNull();
+    // A fresh load now starts empty.
+    expect(Store.load(storage).rides.size).toBe(0);
+  });
 });

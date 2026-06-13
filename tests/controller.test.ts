@@ -219,4 +219,22 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     // Same synthetic source shape; a higher cap keeps at least as many points.
     expect(fine.length).toBeGreaterThanOrEqual(coarse.length);
   });
+
+  it("reset() empties the ride cache and clears the queue", async () => {
+    const c = makeController(new DemoAdb());
+    await c.connect();
+    c.scan("all", null);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+    expect(c.state().rides.length).toBeGreaterThan(0);
+
+    let notified = 0;
+    const off = c.onChange(() => notified++);
+    c.reset();
+    off();
+
+    expect(notified).toBeGreaterThan(0);
+    expect(c.state().rides.length).toBe(0);
+    expect(c.state().jobs.busy).toBe(false);
+    expect(c.state().jobs.queue.length).toBe(0);
+  });
 });

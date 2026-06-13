@@ -58,6 +58,8 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
   button.ghost { background: transparent; }
+  button.danger { color: #f8736a; border-color: #5a2420; }
+  button.danger:hover:not(:disabled) { background: #2a1413; border-color: #7a2c27; }
   button.small { padding: 4px 10px; font-size: 12.5px; border-radius: 7px; }
 
   .conn { display: inline-flex; align-items: center; gap: 8px; }
@@ -277,6 +279,7 @@
     </span>
     <button class="ghost small" id="btnImport">Import</button>
     <button class="ghost small" id="btnExport">Export</button>
+    <button class="ghost small danger" id="btnReset" title="Erase all locally stored rides, settings, and the remembered phone, then return to demo mode. Does not delete anything on the phone.">Reset</button>
     <button class="ghost small" id="btnStatusSel">Check selected</button>
     <button class="ghost small" id="btnGpxSel">Download GPX</button>
     <button class="small" id="btnUploadSel">Upload selected to Strava</button>
