@@ -264,6 +264,17 @@ export class DemoAdb implements AdbDevice {
       }
       return "";
     }
+    // Recursive .gpx inventory used by the GPX-export detection diff. Every fake
+    // download lives in /sdcard/Download; report each as an absolute path.
+    if (/\bfind\b/.test(command) && /\.gpx/i.test(command)) {
+      const lines = [...this.downloads.keys()].map((n) => `/sdcard/Download/${n}`);
+      return lines.join("\n") + (lines.length ? "\n" : "");
+    }
+    // mtimes for the newest-of-several tiebreak: emit increasing values in arg order.
+    if (/\bstat\b/.test(command)) {
+      const args = [...command.matchAll(/'([^']*)'/g)].map((m) => m[1]);
+      return args.map((p, i) => `${1000 + i} ${p}`).join("\n") + (args.length ? "\n" : "");
+    }
     if (/\bls\b/.test(command) && command.includes("/sdcard/Download")) {
       return [...this.downloads.keys()].join("\n") + (this.downloads.size ? "\n" : "");
     }

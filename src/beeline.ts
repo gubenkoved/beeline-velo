@@ -564,15 +564,38 @@ export class BeelineApp {
     return results;
   }
 
-  /** List the `.gpx` filenames currently in the device Downloads folder. */
-  private async listGpxDownloads(): Promise<Set<string>> {
-    const out = await this.adb.shell(`ls -1 ${DOWNLOAD_DIR}`);
+  /**
+   * Every `.gpx` file under shared storage, as absolute paths. Recursive and
+   * name/folder-agnostic on purpose: the SAF "Save" dialog reopens at the user's
+   * last-used location and names the export however it likes, so we never match on
+   * a folder or filename — we diff this set across the export to find what's new.
+   */
+  private async listGpxFiles(): Promise<Set<string>> {
+    const out = await this.adb.shell(`find /sdcard -maxdepth 4 -type f -iname '*.gpx' 2>/dev/null`);
     return new Set(
       out
         .split("\n")
         .map((s) => s.trim())
-        .filter((s) => s.toLowerCase().endsWith(".gpx")),
+        .filter(Boolean),
     );
+  }
+
+  /** Pick the most-recently-modified path (falls back to the last one listed). */
+  private async newestGpx(paths: string[]): Promise<string> {
+    if (paths.length === 1) return paths[0];
+    const out = await this.adb.shell(`stat -c '%Y %n' ${paths.map(shellQuote).join(" ")} 2>/dev/null`);
+    let best = paths[paths.length - 1];
+    let bestMtime = -1;
+    for (const line of out.split("\n")) {
+      const m = /^(\d+)\s+(.*\S)\s*$/.exec(line);
+      if (!m) continue;
+      const mtime = Number(m[1]);
+      if (mtime >= bestMtime) {
+        bestMtime = mtime;
+        best = m[2];
+      }
+    }
+    return best;
   }
 
   private async tapBounds(b: Bounds): Promise<void> {
@@ -595,7 +618,7 @@ export class BeelineApp {
    * (the same message is also reported via `progress`), so callers can surface it.
    */
   private async exportCurrentGpx(key: string, progress: Progress): Promise<GpxExport> {
-    const before = await this.listGpxDownloads();
+    const before = await this.listGpxFiles();
 
     const options = await this.pollFor(findOptionsButton, 4);
     if (!options) {
@@ -634,35 +657,39 @@ export class BeelineApp {
     }
     await this.tapBounds(save);
 
-    // The new file appears in Downloads; diff against the pre-export snapshot. We
-    // renamed our own previous exports away from Beeline's default naming (below),
-    // so Beeline always writes a fresh default-named file here — the diff stays
-    // reliable even when the same ride is exported repeatedly.
-    let newName: string | null = null;
+    // Find the freshly-written GPX. Beeline's SAF "Save" dialog reopens at the
+    // user's last-used folder and names the file however it likes, so we diff the
+    // whole-tree .gpx set and take whatever is new (newest by mtime if several).
+    let newPath: string | null = null;
+    let inventory = before;
     for (let i = 0; i < 20; i++) {
-      const after = await this.listGpxDownloads();
-      const fresh = [...after].filter((n) => !before.has(n));
+      inventory = await this.listGpxFiles();
+      const fresh = [...inventory].filter((p) => !before.has(p));
       if (fresh.length) {
-        newName = fresh[fresh.length - 1];
+        newPath = await this.newestGpx(fresh);
         break;
       }
       await this.sleep(this.timing.poll_interval);
     }
-    if (!newName) {
-      const reason = `could not find the exported GPX file for ${key}`;
-      await progress(reason);
+    if (!newPath) {
+      const seen = [...inventory].sort();
+      const where = seen.length ? seen.join(", ") : "(no .gpx files found under /sdcard)";
+      const reason =
+        `could not find the exported GPX file for ${key}: no new .gpx appeared under ` +
+        `/sdcard after tapping Save. The Save dialog likely targeted a folder we don't ` +
+        `scan, or a confirmation step was missed. GPX files currently on the device: ${where}`;
+      await progress(`could not find the exported GPX file for ${key}`);
       return { ok: false, reason };
     }
 
-    // Move the export to a stable, app-driven name so device files never collide
-    // (and overwrite our own prior export of this same ride, never a different one).
+    // Consolidate the export into Downloads under a stable, app-driven name so device
+    // files never collide (our own re-export overwrites this ride, never a stranger).
     const finalName = gpxFilename(key);
-    if (newName !== finalName) {
-      const src = `${DOWNLOAD_DIR}/${newName}`;
-      const dst = `${DOWNLOAD_DIR}/${finalName}`;
-      await this.adb.shell(`rm -f ${shellQuote(dst)} && mv ${shellQuote(src)} ${shellQuote(dst)}`);
+    const dst = `${DOWNLOAD_DIR}/${finalName}`;
+    if (newPath !== dst) {
+      await this.adb.shell(`rm -f ${shellQuote(dst)} && mv ${shellQuote(newPath)} ${shellQuote(dst)}`);
     }
-    const bytes = await this.adb.readFile(`${DOWNLOAD_DIR}/${finalName}`);
+    const bytes = await this.adb.readFile(dst);
     return { ok: true, file: { key, filename: finalName, bytes } };
   }
 }
