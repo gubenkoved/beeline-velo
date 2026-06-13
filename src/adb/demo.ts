@@ -141,6 +141,8 @@ export class DemoAdb implements AdbDevice {
   uiDumps = 0;
   /** Remaining list swipes to silently swallow — simulates flings that fail to register. */
   private missSwipes = 0;
+  /** When set, momentum flings (short-duration swipes) are ignored — only slow drags move. */
+  private flingDeaf = false;
 
   constructor(opts: { rides?: DemoRide[]; size?: Size; latencyMs?: number } = {}) {
     this.size = opts.size ?? { width: 1080, height: 2400 };
@@ -166,6 +168,17 @@ export class DemoAdb implements AdbDevice {
    */
   missNextSwipes(n: number): void {
     this.missSwipes = n;
+  }
+
+  /**
+   * Test hook: make the list ignore momentum flings (short, fast swipes) while it
+   * still responds to slow controlled drags. Reproduces a real device where a fast
+   * up-fling lands on the header (or never registers) and does nothing, so the only
+   * way to move the list is a reliable drag — navigation must recover via drags
+   * rather than mistaking the dead fling for "reached the end" and reversing.
+   */
+  deafenFlings(on = true): void {
+    this.flingDeaf = on;
   }
 
   private async tick(): Promise<void> {
@@ -298,7 +311,9 @@ export class DemoAdb implements AdbDevice {
       // slow drag keeps its original fixed 5-row step so existing behaviour and
       // tests are unchanged.
       const frac = Math.abs(y1 - y2) / this.size.height;
-      const step = duration <= 150 ? Math.max(6, Math.round(frac * 18)) : 5;
+      const isFling = duration <= 150;
+      if (this.flingDeaf && isFling) return; // fling ignored: counted, but no movement
+      const step = isFling ? Math.max(6, Math.round(frac * 18)) : 5;
       const maxOffset = Math.max(0, this.rides.length - VISIBLE);
       if (y1 > y2) this.offset = Math.min(this.offset + step, maxOffset); // scroll down
       else this.offset = Math.max(this.offset - step, 0); // scroll up

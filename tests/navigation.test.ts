@@ -215,4 +215,34 @@ describe("resilient navigation (recovers from missed swipes)", () => {
     expect(details.map((d) => d.key)).toEqual([oldest]); // reached the very bottom
     expect(missing).toEqual([]);
   });
+
+  it("reaches an above target with drags when the device ignores fast flings (turbo)", async () => {
+    const rides = makeDemoRides(120);
+    const oldest = rides[rides.length - 1].key;
+    const target = rides[60].key; // sits ABOVE the bottom — reaching it needs UP scrolls
+
+    const demo = new DemoAdb({ rides: makeDemoRides(120) });
+    const app = await BeelineApp.create(demo, PROFILES.turbo, instant);
+
+    // Park the list at the very bottom so the target lies strictly above the view.
+    await app.processTargets(new Set([oldest]), false);
+
+    // From here the device swallows every momentum fling; only slow controlled
+    // drags move the list. This is exactly the on-device failure the user hit:
+    // "fast-scrolling up" did nothing, and the sweep then wrongly reversed downward
+    // and gave up. With fling stalls no longer counting as "top reached", the sweep
+    // must still climb to the target via reliable drags.
+    demo.deafenFlings();
+    const missing: string[] = [];
+    const details = await app.processTargets(
+      new Set([target]),
+      false,
+      async () => false,
+      () => {},
+      (keys) => missing.push(...keys),
+    );
+
+    expect(details.map((d) => d.key)).toEqual([target]); // found by scrolling UP, not down
+    expect(missing).toEqual([]); // never wrongly declared deleted
+  });
 });

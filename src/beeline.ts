@@ -145,9 +145,9 @@ export const PROFILES: Record<string, Timing> = {
     close_detail: 0.35,
     poll_interval: 1.0,
     grace: 2.0,
-    scroll_settle: 0.3,
-    fling_ms: 90, // momentum fling: coast several screens per gesture
-    fling_settle: 0.5,
+    scroll_settle: 0.4,
+    fling_ms: 120, // momentum fling — long enough to register reliably on-device
+    fling_settle: 0.65,
     coarse_swipes_per_dump: 3,
   },
   turbo: {
@@ -157,10 +157,10 @@ export const PROFILES: Record<string, Timing> = {
     close_detail: 0.25,
     poll_interval: 1.0,
     grace: 0.0,
-    scroll_settle: 0.2,
+    scroll_settle: 0.35,
     optimistic_upload: true,
-    fling_ms: 70, // snappier fling, more coast
-    fling_settle: 0.4,
+    fling_ms: 110, // momentum fling — long enough to register reliably on-device
+    fling_settle: 0.6,
     coarse_swipes_per_dump: 4,
   },
 };
@@ -192,13 +192,16 @@ export class Geometry {
 
   // Momentum flings: a longer travel released quickly so the list keeps coasting
   // well past the gesture, covering several screens per swipe. Used (with a short
-  // duration) for the coarse phase when a target is far down the list.
+  // duration) for the coarse phase when a target is far down the list. Both ends of
+  // the travel stay inside the scrollable list body — a touch that starts on the
+  // fixed header or bottom-nav band is swallowed, which made fast up-scrolls do
+  // nothing on the device.
   listFlingDown(): [number, number, number, number] {
-    return [this.cx, Math.trunc(this.height * 0.85), this.cx, Math.trunc(this.height * 0.12)];
+    return [this.cx, Math.trunc(this.height * 0.82), this.cx, Math.trunc(this.height * 0.18)];
   }
 
   listFlingUp(): [number, number, number, number] {
-    return [this.cx, Math.trunc(this.height * 0.12), this.cx, Math.trunc(this.height * 0.88)];
+    return [this.cx, Math.trunc(this.height * 0.25), this.cx, Math.trunc(this.height * 0.9)];
   }
 
   detailScrollUp(): [number, number, number, number] {
@@ -524,12 +527,14 @@ export class BeelineApp {
     const canFling = this.timing.fling_ms !== null;
     const baseLevel = canFling ? 0 : 2;
     let level = baseLevel;
-    // Consecutive "the list didn't move" results in the current direction. One
-    // stall is treated as a transient miss (a fling that failed to register, or a
-    // dump taken before the list settled) and is retried with a reliable drag; only
-    // a SECOND, confirmed stall accepts that we've genuinely reached that end. This
-    // is what stops a single missed swipe from ending the sweep and wandering off.
-    let stalls = 0;
+    // We only believe we've reached an end of the list after a *reliable controlled
+    // drag* fails to move it twice in a row. A momentum fling that fails to register
+    // proves nothing (it may have landed on a header, or coasted before the dump),
+    // so a fling stall never counts toward the end — it just forces the next gesture
+    // to be a drag via `preferDrag`. This is what stops a missed up-fling from being
+    // misread as "top reached" and sending the sweep scrolling the wrong way.
+    let dragStalls = 0;
+    let preferDrag = false;
 
     // Name the rides we're still hunting for so status reads like a specific
     // intent ("Jun 13 14:22, Jun 12 09:10 (+3 more)") rather than a bare count.
@@ -554,7 +559,8 @@ export class BeelineApp {
         remaining.delete(target.key);
         exhaustedUp = exhaustedDown = false; // position moved; both ends open again
         level = baseLevel; // a new target may be far again — start coarse
-        stalls = 0; // fresh approach — forget any stall from the last target
+        dragStalls = 0; // fresh approach — forget any stall from the last target
+        preferDrag = false;
         cards = await this.listCards();
         continue;
       }
@@ -616,10 +622,10 @@ export class BeelineApp {
       }
       const stepLevel = aim === null ? 2 : level;
       // Resilient gesture choice: only risk a fast momentum fling when we have a date
-      // to aim at AND the list actually moved last time. After ANY stall we drop to a
-      // slow, reliable controlled drag — a fling that merely failed to register must
-      // never be mistaken for the end of the list.
-      const fling = canFling && aim !== null && stepLevel <= 1 && stalls === 0;
+      // to aim at AND the previous fling actually registered. After a fling that did
+      // not move the list we drop to a slow, reliable controlled drag — a fling that
+      // merely failed to register must never be mistaken for the end of the list.
+      const fling = canFling && aim !== null && stepLevel <= 1 && !preferDrag;
       const stride = fling && stepLevel === 0 ? this.timing.coarse_swipes_per_dump : 1;
 
       const verb = fling ? "fast-scrolling" : "scrolling";
@@ -627,17 +633,35 @@ export class BeelineApp {
       const before = cards.map((c) => c.key);
       for (let s = 0; s < stride; s++) await this.moveList(goUp, fling); // blind between dumps
       cards = await this.listCards();
-      if (sameKeys(before, cards.map((c) => c.key))) {
-        // The list didn't budge — usually just a missed fling. Retry with a reliable
-        // drag next time; only after a second, confirmed stall do we accept this end.
-        stalls += 1;
-        if (stalls >= 2) {
-          if (goUp) exhaustedUp = true;
-          else exhaustedDown = true;
-          stalls = 0;
+      let moved = !sameKeys(before, cards.map((c) => c.key));
+      if (!moved) {
+        // The list may simply not have settled before we dumped — the fast profiles
+        // use very short settle delays. Give it one more beat and look again before
+        // believing the gesture did nothing; this kills the false stalls that used
+        // to accumulate into a bogus "reached the end" and reverse our direction.
+        await this.sleep(this.timing.scroll_settle);
+        cards = await this.listCards();
+        moved = !sameKeys(before, cards.map((c) => c.key));
+      }
+      if (!moved) {
+        if (fling) {
+          // A momentum fling failed to register — that proves nothing about the end
+          // of the list (it may have hit the header or coasted past the dump). Just
+          // fall back to a reliable controlled drag on the next attempt.
+          preferDrag = true;
+        } else {
+          // A reliable controlled drag did not move the list. One stall is a
+          // transient miss; a SECOND, confirmed stall accepts we've reached this end.
+          dragStalls += 1;
+          if (dragStalls >= 2) {
+            if (goUp) exhaustedUp = true;
+            else exhaustedDown = true;
+            dragStalls = 0;
+          }
         }
       } else {
-        stalls = 0; // we moved — this end is clearly not reached
+        dragStalls = 0; // we moved — this end is clearly not reached
+        preferDrag = false; // …and the gesture worked, so flinging may resume
         // Did a fast move coast past the target's date? Refine one level so the next
         // approach is gentler; the final level is an exact single-card drag that
         // cannot overshoot, guaranteeing convergence.
