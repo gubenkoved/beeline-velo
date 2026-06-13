@@ -7,6 +7,9 @@ rides with their upload status, lets you select them, and uploads in a batch.
 > **Android only.** This drives the Beeline app over **ADB (Android Debug Bridge)**, which
 > exists only on Android — there is **no iOS/iPhone support**, and none is possible.
 
+> **Vibe coded.** This project is almost entirely "vibe coded" — developed with the help of
+> LLM coding agents. Review accordingly and expect the occasional rough edge.
+
 Everything runs **in the browser**: it talks to a USB-connected Android phone directly over
 **WebUSB** (ADB via [`@yume-chan/adb`](https://github.com/yume-chan/ya-webadb)) and drives
 the **real Beeline app** (reads the screen, taps the buttons) — no server, no rooting, no
