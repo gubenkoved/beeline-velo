@@ -51,6 +51,29 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     expect(rec.stats["Average speed"]).toBe("20.0km/h");
   });
 
+  it("backfills the summary distance/duration from detail stats on Check", async () => {
+    const device = new DemoAdb();
+    const store = new Store(memStorage());
+    const c = new Controller(async () => device, store, async () => {});
+    await c.connect();
+
+    // Simulate a ride the list scan recorded WITHOUT distance/duration (the card
+    // parse missed them), so the one-line summary would otherwise show "?".
+    const key = "Sat Jun 13 2026 at 14:22";
+    store.upsert(key, { title_base: "Afternoon ride" });
+    let r = c.state().rides.find((v) => v.key === key)!;
+    expect(r.distance).toBe("");
+    expect(r.duration).toBe("");
+
+    c.status([key]);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false));
+
+    r = c.state().rides.find((v) => v.key === key)!;
+    // Check reads the detail and backfills the empty summary fields from its stats.
+    expect(r.distance).toBe("22.6km");
+    expect(r.duration).toBe(r.stats["Elapsed time"]);
+  });
+
   it("keeps the scan name and splits the check-time location suffix", async () => {
     const c = makeController(new DemoAdb());
     await c.connect();

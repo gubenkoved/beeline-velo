@@ -625,6 +625,11 @@ function render(): void {
       const rowsEl = box.querySelector(".rows")!;
       for (const r of m.rides) {
         const so = openStats.has(r.key);
+        // Fall back to checked detail stats when the list scan never captured the
+        // summary figures, so a Checked ride shows real numbers instead of "?".
+        const summaryDistance = r.distance || (r.stats && r.stats["Distance"]) || "?";
+        const summaryDuration =
+          r.duration || (r.stats && (r.stats["Elapsed time"] || r.stats["Moving time"])) || "?";
         const el = document.createElement("div");
         el.className = "rrow" + (r.deleted ? " deleted" : "");
         el.dataset.key = r.key;
@@ -632,7 +637,7 @@ function render(): void {
           <input type="checkbox" class="chk" data-key="${r.key}" ${selected.has(r.key) ? "checked" : ""}>
           <div class="rmain">
             <div class="rtitle"><span class="rname"><span class="rtitle-text">${r.title || "Ride"}</span>${r.location ? `<span class="rtitle-loc">${r.location}</span>` : ""}</span> ${badge(r.status)} ${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}</div>
-            <div class="rmeta">${r.key} · ${r.distance || "?"} · ${r.duration || "?"}
+            <div class="rmeta">${r.key} · ${summaryDistance} · ${summaryDuration}
               <a href="#" data-stats="${r.key}">${so ? "hide" : "details"}</a></div>
             ${so ? detailsBlock(r.key, r.stats, r.track) : ""}
           </div>
