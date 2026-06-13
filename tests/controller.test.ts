@@ -51,6 +51,26 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     expect(rec.stats["Average speed"]).toBe("20.0km/h");
   });
 
+  it("keeps the scan name and splits the check-time location suffix", async () => {
+    const c = makeController(new DemoAdb());
+    await c.connect();
+    c.scan("all", null);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false));
+
+    const key = "Sat Jun 13 2026 at 14:22";
+    // After scan only: short name, no location suffix.
+    let r = c.state().rides.find((v) => v.key === key)!;
+    expect(r.title).toBe("Afternoon ride");
+    expect(r.location).toBe("");
+
+    // After check: the detail heading adds ", Demo City", surfaced as a separate suffix.
+    c.status([key]);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false));
+    r = c.state().rides.find((v) => v.key === key)!;
+    expect(r.title).toBe("Afternoon ride");
+    expect(r.location).toBe(", Demo City");
+  });
+
   it("uploads a pending ride and reflects it as uploaded", async () => {
     const c = makeController(new DemoAdb());
     await c.connect();

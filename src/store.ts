@@ -45,7 +45,10 @@ function nowIso(): string {
 
 export interface RideRecord {
   key: string;
+  /** Richest title seen (the detail-sheet heading, e.g. "Morning ride, Amstelveen"). */
   title: string;
+  /** Short list-card name (e.g. "Morning ride"); the prefix of the fuller `title`. */
+  title_base: string;
   distance: string;
   duration: string;
   strava_status: StravaStatus;
@@ -63,6 +66,7 @@ function blankRecord(key: string): RideRecord {
   return {
     key,
     title: "",
+    title_base: "",
     distance: "",
     duration: "",
     strava_status: "unknown",
@@ -91,6 +95,7 @@ interface Persisted {
 
 export interface UpsertFields {
   title?: string;
+  title_base?: string;
   distance?: string;
   duration?: string;
   strava_status?: StravaStatus;
@@ -138,6 +143,7 @@ export class Store {
     for (const [key, raw] of Object.entries(rides as Record<string, Partial<RideRecord>>)) {
       const rec: RideRecord = { ...blankRecord(key), ...raw, key };
       if (BAD_TITLES.has(rec.title)) rec.title = ""; // scrub stale mis-parsed titles
+      if (BAD_TITLES.has(rec.title_base)) rec.title_base = "";
       if (!rec.stats || typeof rec.stats !== "object") rec.stats = {};
       if (typeof rec.track !== "string") rec.track = "";
       rec.deleted = rec.deleted === true; // coerce missing/odd values to a real boolean
@@ -158,6 +164,11 @@ export class Store {
   upsert(key: string, fields: UpsertFields = {}): RideRecord {
     const rec = this.rides.get(key) ?? blankRecord(key);
     if (fields.title) rec.title = fields.title;
+    if (fields.title_base) {
+      rec.title_base = fields.title_base;
+      // Seed the display title from the scan name until a fuller one is checked.
+      if (!rec.title) rec.title = fields.title_base;
+    }
     if (fields.distance) rec.distance = fields.distance;
     if (fields.duration) rec.duration = fields.duration;
     if (fields.stats && Object.keys(fields.stats).length) {

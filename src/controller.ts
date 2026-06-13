@@ -18,6 +18,8 @@ import { gpxToRoughPolyline } from "./track";
 export interface RideView {
   key: string;
   title: string;
+  /** Extra location suffix gathered at check time (e.g. ", Amstelveen"); "" when none. */
+  location: string;
   distance: string;
   duration: string;
   status: string;
@@ -140,20 +142,27 @@ export class Controller {
 
   state(): AppState {
     const records = [...this.store.rides.values()].sort((a, b) => a.key.localeCompare(b.key));
-    const rides: RideView[] = records.map((r) => ({
-      key: r.key,
-      title: r.title,
-      distance: r.distance,
-      duration: r.duration,
-      status: r.strava_status,
-      stats: r.stats,
-      track: r.track,
-      month_key: monthKey(r),
-      month_label: monthLabel(r),
-      uploaded_at: r.uploaded_at,
-      deleted: r.deleted,
-      deleted_at: r.deleted_at,
-    }));
+    const rides: RideView[] = records.map((r) => {
+      // Split the fuller checked title into the scan name + colored location suffix.
+      const base = r.title_base;
+      const full = r.title;
+      const hasSuffix = base !== "" && full.startsWith(base) && full.length > base.length;
+      return {
+        key: r.key,
+        title: hasSuffix ? base : full,
+        location: hasSuffix ? full.slice(base.length) : "",
+        distance: r.distance,
+        duration: r.duration,
+        status: r.strava_status,
+        stats: r.stats,
+        track: r.track,
+        month_key: monthKey(r),
+        month_label: monthLabel(r),
+        uploaded_at: r.uploaded_at,
+        deleted: r.deleted,
+        deleted_at: r.deleted_at,
+      };
+    });
     return {
       rides,
       jobs: this.jobs.snapshot(),
@@ -194,7 +203,7 @@ export class Controller {
         // Persist and surface each page of rides the moment they are found.
         for (const c of fresh) {
           seen.add(c.key);
-          this.store.upsert(c.key, { title: c.title, distance: c.distance, duration: c.duration });
+          this.store.upsert(c.key, { title_base: c.title, distance: c.distance, duration: c.duration });
         }
         this.store.save();
         this.notify();

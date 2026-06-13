@@ -57,6 +57,31 @@ describe("Store", () => {
     expect(Store.load(storage).rides.get("k")!.title).toBe("");
   });
 
+  it("seeds the display title from the scan name, then keeps the fuller checked title", () => {
+    const s = Store.load(storage);
+    // Scan writes only the short list name.
+    s.upsert("k", { title_base: "Morning ride" });
+    expect(s.rides.get("k")!.title_base).toBe("Morning ride");
+    expect(s.rides.get("k")!.title).toBe("Morning ride"); // seeded so it renders before check
+
+    // Check writes the fuller heading; the short name is preserved separately.
+    s.upsert("k", { title: "Morning ride, Amstelveen" });
+    expect(s.rides.get("k")!.title).toBe("Morning ride, Amstelveen");
+    expect(s.rides.get("k")!.title_base).toBe("Morning ride");
+
+    // A later scan must not clobber the fuller checked title.
+    s.upsert("k", { title_base: "Morning ride" });
+    expect(s.rides.get("k")!.title).toBe("Morning ride, Amstelveen");
+  });
+
+  it("scrubs known bad title_base on load", () => {
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ updated_at: "x", rides: { k: { key: "k", title_base: "Journeys" } } }),
+    );
+    expect(Store.load(storage).rides.get("k")!.title_base).toBe("");
+  });
+
   it("export shape matches the Python rides.json (updated_at + rides map)", () => {
     const s = Store.load(storage);
     s.upsert("Sat Jun 13 2026 at 14:22", { title: "Afternoon ride", strava_status: "uploaded" });
