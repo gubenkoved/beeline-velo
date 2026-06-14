@@ -17,6 +17,25 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Date-range filter for the Map and Stats views
+- **What:** added a dual-handle date slider to both the all-rides **Map** view (filters the
+  drawn tracks + the side-panel list, with an "N hidden by the date filter" note) and the
+  **Stats** view (filters the whole view — lifetime totals, records *and* the route-frequency
+  heatmap). New pure, unit-tested helpers in [src/mapview.ts](src/mapview.ts) — `dateRange()`
+  (day-snapped span of all dated rides) and `filterRidesByRange()` (inclusive window; rides
+  with an unparseable date are never hidden). The UI layer ([src/main.ts](src/main.ts)) holds
+  the slider as a session-only day-INDEX control: each view has its own independent range, the
+  end handle covers its whole day (`ridesInRange` expands `to` to end-of-day), and day math
+  goes through the calendar so it stays DST-safe. Filtering happens before `ridesWithTracks`
+  so the existing track-signature redraw and pin-pruning fire for free; live drags skip the
+  map re-fit (only `Reset`/view-switch re-frame). Slider floats top-centre over the map to
+  clear the bottom-centre job pill.
+- **Why:** with many rides the Map and heatmap turn into an unreadable tangle. A time window
+  is the natural way to "narrow down" — and the same mechanics belong on the heatmap, so both
+  share one tested filter. Kept it in the UI layer (controller stays unfiltered, like the
+  Stats/Explore controls) and session-only to stay simple; undated rides are preserved so the
+  slider can never silently drop data.
+
 ## Draw the "Up next" disclosure arrow with CSS instead of a font glyph
 - **What:** Replaced the `.job-toggle::before` content from the Unicode `▸` (`\25B8`,
   "small right-pointing triangle") glyph with a CSS border-drawn triangle (0×0 box +

@@ -13,6 +13,7 @@
  */
 
 import type { RideView } from "./controller";
+import { rideDatetime } from "./parsing";
 import { decodePolyline, type LatLon } from "./track";
 
 /** A ride reduced to just what the map needs: an id, a label and its route. */
@@ -71,6 +72,53 @@ export function ridesWithTracks(rides: RideView[]): TrackSelection {
     tracks.push({ key: r.key, title: r.title || "Ride", points });
   }
   return { tracks, missing };
+}
+
+/** An inclusive timestamp span (ms since epoch) covering a set of rides. */
+export interface DateRange {
+  minMs: number;
+  maxMs: number;
+}
+
+/**
+ * Day-snapped timestamp span covering every dated, non-deleted ride: `minMs` is
+ * the start (00:00 local) of the earliest ride's day and `maxMs` the end
+ * (23:59:59.999 local) of the latest, so the whole boundary days are included.
+ * Returns null when no ride has a parseable date — there's nothing to range over.
+ */
+export function dateRange(rides: RideView[]): DateRange | null {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const r of rides) {
+    if (r.deleted) continue;
+    const dt = rideDatetime(r.key);
+    if (!dt) continue;
+    const t = dt.getTime();
+    if (t < min) min = t;
+    if (t > max) max = t;
+  }
+  if (min === Infinity) return null;
+  const lo = new Date(min);
+  lo.setHours(0, 0, 0, 0);
+  const hi = new Date(max);
+  hi.setHours(23, 59, 59, 999);
+  return { minMs: lo.getTime(), maxMs: hi.getTime() };
+}
+
+/**
+ * Keep only rides whose date falls within `[fromMs, toMs]` (inclusive). Rides
+ * whose key has no parseable date are ALWAYS kept: they can't be placed on the
+ * timeline, and hiding them would silently drop data the user can't get back via
+ * the slider. Deleted rides pass through untouched (downstream `ridesWithTracks`
+ * is what drops them), so callers can reuse this for both the map and side panel.
+ */
+export function filterRidesByRange(rides: RideView[], fromMs: number, toMs: number): RideView[] {
+  return rides.filter((r) => {
+    const dt = rideDatetime(r.key);
+    if (!dt) return true;
+    const t = dt.getTime();
+    return t >= fromMs && t <= toMs;
+  });
 }
 
 /** Shortest distance from point `p` to the segment `a`–`b`, in pixels. */

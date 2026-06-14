@@ -404,6 +404,52 @@ details.help kbd { background: var(--line); border-radius: 4px; padding: 1px 5px
   backdrop-filter: blur(6px); box-shadow: 0 2px 10px rgba(0,0,0,.35); }
 .map-expand:hover { background: #222732; border-color: #333b48; }
 
+/* -- date range filter (shared by Map + Stats views) ---------------------- */
+.range-filter { display: flex; align-items: center; gap: 12px; }
+.range-filter.hidden { display: none; }
+.range-filter .rf-edge { font-family: var(--mono); font-size: 11.5px; color: var(--text);
+  white-space: nowrap; flex: 0 0 auto; min-width: 82px; }
+.range-filter .rf-edge:last-of-type { text-align: right; }
+.range-filter .rf-reset { flex: 0 0 auto; background: transparent; border: 1px solid var(--line);
+  color: var(--muted); border-radius: 7px; padding: 4px 9px; font-size: 11.5px; font-weight: 600;
+  cursor: pointer; }
+.range-filter .rf-reset:hover { color: var(--text); border-color: #333b48; background: var(--panel2); }
+/* Two range inputs stacked so their thumbs ride a single shared track. The inputs
+   ignore pointer events; only the thumbs catch them, so either handle is grabbable. */
+.rf-track { position: relative; flex: 1 1 auto; height: 18px; --rf-thumb: 15px; }
+/* Baseline + accent fill are inset by half a thumb at each end so they line up
+   exactly with the thumb centres (which the browser insets from the edges). */
+.rf-track::before { content: ""; position: absolute; top: 50%;
+  left: calc(var(--rf-thumb) / 2); right: calc(var(--rf-thumb) / 2);
+  height: 4px; transform: translateY(-50%); border-radius: 3px; background: #2a313c; }
+/* Accent fill of the currently selected span; fractions (0–1) come from JS. */
+.rf-track::after { content: ""; position: absolute; top: 50%; height: 4px;
+  transform: translateY(-50%); border-radius: 3px; background: var(--accent);
+  left: calc(var(--rf-thumb) / 2 + var(--rf-lo, 0) * (100% - var(--rf-thumb)));
+  right: calc(var(--rf-thumb) / 2 + (1 - var(--rf-hi, 1)) * (100% - var(--rf-thumb))); }
+.rf-track.rf-empty::after { display: none; }
+.rf-track input[type="range"] { position: absolute; left: 0; top: 0; width: 100%; height: 18px;
+  margin: 0; background: none; pointer-events: none; -webkit-appearance: none; appearance: none; }
+.rf-track input[type="range"]:focus { outline: none; }
+.rf-track input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+  pointer-events: auto; height: 15px; width: 15px; border-radius: 50%; background: var(--accent);
+  border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5); cursor: grab; margin-top: -1px; }
+.rf-track input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
+.rf-track input[type="range"]::-moz-range-thumb { pointer-events: auto; height: 15px; width: 15px;
+  border-radius: 50%; background: var(--accent); border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.5); cursor: grab; }
+.rf-track input[type="range"]:disabled::-webkit-slider-thumb { background: var(--muted); cursor: default; }
+.rf-track input[type="range"]:disabled::-moz-range-thumb { background: var(--muted); cursor: default; }
+/* Floating variant over the map; non-floating card in the Stats view. Anchored
+   low and left so it clears the top controls (zoom / Expand), the bottom-right
+   Leaflet attribution and the bottom-centre job pill. */
+.map-filter { position: absolute; left: 10px; right: 10px; bottom: 10px;
+  z-index: 500; padding: 8px 16px;
+  background: rgba(20,23,29,.92); border: 1px solid var(--line); border-radius: 10px;
+  backdrop-filter: blur(6px); box-shadow: 0 2px 12px rgba(0,0,0,.4); }
+.stats-filter { margin: 0 0 18px; padding: 10px 16px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+
 /* Full-screen mode: the map-wrap fills the viewport above everything else. */
 body.map-expanded .map-wrap { position: fixed; inset: 0; z-index: 60; height: 100vh;
   padding: 12px; gap: 12px; background: var(--bg); grid-template-columns: 1fr 320px; }
@@ -413,6 +459,7 @@ body.map-expanded { overflow: hidden; }
   background: var(--panel); padding: 12px 13px; overflow-y: auto; }
 .map-side h2 { margin: 0 0 4px; font-size: 13px; font-weight: 650; }
 .map-side .ms-sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; line-height: 1.5; }
+.map-side .ms-hidden { color: var(--accent); font-size: 11.5px; margin: -6px 0 10px; }
 .map-side .ms-empty { color: var(--muted); font-size: 12.5px; line-height: 1.6; padding: 8px 2px; }
 .ms-list { display: flex; flex-direction: column; gap: 2px; }
 .ms-item { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px;

@@ -4,6 +4,8 @@ import type { RideView } from "../src/controller";
 import {
   distToSegmentPx,
   distToTrackPx,
+  dateRange,
+  filterRidesByRange,
   nearestRides,
   ridesWithTracks,
   type PixelPoint,
@@ -136,5 +138,73 @@ describe("nearestRides", () => {
 
   it("returns nothing when the cursor misses every track", () => {
     expect(nearestRides(projected, { x: 5, y: 50 }, 6)).toEqual([]);
+  });
+});
+
+describe("dateRange", () => {
+  it("snaps to the start of the earliest day and end of the latest", () => {
+    const rides = [
+      ride({ key: "Sat Jun 13 2026 at 14:22" }),
+      ride({ key: "Mon Jun 1 2026 at 08:05" }),
+      ride({ key: "Wed Jun 3 2026 at 19:40" }),
+    ];
+    const r = dateRange(rides)!;
+    expect(r).not.toBeNull();
+    expect(new Date(r.minMs)).toEqual(new Date(2026, 5, 1, 0, 0, 0, 0));
+    expect(new Date(r.maxMs)).toEqual(new Date(2026, 5, 13, 23, 59, 59, 999));
+  });
+
+  it("ignores deleted rides", () => {
+    const rides = [
+      ride({ key: "Mon Jun 1 2026 at 08:05", deleted: true }),
+      ride({ key: "Sat Jun 13 2026 at 14:22" }),
+    ];
+    const r = dateRange(rides)!;
+    expect(new Date(r.minMs)).toEqual(new Date(2026, 5, 13, 0, 0, 0, 0));
+    expect(new Date(r.maxMs)).toEqual(new Date(2026, 5, 13, 23, 59, 59, 999));
+  });
+
+  it("returns null when no ride has a parseable date", () => {
+    expect(dateRange([ride({ key: "garbage" }), ride({ key: "also bad", deleted: true })])).toBeNull();
+  });
+
+  it("returns null for an empty list", () => {
+    expect(dateRange([])).toBeNull();
+  });
+});
+
+describe("filterRidesByRange", () => {
+  const rides = [
+    ride({ key: "Mon Jun 1 2026 at 08:05" }),
+    ride({ key: "Wed Jun 3 2026 at 19:40" }),
+    ride({ key: "Sat Jun 13 2026 at 14:22" }),
+  ];
+
+  it("keeps only rides within the inclusive window", () => {
+    const from = new Date(2026, 5, 2).getTime();
+    const to = new Date(2026, 5, 10).getTime();
+    expect(filterRidesByRange(rides, from, to).map((r) => r.key)).toEqual(["Wed Jun 3 2026 at 19:40"]);
+  });
+
+  it("treats both boundaries as inclusive", () => {
+    const from = new Date(2026, 5, 1, 8, 5).getTime();
+    const to = new Date(2026, 5, 3, 19, 40).getTime();
+    expect(filterRidesByRange(rides, from, to).map((r) => r.key)).toEqual([
+      "Mon Jun 1 2026 at 08:05",
+      "Wed Jun 3 2026 at 19:40",
+    ]);
+  });
+
+  it("always keeps rides whose key has no parseable date", () => {
+    const withUndated = [...rides, ride({ key: "no date here" })];
+    const from = new Date(2026, 5, 20).getTime();
+    const to = new Date(2026, 5, 30).getTime();
+    // The window excludes every dated ride, but the undated one survives.
+    expect(filterRidesByRange(withUndated, from, to).map((r) => r.key)).toEqual(["no date here"]);
+  });
+
+  it("round-trips a full dateRange span (keeps everything)", () => {
+    const span = dateRange(rides)!;
+    expect(filterRidesByRange(rides, span.minMs, span.maxMs)).toHaveLength(rides.length);
   });
 });

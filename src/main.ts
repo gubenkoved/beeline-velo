@@ -16,7 +16,7 @@ import { DemoAdb } from "./adb/demo";
 import { AdbError, type AdbDevice } from "./adb/types";
 import { WebUsbAdb } from "./adb/webusb";
 import { Controller, type AppState, type RideView } from "./controller";
-import { ridesWithTracks, nearestRides, type PixelPoint, type ProjectedTrack, type RideTrack } from "./mapview";
+import { ridesWithTracks, nearestRides, dateRange, filterRidesByRange, type DateRange, type PixelPoint, type ProjectedTrack, type RideTrack } from "./mapview";
 import { autoGranularity, bucketRide, compareRideKeysDesc, parseDurationSec, rideShortLabel, trimmedSpeed, type Granularity } from "./parsing";
 import { computeStats, type PeriodRecord } from "./stats";
 import { buildHeatPoints } from "./heatmap";
@@ -333,6 +333,202 @@ let lastTrackSig = "";
 const sameKeys = (a: string[], b: string[]): boolean =>
   a.length === b.length && a.every((k, i) => k === b[i]);
 
+// --------------------------------------------------------------------------- //
+// Time-range filter shared by the Map and Stats views. Each view has its own,
+// independent dual-handle date slider (so narrowing the map doesn't move the
+// stats range and vice-versa). The selection is SESSION-ONLY — it resets to the
+// full span on reload — so we just hold it in module state, never persisted.
+//   *Bounds* = the full day-snapped span of all dated rides (slider min/max).
+//   *Range*  = the user's current selection within those bounds.
+// Rides with an unparseable date are never hidden (see filterRidesByRange).
+// --------------------------------------------------------------------------- //
+type RangeView = "map" | "stats";
+const DAY_MS = 86_400_000;
+// Selection is stored as day-start timestamps (local 00:00) for both edges; the
+// slider works in whole-day INDICES (0…N) so stepping is exact and DST-safe, and
+// the "to" edge always covers its whole day when filtering (see ridesInRange).
+let mapRange: DateRange | null = null;
+let mapRangeBounds: DateRange | null = null;
+let statsRange: DateRange | null = null;
+let statsRangeBounds: DateRange | null = null;
+
+const startOfDayMs = (ms: number): number => {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+};
+const endOfDayMs = (ms: number): number => {
+  const d = new Date(ms);
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
+};
+/** Local midnight `n` days after `ms` — uses the calendar, so it's DST-safe. */
+const addDays = (ms: number, n: number): number => {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + n);
+  return d.getTime();
+};
+/** Number of whole days spanned by the bounds (slider max index). */
+const dayCount = (bounds: DateRange): number =>
+  Math.round((startOfDayMs(bounds.maxMs) - startOfDayMs(bounds.minMs)) / DAY_MS);
+/** Whole-day index (0-based) of a timestamp within the bounds. */
+const dayIndex = (bounds: DateRange, ms: number): number =>
+  Math.round((startOfDayMs(ms) - startOfDayMs(bounds.minMs)) / DAY_MS);
+
+/** The full selection (both edges at day-start) covering an entire bounds span. */
+const fullRange = (bounds: DateRange): DateRange => ({ minMs: startOfDayMs(bounds.minMs), maxMs: startOfDayMs(bounds.maxMs) });
+
+/** Keep only rides within a day-granular selection (the end day is fully included). */
+const ridesInRange = (rides: RideView[], sel: DateRange): RideView[] =>
+  filterRidesByRange(rides, sel.minMs, endOfDayMs(sel.maxMs));
+
+/**
+ * Reconcile a remembered selection with a freshly computed full span. First time
+ * (no prior selection) the slider spans everything. Afterwards, a handle that sat
+ * exactly on an old extreme is kept pinned to the new extreme (so newly-scanned
+ * rides extend the visible window instead of being filtered out); any other handle
+ * is just clamped into the new bounds. Edges are kept on day-start boundaries.
+ */
+function reconcileRange(sel: DateRange | null, oldBounds: DateRange | null, bounds: DateRange): DateRange {
+  const lo = startOfDayMs(bounds.minMs);
+  const hi = startOfDayMs(bounds.maxMs);
+  if (!sel || !oldBounds) return { minMs: lo, maxMs: hi };
+  const oldHi = startOfDayMs(oldBounds.maxMs);
+  let from = sel.minMs <= startOfDayMs(oldBounds.minMs) ? lo : startOfDayMs(sel.minMs);
+  let to = sel.maxMs >= oldHi ? hi : startOfDayMs(sel.maxMs);
+  from = Math.min(Math.max(from, lo), hi);
+  to = Math.min(Math.max(to, lo), hi);
+  if (from > to) return { minMs: lo, maxMs: hi };
+  return { minMs: from, maxMs: to };
+}
+
+/** Recompute a view's bounds from the current rides and reconcile its selection. */
+function refreshRange(which: RangeView): void {
+  const bounds = dateRange(STATE.rides);
+  if (which === "map") {
+    mapRange = bounds ? reconcileRange(mapRange, mapRangeBounds, bounds) : null;
+    mapRangeBounds = bounds;
+  } else {
+    statsRange = bounds ? reconcileRange(statsRange, statsRangeBounds, bounds) : null;
+    statsRangeBounds = bounds;
+  }
+}
+
+const rangeOf = (which: RangeView): DateRange | null => (which === "map" ? mapRange : statsRange);
+const boundsOf = (which: RangeView): DateRange | null => (which === "map" ? mapRangeBounds : statsRangeBounds);
+
+/** Compact local day label for a slider edge, e.g. "Jun 1, 2026". */
+function fmtDay(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+/** Markup for one view's dual-range date slider (two overlaid day-index inputs). */
+function rangeControlHtml(which: RangeView, bounds: DateRange, sel: DateRange): string {
+  const n = dayCount(bounds);
+  const dis = n <= 0 ? " disabled" : ""; // single day → nothing to slide
+  const input = (edge: "lo" | "hi", idx: number): string =>
+    `<input type="range" class="rf-${edge}" id="${which}${edge === "lo" ? "Lo" : "Hi"}" ` +
+    `data-range="${which}" data-edge="${edge}" min="0" max="${n}" step="1" value="${idx}"${dis} ` +
+    `aria-label="${edge === "lo" ? "Earliest" : "Latest"} date">`;
+  return (
+    `<span class="rf-edge" id="${which}From"></span>` +
+    `<div class="rf-track">${input("lo", dayIndex(bounds, sel.minMs))}${input("hi", dayIndex(bounds, sel.maxMs))}</div>` +
+    `<span class="rf-edge" id="${which}To"></span>` +
+    `<button class="rf-reset" data-rangereset="${which}" title="Show every date">All</button>`
+  );
+}
+
+/** Refresh the edge date labels and the accent range-fill for a view. */
+function updateRangeLabels(which: RangeView): void {
+  const sel = rangeOf(which);
+  const bounds = boundsOf(which);
+  if (!sel) return;
+  const from = document.getElementById(`${which}From`);
+  const to = document.getElementById(`${which}To`);
+  if (from) from.textContent = fmtDay(sel.minMs);
+  if (to) to.textContent = fmtDay(sel.maxMs);
+  // Paint the selected span: percentages of the day axis drive the track ::after.
+  const host = document.getElementById(which === "map" ? "mapFilter" : "statsFilter");
+  const track = host?.querySelector<HTMLElement>(".rf-track");
+  if (track && bounds) {
+    const n = dayCount(bounds);
+    const lo = n > 0 ? dayIndex(bounds, sel.minMs) / n : 0;
+    const hi = n > 0 ? dayIndex(bounds, sel.maxMs) / n : 1;
+    track.style.setProperty("--rf-lo", String(lo));
+    track.style.setProperty("--rf-hi", String(hi));
+    track.classList.toggle("rf-empty", n <= 0); // single day → nothing to fill
+  }
+}
+
+/**
+ * Reflect a view's range state in its slider control. The slider DOM is only
+ * rebuilt when the underlying span changes (tracked via `data-bounds`), never
+ * mid-drag — so dragging a handle just updates values + labels in place.
+ */
+function syncRangeControl(which: RangeView): void {
+  const host = document.getElementById(which === "map" ? "mapFilter" : "statsFilter");
+  if (!host) return;
+  const bounds = boundsOf(which);
+  const sel = rangeOf(which);
+  if (!bounds || !sel) {
+    host.classList.add("hidden");
+    host.innerHTML = "";
+    host.dataset.bounds = "";
+    return;
+  }
+  host.classList.remove("hidden");
+  const boundsKey = `${bounds.minMs}-${bounds.maxMs}`;
+  if (host.dataset.bounds !== boundsKey) {
+    host.dataset.bounds = boundsKey;
+    host.innerHTML = rangeControlHtml(which, bounds, sel);
+  } else {
+    const lo = document.getElementById(`${which}Lo`) as HTMLInputElement | null;
+    const hi = document.getElementById(`${which}Hi`) as HTMLInputElement | null;
+    if (lo) lo.value = String(dayIndex(bounds, sel.minMs));
+    if (hi) hi.value = String(dayIndex(bounds, sel.maxMs));
+  }
+  updateRangeLabels(which);
+}
+
+/** Live drag of either handle: clamp so from ≤ to, store, relabel, redraw (no refit). */
+function onRangeInput(which: RangeView, el: HTMLInputElement): void {
+  const bounds = boundsOf(which);
+  if (!bounds) return;
+  const lo = document.getElementById(`${which}Lo`) as HTMLInputElement | null;
+  const hi = document.getElementById(`${which}Hi`) as HTMLInputElement | null;
+  if (!lo || !hi) return;
+  let loIdx = Number(lo.value);
+  let hiIdx = Number(hi.value);
+  if (el.dataset.edge === "lo" && loIdx > hiIdx) {
+    loIdx = hiIdx;
+    lo.value = String(loIdx);
+  } else if (el.dataset.edge === "hi" && hiIdx < loIdx) {
+    hiIdx = loIdx;
+    hi.value = String(hiIdx);
+  }
+  const next: DateRange = { minMs: addDays(bounds.minMs, loIdx), maxMs: addDays(bounds.minMs, hiIdx) };
+  if (which === "map") mapRange = next;
+  else statsRange = next;
+  updateRangeLabels(which);
+  if (which === "map") mountAllRidesMap({ fit: false });
+  else mountStatsView({ fit: false });
+}
+
+/** Reset a view's selection back to its full span and re-frame the map. */
+function resetRange(which: RangeView): void {
+  const bounds = boundsOf(which);
+  if (!bounds) return;
+  if (which === "map") {
+    mapRange = fullRange(bounds);
+    mountAllRidesMap({ fit: true });
+  } else {
+    statsRange = fullRange(bounds);
+    mountStatsView({ fit: true });
+  }
+}
+
+
 /** Recompute each track's pixel polyline for the current map view (for hit-testing). */
 function reprojectTracks(): void {
   if (!allRidesMap) return;
@@ -441,8 +637,11 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
   const side = document.getElementById("mapSide");
   if (!side) return;
   const haveKeys = new Set(tracks.map((t) => t.key));
-  const rides = STATE.rides.filter((r) => !r.deleted).slice().sort((a, b) => compareRideKeysDesc(a.key, b.key));
-  if (rides.length === 0) {
+  const live = STATE.rides.filter((r) => !r.deleted);
+  const inRange = mapRange ? ridesInRange(live, mapRange) : live;
+  const hidden = live.length - inRange.length;
+  const rides = inRange.slice().sort((a, b) => compareRideKeysDesc(a.key, b.key));
+  if (live.length === 0) {
     side.innerHTML =
       `<div class="ms-empty">No rides yet. Press <b>Scan</b> in the Explore tab to read your phone, ` +
       `then <b>GPX</b> on a ride to download its route and see it here.</div>`;
@@ -467,10 +666,11 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
   const sub = missing
     ? `${tracks.length} on map · ${missing} without a route — press <b>GPX</b> to add them`
     : `${tracks.length} on map`;
+  const hiddenNote = hidden ? `<div class="ms-hidden">${hidden} hidden by the date filter</div>` : "";
   side.innerHTML =
     `<div class="ms-head"><h2>All rides</h2><span class="ms-count" id="msCount"></span></div>` +
     renderMatched() +
-    `<div class="ms-sub">${sub}</div><div class="ms-list">${items}</div>`;
+    `<div class="ms-sub">${sub}</div>${hiddenNote}<div class="ms-list">${items}</div>`;
 }
 
 /**
@@ -509,10 +709,12 @@ function renderMatched(): string {
 
 
 /** (Re)draw the all-rides map for the current state; lazily creates the map. */
-function mountAllRidesMap(): void {
+function mountAllRidesMap(opts: { fit?: boolean } = {}): void {
   const host = document.getElementById("allRidesMap");
   if (!host) return;
-  const { tracks, missing } = ridesWithTracks(STATE.rides);
+  refreshRange("map");
+  const visible = mapRange ? ridesInRange(STATE.rides, mapRange) : STATE.rides;
+  const { tracks, missing } = ridesWithTracks(visible);
   currentTracks = tracks;
   currentMissing = missing;
 
@@ -545,9 +747,10 @@ function mountAllRidesMap(): void {
     }
     // Drop any pinned rides whose track is no longer drawn (e.g. deleted/re-scanned).
     pinnedKeys = pinnedKeys.filter((k) => trackLines.has(k));
-    if (all.length) allRidesMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
+    if (all.length && opts.fit !== false) allRidesMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
   }
   renderMapSide(tracks, missing);
+  syncRangeControl("map");
   paintEmphasis();
   // The container is only correctly sized once its view becomes visible.
   setTimeout(() => {
@@ -635,13 +838,20 @@ function periodCard(rec: PeriodRecord | null, label: string): string {
 }
 
 /** Render the Stats view: totals, records and the route-frequency heatmap. */
-function mountStatsView(): void {
+function mountStatsView(opts: { fit?: boolean } = {}): void {
   const live = STATE.rides.filter((r) => !r.deleted);
   document.getElementById("statsEmpty")?.classList.toggle("hidden", live.length > 0);
   document.getElementById("statsBody")?.classList.toggle("hidden", live.length === 0);
-  if (live.length === 0) return;
+  if (live.length === 0) {
+    syncRangeControl("stats");
+    return;
+  }
 
-  const s = computeStats(STATE.rides);
+  refreshRange("stats");
+  const visible = statsRange ? ridesInRange(STATE.rides, statsRange) : STATE.rides;
+  const hidden = live.length - visible.filter((r) => !r.deleted).length;
+
+  const s = computeStats(visible);
   const totals = document.getElementById("statsTotals");
   if (totals) {
     totals.innerHTML = [
@@ -663,20 +873,22 @@ function mountStatsView(): void {
       periodCard(s.bestMonth, "best month"),
     ].join("");
   }
-  mountFreqHeatmap();
+  syncRangeControl("stats");
+  mountFreqHeatmap(visible, hidden, opts.fit !== false);
 }
 
-/** (Re)draw the route-frequency heatmap for the current tracks; lazily creates the map. */
-function mountFreqHeatmap(): void {
+/** (Re)draw the route-frequency heatmap for the given rides; lazily creates the map. */
+function mountFreqHeatmap(rides: RideView[], hidden: number, fit: boolean): void {
   const host = document.getElementById("freqHeatMap");
   if (!host) return;
-  const { tracks, missing } = ridesWithTracks(STATE.rides);
+  const { tracks, missing } = ridesWithTracks(rides);
   const note = document.getElementById("statsHeatNote");
   if (note) {
-    note.textContent = tracks.length
+    const base = tracks.length
       ? ` ${tracks.length} route${tracks.length === 1 ? "" : "s"}` +
         (missing ? ` · ${missing} without a downloaded route` : "")
       : " no downloaded routes yet — press GPX on a ride in Explore";
+    note.textContent = base + (hidden ? ` · ${hidden} hidden by the date filter` : "");
   }
 
   if (!freqHeatMap) {
@@ -705,7 +917,7 @@ function mountFreqHeatmap(): void {
         gradient: { 0.0: "#1e3a8a", 0.4: "#22d3ee", 0.7: "#facc15", 1.0: "#f97316" },
       }).addTo(freqHeatMap);
       const all = tracks.flatMap((t) => t.points) as L.LatLngExpression[];
-      if (all.length) freqHeatMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
+      if (all.length && fit) freqHeatMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
     }
   }
   // The container is only correctly sized once its view becomes visible.
@@ -1452,6 +1664,10 @@ document.addEventListener("click", (e) => {
     setMapExpanded(!document.body.classList.contains("map-expanded"));
     return;
   }
+  if (t.dataset && t.dataset.rangereset) {
+    resetRange(t.dataset.rangereset as RangeView);
+    return;
+  }
   if (t.dataset && t.dataset.preset) {
     preset = t.dataset.preset;
     ($("#days") as HTMLInputElement).value = "";
@@ -1659,6 +1875,10 @@ document.addEventListener("change", (e) => {
 // Live outlier-trim sliders: update labels and recompute the speed view as they move.
 document.addEventListener("input", (e) => {
   const el = e.target as HTMLInputElement;
+  if (el.dataset.range === "map" || el.dataset.range === "stats") {
+    onRangeInput(el.dataset.range as RangeView, el);
+    return;
+  }
   if (el.id !== "trimSlow" && el.id !== "trimFast") return;
   const slow = parseInt($<HTMLInputElement>("#trimSlow").value, 10) || 0;
   const fast = parseInt($<HTMLInputElement>("#trimFast").value, 10) || 0;
