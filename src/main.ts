@@ -1194,6 +1194,16 @@ function mountFreqHeatmap(rides: RideView[], hidden: number, fit: boolean): void
 // --------------------------------------------------------------------------- //
 // Small render helpers (ported verbatim)
 // --------------------------------------------------------------------------- //
+
+/**
+ * Inline SVG for the "⋯" overflow (kebab) toggle — three stacked dots drawn as
+ * filled circles so it renders crisply at any DPI, unlike the Unicode glyph.
+ * `currentColor` lets it inherit the button's muted text colour.
+ */
+const KEBAB_ICON =
+  '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+  '<circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>';
+
 function badge(s: string): string {
   const label =
     (
@@ -1659,7 +1669,7 @@ function render(): void {
     `${shown} · ${up} uploaded · ${pe} upload pending` +
     (del ? ` · ${del} deleted` : "") +
     (nSel
-      ? ` · <button class="selchip" id="selClear" title="Clear selection">${nSel} selected ✕</button>`
+      ? ` · <button class="selchip" id="selClear" title="Clear selection">${nSel} selected <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`
       : "");
 
   // Batch actions apply to the current selection — disable + count-label them so
@@ -1713,13 +1723,13 @@ function render(): void {
     ybox.className = "year";
     ybox.innerHTML = `
       <div class="yhead" data-y="${year}">
-        <span class="caret">${yOpen ? "▾" : "▸"}</span>
+        <span class="caret${yOpen ? " open" : ""}" aria-hidden="true"></span>
         <input type="checkbox" class="selall" data-selyear="${year}" ${ySel === true ? "checked" : ""}>
         <span class="ytitle">${year}</span>
         ${bars(yup, ype, yRides.length)}
         <span class="ymeta">${yRides.length} rides · ${fmtKm(ykm)} · ${yup} up · ${ype} upload pending</span>
         <span class="yactions${openMenu === `ovr-y:${year}` ? " open" : ""}">
-          <button class="small ghost ovr" data-splitmenu="ovr-y:${year}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-y:${year}`}" title="Actions for ${year}">⋯</button>
+          <button class="small ghost ovr" data-splitmenu="ovr-y:${year}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-y:${year}`}" title="Actions for ${year}">${KEBAB_ICON}</button>
           <span class="ovr-items">
             ${checkSplit(`check-y:${year}`, "status-year-new", "status-year", ` data-y="${year}"`)}
             <button class="small ghost" data-act="gpx-year-missing" data-y="${year}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>
@@ -1745,13 +1755,13 @@ function render(): void {
       box.className = "month";
       box.innerHTML = `
         <div class="mhead" data-m="${mkey}">
-          <span class="caret">${isOpen ? "▾" : "▸"}</span>
+          <span class="caret${isOpen ? " open" : ""}" aria-hidden="true"></span>
           <input type="checkbox" class="selall" data-selmonth="${mkey}" ${mSel === true ? "checked" : ""}>
           <span class="mtitle">${m.label}</span>
           ${bars(mup, mpe, m.rides.length)}
           <span class="mmeta">${m.rides.length} rides · ${fmtKm(mkm)} · ${mup} up · ${mpe} upload pending</span>
           <span class="mactions${openMenu === `ovr-m:${mkey}` ? " open" : ""}">
-            <button class="small ghost ovr" data-splitmenu="ovr-m:${mkey}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-m:${mkey}`}" title="Actions for ${m.label}">⋯</button>
+            <button class="small ghost ovr" data-splitmenu="ovr-m:${mkey}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-m:${mkey}`}" title="Actions for ${m.label}">${KEBAB_ICON}</button>
             <span class="ovr-items">
               ${checkSplit(`check-m:${mkey}`, "status-month-new", "status-month", ` data-m="${mkey}"`)}
               <button class="small ghost" data-act="gpx-month-missing" data-m="${mkey}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>
@@ -1785,7 +1795,7 @@ function render(): void {
             ${so ? detailsBlock(r) : ""}
           </div>
           <div class="rbtns${openMenu === `ovr-r:${r.key}` ? " open" : ""}">
-            <button class="small ghost ovr" data-splitmenu="ovr-r:${r.key}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-r:${r.key}`}" title="Ride actions">⋯</button>
+            <button class="small ghost ovr" data-splitmenu="ovr-r:${r.key}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-r:${r.key}`}" title="Ride actions">${KEBAB_ICON}</button>
             <span class="ovr-items">
               <button class="small ghost" data-act="status-one" data-key="${r.key}">Check</button>
               ${gpxSplit(r.key, r.key)}

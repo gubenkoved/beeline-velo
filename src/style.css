@@ -119,6 +119,14 @@ header {
   cursor: pointer;
   white-space: nowrap;
   vertical-align: baseline;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.selchip svg {
+  width: 11px;
+  height: 11px;
+  display: block;
 }
 .selchip:hover {
   background: rgba(252, 82, 0, 0.22);
@@ -155,6 +163,18 @@ button.primary {
 button.primary:hover:not(:disabled) {
   filter: brightness(1.08);
   background: var(--accent);
+}
+/* Scan pairs a refresh icon with its label; lay them out as one inline-flex
+   row (icon then text) and size the inline SVG to match the text. */
+#btnScan {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+#btnScan svg {
+  width: 15px;
+  height: 15px;
+  display: block;
 }
 button.ghost {
   background: transparent;
@@ -885,10 +905,32 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
 .mhead:hover {
   background: #161a21;
 }
-.caret {
-  color: var(--muted);
-  font-size: 11px;
+/* Year/month disclosure chevron. Drawn from two borders (like the .split caret)
+   rather than a "▾"/"▸" font glyph, which renders off-baseline/blurry across
+   fonts. Points right when collapsed; `.open` rotates it to point down.
+   Scoped to `span.caret` so it never touches the `.split > button.caret`
+   dropdown trigger (which draws its own chevron and owns its own sizing). */
+span.caret {
   width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  position: relative;
+  color: var(--muted);
+}
+span.caret::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translate(-1px, -1px) rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+span.caret.open::before {
+  transform: translate(0, -2px) rotate(45deg);
 }
 /* Reserve a fixed-width column for the month name. Labels vary in length
    ("May 2026" vs "September 2026"), so without this the bar + meta shift
@@ -1244,6 +1286,15 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
    exactly as before. The @media (max-width: 768px) block re-activates them. */
 .ovr {
   display: none;
+  align-items: center;
+  justify-content: center;
+}
+/* The overflow toggle is icon-only — center its inline kebab SVG and size it to
+   match the surrounding small buttons. */
+.ovr svg {
+  width: 18px;
+  height: 18px;
+  display: block;
 }
 .ovr-items {
   display: contents;

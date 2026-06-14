@@ -17,6 +17,22 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Replace Unicode glyph button icons with inline SVG / CSS chevrons
+- **What:** Swept the remaining raw Unicode glyphs off real buttons. The Scan button's
+  `⟳` ([index.html](index.html)) and the mobile overflow `⋯` toggles plus the
+  "N selected ✕" clear chip ([src/main.ts](src/main.ts)) now render crisp inline SVGs
+  (refresh, kebab, X) styled `stroke: currentColor` like the existing job-bar/map icons;
+  the year/month disclosure carets stopped swapping `▾`/`▸` text and instead draw the
+  house-style two-border chevron via CSS, rotated by an `.open` state class. The new
+  disclosure rule is scoped to `span.caret` so it can't collide with the
+  `.split > button.caret` dropdown trigger (an unscoped `height` first shrank that button
+  to a detached floating chevron). Filter-chip `✓`/`✕` were left as text (they read as
+  state words inside the label, not standalone icons).
+- **Why:** Font glyphs render off-baseline/blurry and inconsistently across fonts and DPI —
+  exactly the "ugly icon" the Scan button showed — so every pictographic button now uses a
+  pixel-snapped SVG (or the established CSS chevron) that inherits color and scales cleanly,
+  matching the one unified icon language already used elsewhere.
+
 ## Persist Explore filters across reloads
 - **What:** The Explore-list filter set (`const filters` in [src/main.ts](src/main.ts)) now
   round-trips through `localStorage` under a new `FILTERS_KEY`, just like the chosen
