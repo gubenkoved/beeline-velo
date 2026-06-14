@@ -3,25 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { DemoAdb } from "../src/adb/demo";
 import type { AdbDevice } from "../src/adb/types";
 import { Controller } from "../src/controller";
+import { memoryBackend } from "../src/kv";
 import { Store } from "../src/store";
-
-function memStorage(): Storage {
-  const map = new Map<string, string>();
-  return {
-    get length() {
-      return map.size;
-    },
-    clear: () => map.clear(),
-    getItem: (k: string) => (map.has(k) ? map.get(k)! : null),
-    key: (i: number) => [...map.keys()][i] ?? null,
-    removeItem: (k: string) => void map.delete(k),
-    setItem: (k: string, v: string) => void map.set(k, String(v)),
-  } as Storage;
-}
 
 function makeController(device: AdbDevice): Controller {
   // near-instant sleep so polling/scroll waits don't slow the suite
-  return new Controller(async () => device, new Store(memStorage()), async () => {});
+  return new Controller(async () => device, new Store(memoryBackend()), async () => {});
 }
 
 describe("Controller + DemoAdb (real orchestration, no phone)", () => {
@@ -53,7 +40,7 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
 
   it("backfills the summary distance/duration from detail stats on Check", async () => {
     const device = new DemoAdb();
-    const store = new Store(memStorage());
+    const store = new Store(memoryBackend());
     const c = new Controller(async () => device, store, async () => {});
     await c.connect();
 
@@ -76,7 +63,7 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
 
   it("captures the ride detail while downloading GPX for a never-opened ride", async () => {
     const device = new DemoAdb();
-    const store = new Store(memStorage());
+    const store = new Store(memoryBackend());
     const c = new Controller(async () => device, store, async () => {});
     await c.connect();
 

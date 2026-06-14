@@ -68,10 +68,10 @@ export class Controller {
 
   constructor(
     private readonly transport: Transport,
-    store?: Store,
+    store: Store,
     private readonly sleep: Sleep = realSleep,
   ) {
-    this.store = store ?? Store.load();
+    this.store = store;
     this.jobs = new JobQueue((task, report) => this.runTask(task, report), () => this.notify());
   }
 
@@ -418,6 +418,11 @@ export class Controller {
   }
 
   // -- import / export ---------------------------------------------------
+
+  /** Force any pending debounced cache write out now (e.g. before the page unloads). */
+  flush(): Promise<void> {
+    return this.store.flush();
+  }
 
   exportJson(): string {
     return this.store.exportJson();

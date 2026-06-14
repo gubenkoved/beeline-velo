@@ -21,7 +21,8 @@ import { autoGranularity, bucketRide, compareRideKeysDesc, parseDurationSec, rid
 import { computeStats, type PeriodRecord } from "./stats";
 import { buildHeatPoints } from "./heatmap";
 import "leaflet.heat";
-import { LEGACY_STORAGE_KEY, STORAGE_KEY, Store } from "./store";
+import { idbBackend, memoryBackend } from "./kv";
+import { Store } from "./store";
 import { decodePolyline } from "./track";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string): T =>
@@ -30,19 +31,11 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string): T =>
 // --------------------------------------------------------------------------- //
 // Controller wiring (demo by default; "Connect phone" switches to WebUSB)
 // --------------------------------------------------------------------------- //
-function memoryStorage(): Storage {
-  const map = new Map<string, string>();
-  return {
-    get length() {
-      return map.size;
-    },
-    clear: () => map.clear(),
-    getItem: (k: string) => (map.has(k) ? map.get(k)! : null),
-    key: (i: number) => [...map.keys()][i] ?? null,
-    removeItem: (k: string) => void map.delete(k),
-    setItem: (k: string, v: string) => void map.set(k, String(v)),
-  } as Storage;
-}
+
+/** Durable ride-cache storage. One IndexedDB connection shared by every controller. */
+const storageBackend = idbBackend();
+/** Surface a background-write failure (e.g. quota exceeded) to the user. */
+const onStorageError = (message: string): void => toast(message, true);
 
 let controller!: Controller;
 // Starts false so the first paint matches the offline boot; activate() sets the
@@ -97,7 +90,7 @@ function activate(next: Controller, demo: boolean): void {
 }
 
 async function goDemo(): Promise<void> {
-  const c = new Controller(async () => new DemoAdb({ latencyMs: 110 }), new Store(memoryStorage()));
+  const c = new Controller(async () => new DemoAdb({ latencyMs: 110 }), new Store(memoryBackend()));
   activate(c, true);
   try {
     await c.connect();
@@ -117,7 +110,7 @@ async function goOffline(): Promise<void> {
   const transport = async (): Promise<AdbDevice> => {
     throw new AdbError("No device connected — click Connect phone first.");
   };
-  const c = new Controller(transport, Store.load());
+  const c = new Controller(transport, await Store.load(storageBackend, onStorageError));
   activate(c, false);
 }
 
@@ -128,7 +121,7 @@ async function goReal(): Promise<void> {
     serial = device.deviceSerial;
     return device;
   };
-  const c = new Controller(transport, Store.load());
+  const c = new Controller(transport, await Store.load(storageBackend, onStorageError));
   activate(c, false);
   try {
     await c.connect();
@@ -152,7 +145,7 @@ async function tryAutoReconnect(): Promise<void> {
     serial = reconnected.deviceSerial;
     return reconnected;
   };
-  const c = new Controller(transport, Store.load());
+  const c = new Controller(transport, await Store.load(storageBackend, onStorageError));
   activate(c, false);
   try {
     await c.connect();
@@ -1425,15 +1418,9 @@ async function resetEverything(): Promise<void> {
   if (!confirm("Erase all locally stored rides, settings, and the remembered phone? This cannot be undone and returns the app to offline mode. Nothing on your phone is deleted.")) {
     return;
   }
-  controller.reset(); // clear the active controller's cache + job queue
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
-  } catch {
-    /* private mode / storage disabled — non-fatal */
-  }
+  controller.reset(); // clear the active controller's cache (IndexedDB) + job queue
   forgetReal(); // stop auto-reconnecting to the phone on future loads
-  await goOffline(); // rebuild a fresh controller over the now-empty LocalStorage
+  await goOffline(); // rebuild a fresh controller over the now-empty cache
   toast("Local data cleared.");
 }
 
@@ -1741,6 +1728,18 @@ showVersion();
 
 // Reflect the remembered view before the first render so the right tab is shown.
 applyView();
+
+// Ask the browser to keep our IndexedDB ride cache durable (best-effort; a no-op
+// where unsupported or already granted). Not awaited — it never blocks boot.
+void navigator.storage?.persist?.();
+
+// Cache writes are debounced, so force the latest one out when the tab is hidden
+// or unloaded — "hidden" (tab switch / close on mobile) is the most reliable last
+// chance to persist, and the IndexedDB write started here completes in the background.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") void controller?.flush();
+});
+window.addEventListener("pagehide", () => void controller?.flush());
 
 // Boot: silently reconnect a remembered phone (no prompt), else offline (stored rides).
 if (wantsReal()) void tryAutoReconnect();

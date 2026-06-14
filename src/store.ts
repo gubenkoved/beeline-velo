@@ -4,16 +4,17 @@
  * Port of `beeline_uploader.store` (Python). The phone is authoritative, but
  * caching lets us list rides quickly and avoid re-opening every ride on each run.
  *
- * Storage: browser LocalStorage under a single key. The serialized shape is
+ * Storage: a single serialized blob under one key in a KeyValueStore (IndexedDB
+ * in production, an in-memory Map in demo/tests). The serialized shape is
  * IDENTICAL to the Python tool's `rides.json` ({ updated_at, rides: { key: {...} } }),
  * so files exported here import into the Python tool and vice-versa.
  */
 
+import type { KeyValueStore } from "./kv";
 import { rideMonth, type StravaStatus } from "./parsing";
 
+/** Key under which the single serialized cache blob is stored in the backend. */
 export const STORAGE_KEY = "beeline-toolkit-state";
-/** Pre-rename key; migrated into STORAGE_KEY on first load so users keep their cache. */
-export const LEGACY_STORAGE_KEY = "beeline_uploader.rides";
 
 /** Default rough-track density: points kept per kilometre of route. */
 export const DEFAULT_TRACK_POINTS_PER_KM = 10;
@@ -49,6 +50,13 @@ function defaultSettings(): Settings {
 
 // UI chrome labels that must never be stored as a ride title.
 const BAD_TITLES = new Set(["Heatmap", "Journeys", "Settings", "Ride"]);
+
+/**
+ * How long save() waits before writing, coalescing a burst of mutations (a slider
+ * drag, a page of freshly-scanned rides) into a single durable write. Kept small
+ * so at most this much work is ever at risk if the tab vanishes without a flush().
+ */
+const SAVE_DEBOUNCE_MS = 400;
 
 function nowIso(): string {
   // ISO-8601 with seconds precision and a timezone offset, mirroring Python's
@@ -136,16 +144,29 @@ export class Store {
   rides: Map<string, RideRecord> = new Map();
   settings: Settings = defaultSettings();
 
-  constructor(private readonly storage: Storage = window.localStorage) {}
+  /** Pending-write state for the debounced write-back (see save()/flush()). */
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private dirty = false;
 
-  static load(storage: Storage = window.localStorage): Store {
-    const store = new Store(storage);
-    let raw = storage.getItem(STORAGE_KEY);
-    let migrated = false;
-    if (!raw) {
-      // One-time migration from the pre-rename key so existing users keep their data.
-      raw = storage.getItem(LEGACY_STORAGE_KEY);
-      migrated = raw !== null;
+  /**
+   * @param backend durable key/value store (IndexedDB in production).
+   * @param onError surfaced when a background write fails (e.g. quota exceeded).
+   */
+  constructor(
+    private readonly backend: KeyValueStore,
+    private readonly onError?: (message: string) => void,
+  ) {}
+
+  static async load(
+    backend: KeyValueStore,
+    onError?: (message: string) => void,
+  ): Promise<Store> {
+    const store = new Store(backend, onError);
+    let raw: string | null = null;
+    try {
+      raw = await backend.get(STORAGE_KEY);
+    } catch {
+      /* storage unavailable — start empty */
     }
     if (raw) {
       try {
@@ -153,10 +174,6 @@ export class Store {
       } catch {
         /* corrupt cache — start fresh */
       }
-    }
-    if (migrated) {
-      store.save(); // persist under the new key
-      storage.removeItem(LEGACY_STORAGE_KEY);
     }
     return store;
   }
@@ -198,8 +215,51 @@ export class Store {
     return { updated_at: nowIso(), settings: { ...this.settings }, rides };
   }
 
+  /**
+   * Persist the in-memory cache. The Map is already the source of truth, so this
+   * never blocks the UI: it marks the cache dirty and schedules a single debounced
+   * background write, coalescing rapid bursts (slider drags, scan pages) into one.
+   * Use flush() to force the pending write out immediately (e.g. before unload).
+   */
   save(): void {
-    this.storage.setItem(STORAGE_KEY, JSON.stringify(this.serialize()));
+    this.dirty = true;
+    if (this.saveTimer !== null) clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      void this.writePending();
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  /**
+   * Force any pending debounced write to happen now; resolves once it settles (or
+   * immediately if nothing is pending). Call before the page unloads so the last
+   * mutation isn't lost in the debounce window.
+   */
+  flush(): Promise<void> {
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    return this.writePending();
+  }
+
+  /**
+   * Serialize and write the cache if dirty. Serialization is deferred to here (not
+   * to each save() call) so a coalesced burst also pays the JSON cost only once. A
+   * failed write — most likely a full disk/quota — is surfaced via `onError`.
+   */
+  private writePending(): Promise<void> {
+    if (!this.dirty) return Promise.resolve();
+    this.dirty = false;
+    const payload = JSON.stringify(this.serialize());
+    return this.backend.set(STORAGE_KEY, payload).catch((err: unknown) => {
+      const full = err instanceof DOMException && err.name === "QuotaExceededError";
+      this.onError?.(
+        full
+          ? "Storage full — some ride data could not be saved locally."
+          : "Failed to save ride data locally.",
+      );
+    });
   }
 
   upsert(key: string, fields: UpsertFields = {}): RideRecord {
@@ -269,18 +329,20 @@ export class Store {
 
   /**
    * Wipe all cached rides and restore default settings, removing the persisted
-   * payload (and any legacy key) from storage. Local browser state only — this
-   * never touches the phone.
+   * payload from storage. Local browser state only — this never touches the phone.
    */
   clear(): void {
     this.rides.clear();
     this.settings = defaultSettings();
-    try {
-      this.storage.removeItem(STORAGE_KEY);
-      this.storage.removeItem(LEGACY_STORAGE_KEY);
-    } catch {
-      /* private mode / storage disabled — non-fatal */
+    // Drop any pending debounced write so it can't resurrect the just-cleared data.
+    this.dirty = false;
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
     }
+    void this.backend.del(STORAGE_KEY).catch(() => {
+      /* storage unavailable — non-fatal, the in-memory state is already cleared */
+    });
   }
 
   // -- import / export ---------------------------------------------------

@@ -1,45 +1,35 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_TRACK_POINTS_PER_KM, LEGACY_STORAGE_KEY, STORAGE_KEY, Store } from "../src/store";
-
-function memStorage(): Storage {
-  const map = new Map<string, string>();
-  return {
-    get length() {
-      return map.size;
-    },
-    clear: () => map.clear(),
-    getItem: (k: string) => (map.has(k) ? map.get(k)! : null),
-    key: (i: number) => [...map.keys()][i] ?? null,
-    removeItem: (k: string) => void map.delete(k),
-    setItem: (k: string, v: string) => void map.set(k, String(v)),
-  } as Storage;
-}
+import { memoryBackend, type KeyValueStore } from "../src/kv";
+import { DEFAULT_TRACK_POINTS_PER_KM, STORAGE_KEY, Store } from "../src/store";
 
 describe("Store", () => {
-  let storage: Storage;
+  let map: Map<string, string>;
+  let backend: KeyValueStore;
   beforeEach(() => {
-    storage = memStorage();
+    map = new Map<string, string>();
+    backend = memoryBackend(map);
   });
 
-  it("upserts and persists, then reloads", () => {
-    const s = Store.load(storage);
+  it("upserts and persists, then reloads", async () => {
+    const s = await Store.load(backend);
     s.upsert("Sat Jun 13 2026 at 14:22", {
       title: "Afternoon ride",
       distance: "22.6km",
       duration: "1:37:52",
     });
     s.save();
+    await s.flush();
 
-    const reloaded = Store.load(storage);
+    const reloaded = await Store.load(backend);
     const rec = reloaded.rides.get("Sat Jun 13 2026 at 14:22")!;
     expect(rec.title).toBe("Afternoon ride");
     expect(rec.distance).toBe("22.6km");
     expect(rec.strava_status).toBe("unknown");
   });
 
-  it("stamps uploaded_at only on the transition to uploaded", () => {
-    const s = Store.load(storage);
+  it("stamps uploaded_at only on the transition to uploaded", async () => {
+    const s = await Store.load(backend);
     s.upsert("k", { strava_status: "pending" });
     expect(s.rides.get("k")!.uploaded_at).toBe("");
     s.upsert("k", { strava_status: "uploaded" });
@@ -49,16 +39,16 @@ describe("Store", () => {
     expect(s.rides.get("k")!.uploaded_at).toBe(at);
   });
 
-  it("scrubs known bad titles on load", () => {
-    storage.setItem(
+  it("scrubs known bad titles on load", async () => {
+    map.set(
       STORAGE_KEY,
       JSON.stringify({ updated_at: "x", rides: { k: { key: "k", title: "Heatmap" } } }),
     );
-    expect(Store.load(storage).rides.get("k")!.title).toBe("");
+    expect((await Store.load(backend)).rides.get("k")!.title).toBe("");
   });
 
-  it("seeds the display title from the scan name, then keeps the fuller checked title", () => {
-    const s = Store.load(storage);
+  it("seeds the display title from the scan name, then keeps the fuller checked title", async () => {
+    const s = await Store.load(backend);
     // Scan writes only the short list name.
     s.upsert("k", { title_base: "Morning ride" });
     expect(s.rides.get("k")!.title_base).toBe("Morning ride");
@@ -74,16 +64,16 @@ describe("Store", () => {
     expect(s.rides.get("k")!.title).toBe("Morning ride, Amstelveen");
   });
 
-  it("scrubs known bad title_base on load", () => {
-    storage.setItem(
+  it("scrubs known bad title_base on load", async () => {
+    map.set(
       STORAGE_KEY,
       JSON.stringify({ updated_at: "x", rides: { k: { key: "k", title_base: "Journeys" } } }),
     );
-    expect(Store.load(storage).rides.get("k")!.title_base).toBe("");
+    expect((await Store.load(backend)).rides.get("k")!.title_base).toBe("");
   });
 
-  it("export shape matches the Python rides.json (updated_at + rides map)", () => {
-    const s = Store.load(storage);
+  it("export shape matches the Python rides.json (updated_at + rides map)", async () => {
+    const s = await Store.load(backend);
     s.upsert("Sat Jun 13 2026 at 14:22", { title: "Afternoon ride", strava_status: "uploaded" });
     const parsed = JSON.parse(s.exportJson());
     expect(typeof parsed.updated_at).toBe("string");
@@ -98,8 +88,8 @@ describe("Store", () => {
     expect(rec).toHaveProperty("last_seen");
   });
 
-  it("imports a Python-produced rides.json and merges", () => {
-    const s = Store.load(storage);
+  it("imports a Python-produced rides.json and merges", async () => {
+    const s = await Store.load(backend);
     s.upsert("existing", { title: "Old" });
     const python = JSON.stringify({
       updated_at: "2026-06-13T20:30:45+00:00",
@@ -122,37 +112,26 @@ describe("Store", () => {
     expect(s.rides.get("existing")).toBeDefined();
   });
 
-  it("migrates the legacy storage key to the new one", () => {
-    storage.setItem(
-      LEGACY_STORAGE_KEY,
-      JSON.stringify({ updated_at: "x", rides: { k: { key: "k", title: "Legacy ride" } } }),
-    );
-    const s = Store.load(storage);
-    expect(s.rides.get("k")!.title).toBe("Legacy ride");
-    // The data now lives under the new key, and the legacy key is cleared.
-    expect(storage.getItem(STORAGE_KEY)).not.toBeNull();
-    expect(storage.getItem(LEGACY_STORAGE_KEY)).toBeNull();
-    expect(Store.load(storage).rides.get("k")!.title).toBe("Legacy ride");
-  });
-
-  it("defaults, clamps, and round-trips the track-detail setting", () => {
-    const s = Store.load(storage);
+  it("defaults, clamps, and round-trips the track-detail setting", async () => {
+    const s = await Store.load(backend);
     expect(s.settings.trackPointsPerKm).toBe(DEFAULT_TRACK_POINTS_PER_KM);
     expect(s.setTrackPointsPerKm(0)).toBe(1); // clamped up to the minimum
     expect(s.setTrackPointsPerKm(9999)).toBe(100); // clamped down to the maximum
     s.setTrackPointsPerKm(25);
-    expect(Store.load(storage).settings.trackPointsPerKm).toBe(25);
+    await s.flush();
+    expect((await Store.load(backend)).settings.trackPointsPerKm).toBe(25);
   });
 
-  it("persists a per-ride rough track", () => {
-    const s = Store.load(storage);
+  it("persists a per-ride rough track", async () => {
+    const s = await Store.load(backend);
     s.upsert("k", { track: "abc123" });
     s.save();
-    expect(Store.load(storage).rides.get("k")!.track).toBe("abc123");
+    await s.flush();
+    expect((await Store.load(backend)).rides.get("k")!.track).toBe("abc123");
   });
 
-  it("persists per-ride GPX capture metadata", () => {
-    const s = Store.load(storage);
+  it("persists per-ride GPX capture metadata", async () => {
+    const s = await Store.load(backend);
     s.upsert("k", {
       track: "abc123",
       track_src_points: 1432,
@@ -161,28 +140,28 @@ describe("Store", () => {
       track_bytes: 24576,
     });
     s.save();
-    const rec = Store.load(storage).rides.get("k")!;
+    await s.flush();
+    const rec = (await Store.load(backend)).rides.get("k")!;
     expect(rec.track_src_points).toBe(1432);
     expect(rec.track_points).toBe(87);
     expect(rec.track_km).toBe(12.3);
     expect(rec.track_bytes).toBe(24576);
   });
 
-  it("clear() wipes rides, restores default settings, and removes the storage keys", () => {
-    storage.setItem(LEGACY_STORAGE_KEY, "{}"); // stale legacy payload must go too
-    const s = Store.load(storage);
+  it("clear() wipes rides, restores default settings, and removes the stored blob", async () => {
+    const s = await Store.load(backend);
     s.upsert("k", { title: "Ride" });
     s.setTrackPointsPerKm(30);
     s.save();
-    expect(storage.getItem(STORAGE_KEY)).not.toBeNull();
+    await s.flush();
+    expect(map.get(STORAGE_KEY)).not.toBeUndefined();
 
     s.clear();
 
     expect(s.rides.size).toBe(0);
     expect(s.settings.trackPointsPerKm).toBe(DEFAULT_TRACK_POINTS_PER_KM);
-    expect(storage.getItem(STORAGE_KEY)).toBeNull();
-    expect(storage.getItem(LEGACY_STORAGE_KEY)).toBeNull();
+    expect(map.has(STORAGE_KEY)).toBe(false);
     // A fresh load now starts empty.
-    expect(Store.load(storage).rides.size).toBe(0);
+    expect((await Store.load(backend)).rides.size).toBe(0);
   });
 });

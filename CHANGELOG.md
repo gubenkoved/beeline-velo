@@ -17,6 +17,25 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Move the ride cache from LocalStorage to IndexedDB
+- **What:** added a small async `KeyValueStore` backend (`src/kv.ts`: hand-written
+  `idbBackend()` for production, `memoryBackend()` for demo/tests) and reworked `Store`
+  to persist its single serialized blob through it — `Store.load()` is now async, while
+  `save()`/`clear()` keep sync signatures and fire write-back writes (with a
+  `QuotaExceededError`-aware toast). `save()` is **debounced** (coalesces a burst of
+  mutations — slider drags, scan pages — into one write and serializes only once);
+  `Store.flush()`/`Controller.flush()` force the pending write out, wired to
+  `visibilitychange`/`pagehide` so the last mutation isn't lost on tab close. `Controller`
+  now requires an injected store; `main.ts` awaits `Store.load(idbBackend())`, drops all
+  LocalStorage code, and best-effort calls `navigator.storage.persist()` at boot.
+- **Why:** the cache (rough GPS tracks included) had already passed 1 MB, heading for
+  LocalStorage's ~5 MB per-origin ceiling. IndexedDB shares the much larger disk quota, so
+  growth is effectively unbounded. Clean break, no auto-migration — the in-memory `Map` stays
+  the source of truth, so only the persistence seam went async; users carry data across the
+  boundary with the existing JSON export/import (kept untouched, still Python `rides.json`-compatible).
+
+---
+
 ## Turbo far-scroll: predictive near-zone so clustered targets stop overshooting
 - **What:** `sweepTargets()` now estimates how far the next target is *before* moving,
   using the visible page's own date span as a local "one screenful" yardstick, and drops

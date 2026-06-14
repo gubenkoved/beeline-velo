@@ -14,24 +14,11 @@ vi.mock("../src/track", async (importOriginal) => {
 import { DemoAdb } from "../src/adb/demo";
 import type { AdbDevice } from "../src/adb/types";
 import { Controller } from "../src/controller";
+import { memoryBackend } from "../src/kv";
 import { Store } from "../src/store";
 
-function memStorage(): Storage {
-  const map = new Map<string, string>();
-  return {
-    get length() {
-      return map.size;
-    },
-    clear: () => map.clear(),
-    getItem: (k: string) => (map.has(k) ? map.get(k)! : null),
-    key: (i: number) => [...map.keys()][i] ?? null,
-    removeItem: (k: string) => void map.delete(k),
-    setItem: (k: string, v: string) => void map.set(k, String(v)),
-  } as Storage;
-}
-
 function makeController(device: AdbDevice): Controller {
-  return new Controller(async () => device, new Store(memStorage()), async () => {});
+  return new Controller(async () => device, new Store(memoryBackend()), async () => {});
 }
 
 describe("download-gpx surfaces extraction failures", () => {
