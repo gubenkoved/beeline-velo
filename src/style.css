@@ -76,6 +76,23 @@ header {
   gap: 12px;
   flex-wrap: wrap;
 }
+/* Header is split into two self-contained clusters so they wrap as whole units
+   rather than letting individual buttons orphan onto their own line. The info
+   cluster stays left; the actions cluster is pushed right with margin-left:auto
+   (replacing the old flex:1 .spacer, which grew on whatever line it landed on
+   after a wrap and shoved a lone control to the far edge). When width runs out
+   the entire actions cluster drops below the info cluster, order intact. */
+.hdr-info,
+.hdr-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.hdr-actions {
+  margin-left: auto;
+}
 .brand {
   display: flex;
   align-items: baseline;
@@ -237,6 +254,17 @@ button.small {
   margin-top: 11px;
   gap: 8px;
 }
+/* Each scanbar label ("Scan", "Interaction speed") is glued to the segmented
+   control it describes by wrapping the pair in a group, so a wrap can never
+   leave the label on one line and its buttons on another. The group is a
+   transparent flex box that wraps as a single unit. */
+.ctlgroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
 .seg {
   display: inline-flex;
   background: var(--panel2);
@@ -325,6 +353,17 @@ button.small {
 }
 .filterbar.hidden {
   display: none;
+}
+/* The filter controls are grouped so related chips/fields wrap as cohesive
+   blocks instead of as ragged single items: the status segment keeps its
+   "Filter" label attached, the three tri-state chips travel together, and the
+   Source + Distance fields stay paired. Each group is a transparent flex box. */
+.fgroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .fchip {
   padding: 6px 12px;
@@ -1477,30 +1516,38 @@ span.caret.open::before {
   color: var(--text);
 }
 
-/* -- view tabs (Explore / Map) -------------------------------------------- */
+/* -- view tabs (Explore / Map / Stats) ------------------------------------ */
+/* A real tab bar, not a row of loose buttons: the tabs sit on one shared
+   underline rail and the active view is marked by an accent underline that
+   merges into that rail. This reads unmistakably as "switch between sections"
+   and stays visually distinct from the small segmented `.seg` toggles used
+   inside the toolbars. */
 .viewtabs {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 4px 0 14px;
+  align-items: flex-end;
+  gap: 2px;
+  margin: 4px 0 16px;
+  border-bottom: 1px solid var(--line);
 }
 .vtab {
-  background: var(--panel2);
-  border: 1px solid var(--line);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  /* pull the 2px underline down so it sits on top of the container's rail */
+  margin-bottom: -1px;
   color: var(--muted);
-  border-radius: 9px;
-  padding: 7px 16px;
+  border-radius: 8px 8px 0 0;
+  padding: 9px 18px;
   font-size: 13.5px;
   font-weight: 600;
 }
 .vtab:hover:not(.active) {
-  background: #222732;
-  border-color: #333b48;
+  color: var(--text);
+  background: #181c23;
 }
 .vtab.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 #mapView.hidden,
 #exploreView.hidden,
@@ -2156,6 +2203,34 @@ body.heat-expanded {
 /* lift transient toasts above the floating progress pill when a job is active */
 body.job-active .toast {
   bottom: 84px;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Mid-range (small laptops / large tablets, 769–1024px).                    */
+/* The header carries a lot of controls; at full desktop sizing they don't   */
+/* fit on one line here and wrap into a tall, ragged stack. Compact the       */
+/* buttons and tighten gaps so the info + actions clusters pack into far      */
+/* fewer rows before the narrow-viewport rules take over below 768px.        */
+/* ------------------------------------------------------------------------ */
+@media (max-width: 1024px) {
+  .row {
+    gap: 8px;
+  }
+  .hdr-info,
+  .hdr-actions {
+    gap: 8px;
+  }
+  header button {
+    padding: 5px 10px;
+    font-size: 12.5px;
+  }
+  header button.small {
+    padding: 4px 9px;
+  }
+  .scanbar,
+  .filterbar {
+    gap: 7px;
+  }
 }
 
 /* ------------------------------------------------------------------------ */

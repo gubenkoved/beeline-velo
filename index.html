@@ -11,55 +11,62 @@
 <body>
 <header>
   <div class="row">
-    <div class="brand"><span class="dot"></span><h1>Beeline Toolkit</h1><span class="ver" id="appVer"></span></div>
-    <span class="totals" id="totals"></span>
-    <span class="cstate" id="stateSize" title="Size of all rides, settings and status stored locally in this browser. Export to back it up; Reset to clear it."></span>
-    <span class="spacer"></span>
-    <span class="conn">
-      <span class="cstate off" id="connState">not connected</span>
-      <button class="small" id="btnConnect">Connect phone</button>
-      <button class="small ghost" id="btnDemo" style="display:none">Demo</button>
-      <button class="small ghost" id="btnDisconnect" style="display:none">Disconnect</button>
+    <span class="hdr-info">
+      <div class="brand"><span class="dot"></span><h1>Beeline Toolkit</h1><span class="ver" id="appVer"></span></div>
+      <span class="totals" id="totals"></span>
+      <span class="cstate" id="stateSize" title="Size of all rides, settings and status stored locally in this browser. Export to back it up; Reset to clear it."></span>
     </span>
-    <span class="split">
-      <button class="ghost small menubtn" data-splitmenu="state" aria-haspopup="true" aria-expanded="false" title="Local data: import, export or reset">Data</button>
-      <span class="splitmenu" id="stateMenu">
-        <button class="ghost small" id="btnImport" title="Merge a previously exported (or Python tool) state file into this browser">Import…</button>
-        <button class="ghost small" id="btnExport" title="Download all locally stored rides, settings and status as a JSON backup">Export</button>
-        <button class="ghost small danger" id="btnReset" title="Erase all locally stored rides, settings, and the remembered phone, then return to offline mode (no phone; shows your stored rides). Does not delete anything on the phone.">Reset</button>
+    <span class="hdr-actions">
+      <span class="conn">
+        <span class="cstate off" id="connState">not connected</span>
+        <button class="small" id="btnConnect">Connect phone</button>
+        <button class="small ghost" id="btnDemo" style="display:none">Demo</button>
+        <button class="small ghost" id="btnDisconnect" style="display:none">Disconnect</button>
       </span>
-    </span>
-    <span class="split">
-      <button class="ghost small" id="btnStatusSel" title="Read the Strava upload status of the selected rides from the phone">Check selected</button>
-      <button class="ghost small caret" data-splitmenu="sel" aria-haspopup="true" aria-expanded="false" title="More actions for the selected rides">More selected-ride actions</button>
-      <span class="splitmenu" id="selMenu">
-        <button class="ghost small" id="btnGpxSel" title="Download a rough GPS route preview for the selected rides (shown on the map; no file saved)">Preview routes</button>
-        <button class="ghost small" id="btnGpxSaveSel" title="Download the full GPX file for the selected rides and save them to disk">Save .gpx files</button>
-        <button class="ghost small" id="btnUploadSel" title="Upload the selected pending rides to Strava">Upload selected to Strava</button>
+      <span class="split">
+        <button class="ghost small menubtn" data-splitmenu="state" aria-haspopup="true" aria-expanded="false" title="Local data: import, export or reset">Data</button>
+        <span class="splitmenu" id="stateMenu">
+          <button class="ghost small" id="btnImport" title="Merge a previously exported (or Python tool) state file into this browser">Import…</button>
+          <button class="ghost small" id="btnExport" title="Download all locally stored rides, settings and status as a JSON backup">Export</button>
+          <button class="ghost small danger" id="btnReset" title="Erase all locally stored rides, settings, and the remembered phone, then return to offline mode (no phone; shows your stored rides). Does not delete anything on the phone.">Reset</button>
+        </span>
       </span>
+      <span class="split">
+        <button class="ghost small" id="btnStatusSel" title="Read the Strava upload status of the selected rides from the phone">Check selected</button>
+        <button class="ghost small caret" data-splitmenu="sel" aria-haspopup="true" aria-expanded="false" title="More actions for the selected rides">More selected-ride actions</button>
+        <span class="splitmenu" id="selMenu">
+          <button class="ghost small" id="btnGpxSel" title="Download a rough GPS route preview for the selected rides (shown on the map; no file saved)">Preview routes</button>
+          <button class="ghost small" id="btnGpxSaveSel" title="Download the full GPX file for the selected rides and save them to disk">Save .gpx files</button>
+          <button class="ghost small" id="btnUploadSel" title="Upload the selected pending rides to Strava">Upload selected to Strava</button>
+        </span>
+      </span>
+      <button class="primary small" id="btnUploadPending">Upload all pending to Strava</button>
+      <input type="file" id="importFile" accept="application/json,.json" style="display:none" />
     </span>
-    <button class="primary small" id="btnUploadPending">Upload all pending to Strava</button>
-    <input type="file" id="importFile" accept="application/json,.json" style="display:none" />
   </div>
   <div class="row scanbar" id="scanbar">
-    <span class="totals">Scan</span>
-    <div class="seg" id="presets">
-      <button data-preset="today">Today</button>
-      <button data-preset="week">Week</button>
-      <button data-preset="month" class="active">Month</button>
-      <button data-preset="year">Year</button>
-      <button data-preset="all">All</button>
-    </div>
-    <label class="custom" id="customDays">last <input id="days" type="number" min="1" inputmode="numeric" placeholder="n" /> days</label>
+    <span class="ctlgroup">
+      <span class="totals">Scan</span>
+      <div class="seg" id="presets">
+        <button data-preset="today">Today</button>
+        <button data-preset="week">Week</button>
+        <button data-preset="month" class="active">Month</button>
+        <button data-preset="year">Year</button>
+        <button data-preset="all">All</button>
+      </div>
+      <label class="custom" id="customDays">last <input id="days" type="number" min="1" inputmode="numeric" placeholder="n" /> days</label>
+    </span>
     <button class="primary" id="btnScan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg>Scan</button>
     <span class="spacer"></span>
-    <span class="totals" title="How fast to drive the phone. Turbo skips upload-verification reads (fastest); a later Check reconciles status.">Interaction speed</span>
-    <div class="seg" id="speeds">
-      <button data-speed="safe">Safe</button>
-      <button data-speed="normal" class="active">Normal</button>
-      <button data-speed="fast">Fast</button>
-      <button data-speed="turbo">Turbo</button>
-    </div>
+    <span class="ctlgroup">
+      <span class="totals" title="How fast to drive the phone. Turbo skips upload-verification reads (fastest); a later Check reconciles status.">Interaction speed</span>
+      <div class="seg" id="speeds">
+        <button data-speed="safe">Safe</button>
+        <button data-speed="normal" class="active">Normal</button>
+        <button data-speed="fast">Fast</button>
+        <button data-speed="turbo">Turbo</button>
+      </div>
+    </span>
     <label class="custom" id="trackPointsBox" title="How densely the rough map preview keeps points from a downloaded GPX, in points per kilometre. Start and end are always kept. The stored track is only a lightweight approximation — not the full GPX.">
       Track detail
       <input id="trackPoints" type="number" min="1" max="100" step="1" inputmode="numeric" /> pts/km
@@ -126,22 +133,28 @@
     <div class="chart" id="chart"></div>
   </div>
     <div class="row filterbar" id="filterbar">
-      <span class="totals">Filter</span>
-      <div class="seg" id="fStatus" title="Filter by Strava upload status">
-        <button data-fstatus="all" class="active">All</button>
-        <button data-fstatus="pending">Pending</button>
-        <button data-fstatus="uploaded">Uploaded</button>
-        <button data-fstatus="other">Other</button>
-      </div>
-      <button class="fchip" id="fGps" data-fchip="gps" data-state="any" title="Filter by route-preview presence (click to cycle: any → has → missing)">GPS: any</button>
-      <button class="fchip" id="fDetails" data-fchip="details" data-state="any" title="Filter by checked-details presence (click to cycle: any → has → missing)">Details: any</button>
-      <button class="fchip" id="fDeleted" data-fchip="deleted" data-state="any" title="Filter by deletion (click to cycle: any → only deleted → hide deleted)">Deleted: any</button>
-      <label class="custom fdevice" title="Filter by the phone a ride was scanned from">Source
-        <select id="fDevice"><option value="all">All</option></select>
-      </label>
-      <label class="custom fdist" title="Filter by distance in km (leave a side blank for no bound)">Distance
-        <input id="fDistMin" type="number" min="0" step="1" inputmode="numeric" placeholder="min" />–<input id="fDistMax" type="number" min="0" step="1" inputmode="numeric" placeholder="max" /> km
-      </label>
+      <span class="fgroup fstatusgroup">
+        <span class="totals">Filter</span>
+        <div class="seg" id="fStatus" title="Filter by Strava upload status">
+          <button data-fstatus="all" class="active">All</button>
+          <button data-fstatus="pending">Pending</button>
+          <button data-fstatus="uploaded">Uploaded</button>
+          <button data-fstatus="other">Other</button>
+        </div>
+      </span>
+      <span class="fgroup fchips">
+        <button class="fchip" id="fGps" data-fchip="gps" data-state="any" title="Filter by route-preview presence (click to cycle: any → has → missing)">GPS: any</button>
+        <button class="fchip" id="fDetails" data-fchip="details" data-state="any" title="Filter by checked-details presence (click to cycle: any → has → missing)">Details: any</button>
+        <button class="fchip" id="fDeleted" data-fchip="deleted" data-state="any" title="Filter by deletion (click to cycle: any → only deleted → hide deleted)">Deleted: any</button>
+      </span>
+      <span class="fgroup ffields">
+        <label class="custom fdevice" title="Filter by the phone a ride was scanned from">Source
+          <select id="fDevice"><option value="all">All</option></select>
+        </label>
+        <label class="custom fdist" title="Filter by distance in km (leave a side blank for no bound)">Distance
+          <input id="fDistMin" type="number" min="0" step="1" inputmode="numeric" placeholder="min" />–<input id="fDistMax" type="number" min="0" step="1" inputmode="numeric" placeholder="max" /> km
+        </label>
+      </span>
       <button class="small ghost hidden" id="fClear">Clear filters</button>
     </div>
     <div id="months"></div>

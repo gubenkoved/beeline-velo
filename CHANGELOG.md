@@ -17,6 +17,20 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Toolbar & navigation cohesion: group controls and clarify the view tabs
+- **What:** Grouped the controls in the header, scan bar and filter bar so each
+  label stays attached to its control and related controls wrap as one block
+  instead of as loose items, and replaced the push-apart spacer with a simpler
+  right-alignment. Restyled the Explore/Map/Stats switcher as a proper tab bar
+  (shared underline rail, accent-underlined active tab) instead of three separate
+  pill buttons. Added a mid-range breakpoint that compacts the toolbars before
+  they get cramped.
+- **Why:** The toolbars were flat wrapping rows of many peer items, so a wrap
+  could land anywhere — orphaning a label from its control or a lone button onto
+  its own line — and the view tabs read as unrelated buttons with no sense that
+  they switch sections. Grouping keeps related controls together as units and the
+  tab styling makes the navigation obvious.
+
 ## Keep the Map/heatmap viewpoint stable across background data updates
 - **What:** The all-rides Map and the Stats route-frequency heatmap no longer re-fit
   their bounds when a background job updates ride data while the view is open. Added
