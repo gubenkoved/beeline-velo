@@ -17,6 +17,18 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Turbo far-scroll: predictive near-zone so clustered targets stop overshooting
+- **What:** `sweepTargets()` now estimates how far the next target is *before* moving,
+  using the visible page's own date span as a local "one screenful" yardstick, and drops
+  from a momentum fling to a controlled drag once the target is within `NEAR_PAGES` (1.5)
+  of that span. Applies to all fling-capable profiles (fast + turbo); safe/normal are
+  unaffected. Added a turbo regression test for targets clustered just below the page.
+- **Why:** In turbo the coarse phase chained up to 4 blind flings that each coast ~several
+  screens, so closely-spaced rides got shot past and the *reactive* overshoot refinement
+  only corrected after bouncing — "lightning fast but unusable". Slowing down predictively
+  when we're already near the target keeps the speed for genuinely far jumps while landing
+  cleanly on clusters, instead of overshooting and oscillating back.
+
 ## Stats view: lifetime totals, distance records and a route-frequency heatmap
 - **What:** Added a third top-level tab ("Stats") next to Explore and Map. It shows
   lifetime totals (distance, moving time, elevation gain, ride count), distance-based

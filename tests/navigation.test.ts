@@ -141,6 +141,26 @@ describe("fast far-scrolling (fling coarse→fine)", () => {
     expect(missing).toEqual([]); // a coasted-past present ride is never flagged deleted
   });
 
+  it("does not fling past targets clustered just below the current page (turbo)", async () => {
+    // Two targets a few rows under the visible page: close enough that a momentum
+    // fling (which coasts ~12 rows) would shoot clean past them and force the
+    // sweep to oscillate back. With the predictive near-zone check the approach
+    // drops to a controlled single-page drag, so it settles right onto them.
+    const rides = makeDemoRides(14);
+    const near1 = rides[7].key;
+    const near2 = rides[8].key;
+
+    const demo = new DemoAdb({ rides: makeDemoRides(14) });
+    const app = await BeelineApp.create(demo, PROFILES.turbo, instant);
+    const details = await app.processTargets(new Set([near1, near2]), false);
+
+    // Both visited…
+    expect(details.map((d) => d.key).sort()).toEqual([near1, near2].sort());
+    // …in just a couple of controlled drags — not the ~10 scrolls a blind fling
+    // chain would spend overshooting to the bottom and bouncing back.
+    expect(demo.listScrolls).toBeLessThanOrEqual(4);
+  });
+
   it("still detects a deleted ride while fast-scrolling", async () => {
     const rides = makeDemoRides(120);
     const gone = rides[80].key;

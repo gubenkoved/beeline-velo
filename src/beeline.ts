@@ -178,6 +178,15 @@ export const PROFILES: Record<string, Timing> = {
 
 export const DEFAULT_PROFILE = "normal";
 
+// How close (in screenfuls of dates) a target must be before we abandon momentum
+// flinging for a precise controlled drag. A fling coasts several screens, so once
+// the target is within ~this many visible pages a single fling would overshoot it;
+// dropping to a drag below this distance is what keeps clustered targets usable in
+// the fast/turbo profiles (the reactive overshoot-refinement alone bounces past
+// them first). Measured against the visible page's own date span, so it adapts to
+// however densely rides are packed at the current scroll position.
+const NEAR_PAGES = 1.5;
+
 /** Screen-relative tap/scroll coordinates derived from screen size. */
 export class Geometry {
   constructor(
@@ -723,11 +732,29 @@ export class BeelineApp {
         if (below.length) aim = new Date(Math.max(...below));
       }
       const stepLevel = aim === null ? 2 : level;
+      // Predictive proximity check: estimate how far the target is using the visible
+      // page's own date span as a local "one screenful of dates" yardstick, then keep
+      // to a controlled drag once it's within NEAR_PAGES of that span. A momentum fling
+      // coasts several screens, so without this it would shoot clean past a nearby
+      // target and the reactive refinement would only notice (and bounce back) after
+      // the fact — exactly the overshoot that makes clustered targets unusable in fast/
+      // turbo. Using the page's span (not a fixed row count) keeps this honest however
+      // densely or sparsely rides are packed here; a degenerate zero span (single card
+      // or identical timestamps) just leaves the existing fling path untouched.
+      let near = false;
+      if (aim !== null && newestVisible !== null && oldestVisible !== null) {
+        const pageSpanMs = newestVisible.getTime() - oldestVisible.getTime();
+        const gapMs = goUp
+          ? aim.getTime() - newestVisible.getTime()
+          : oldestVisible.getTime() - aim.getTime();
+        near = pageSpanMs > 0 && gapMs <= pageSpanMs * NEAR_PAGES;
+      }
       // Resilient gesture choice: only risk a fast momentum fling when we have a date
-      // to aim at AND the previous fling actually registered. After a fling that did
-      // not move the list we drop to a slow, reliable controlled drag — a fling that
-      // merely failed to register must never be mistaken for the end of the list.
-      const fling = canFling && aim !== null && stepLevel <= 1 && !preferDrag;
+      // to aim at, the target is still far away, AND the previous fling actually
+      // registered. After a fling that did not move the list we drop to a slow,
+      // reliable controlled drag — a fling that merely failed to register must never be
+      // mistaken for the end of the list.
+      const fling = canFling && aim !== null && stepLevel <= 1 && !preferDrag && !near;
       const stride = fling && stepLevel === 0 ? this.timing.coarse_swipes_per_dump : 1;
 
       const verb = fling ? "fast-scrolling" : "scrolling";
