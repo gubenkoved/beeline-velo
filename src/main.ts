@@ -445,6 +445,10 @@ const HOT_TRACK = { color: "#ffe066", weight: 6, opacity: 1 } as const;
 
 let allRidesMap: L.Map | null = null;
 let allRidesLayer: L.LayerGroup | null = null;
+// Whether the all-rides map has been framed at least once. Background data updates
+// must NOT re-fit (that resets the user's pan/zoom mid-interaction); we frame only
+// on the first draw and on an explicit reset/reframe (see mountAllRidesMap's `fit`).
+let mapFitted = false;
 const trackLines = new Map<string, L.Polyline>();
 let currentTracks: RideTrack[] = [];
 let currentMissing = 0;
@@ -873,8 +877,14 @@ function mountAllRidesMap(opts: { fit?: boolean } = {}): void {
     }
     // Drop any selected rides whose track is no longer drawn (e.g. deleted/re-scanned).
     selectedKeys = selectedKeys.filter((k) => trackLines.has(k));
-    if (all.length && opts.fit !== false)
+    // Frame the tracks only when explicitly asked (fit:true) or on the first draw
+    // (fit undefined, not yet framed). A background data update (fit undefined,
+    // already framed) refreshes the lines but leaves the user's pan/zoom alone.
+    const shouldFit = opts.fit === true || (opts.fit === undefined && !mapFitted);
+    if (all.length && shouldFit) {
       allRidesMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
+      mapFitted = true;
+    }
   }
   renderMapSide(tracks, missing);
   syncRangeControl("map");
@@ -943,6 +953,10 @@ function setHeatExpanded(on: boolean): void {
 // --------------------------------------------------------------------------- //
 let freqHeatMap: L.Map | null = null;
 let freqHeatLayer: L.Layer | null = null;
+// Whether the heatmap has been framed at least once. Like the Map view, background
+// data updates must NOT re-fit; we frame only on the first draw and on an explicit
+// reset/reframe (see mountFreqHeatmap's `fit`).
+let heatFitted = false;
 let lastHeatSig = "";
 /** Track-set signature: when this changes we re-scan and re-fit; view changes alone don't. */
 let lastHeatDataSig = "";
@@ -1122,7 +1136,7 @@ function mountStatsView(opts: { fit?: boolean } = {}): void {
   }
   syncRangeControl("stats");
   syncHeatControl();
-  mountFreqHeatmap(visible, hidden, opts.fit !== false);
+  mountFreqHeatmap(visible, hidden, opts.fit);
 }
 
 /** Push the persisted heatmap thickness into its slider/output (skip while dragging). */
@@ -1136,7 +1150,7 @@ function syncHeatControl(): void {
 }
 
 /** (Re)draw the route-frequency heatmap for the given rides; lazily creates the map. */
-function mountFreqHeatmap(rides: RideView[], hidden: number, fit: boolean): void {
+function mountFreqHeatmap(rides: RideView[], hidden: number, fit?: boolean): void {
   const host = document.getElementById("freqHeatMap");
   if (!host) return;
   const { tracks, missing } = ridesWithTracks(rides);
@@ -1175,9 +1189,16 @@ function mountFreqHeatmap(rides: RideView[], hidden: number, fit: boolean): void
     lastHeatDataSig = dataSig;
     lastHeatTracks = tracks;
     const all = tracks.flatMap((t) => t.points) as L.LatLngExpression[];
-    // Fit first so the layer (and its cache key) reflect the final viewport; the
+    // Frame first so the layer (and its cache key) reflect the final viewport; the
     // moveend fitBounds fires then finds the sig unchanged and skips a rebuild.
-    if (all.length && fit) freqHeatMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
+    // Frame only when explicitly asked (fit:true) or on the first draw (fit
+    // undefined, not yet framed) — a background data update refreshes the heat
+    // layer but leaves the user's pan/zoom alone.
+    const shouldFit = fit === true || (fit === undefined && !heatFitted);
+    if (all.length && shouldFit) {
+      freqHeatMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
+      heatFitted = true;
+    }
     lastHeatSig = freqHeatSig(tracks);
     buildFreqHeatLayer();
   } else if (freqHeatLayer) {

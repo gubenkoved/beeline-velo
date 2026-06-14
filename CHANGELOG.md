@@ -17,6 +17,16 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Keep the Map/heatmap viewpoint stable across background data updates
+- **What:** The all-rides Map and the Stats route-frequency heatmap no longer re-fit
+  their bounds when a background job updates ride data while the view is open. Added
+  `mapFitted`/`heatFitted` flags and made the mounts' `fit` tri-state (force on `true`,
+  auto-fit only on the first draw, never on a background refresh); track lines / heat
+  layer still rebuild so new data appears, the date-range Reset still reframes.
+- **Why:** A job ticker firing `applyState → render → mount*` re-ran `fitBounds`, yanking
+  the user's pan/zoom back to frame everything mid-interaction — disruptive and disorienting.
+  Now new data shows up in place without stealing the viewport.
+
 ## Replace Unicode glyph button icons with inline SVG / CSS chevrons
 - **What:** Swept the remaining raw Unicode glyphs off real buttons. The Scan button's
   `⟳` ([index.html](index.html)) and the mobile overflow `⋯` toggles plus the
