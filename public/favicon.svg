@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Beeline Toolkit">
+  <rect width="32" height="32" rx="7" fill="#0b0f14"/>
+  <!-- Winding ride track, echoing the map/heatmap route lines -->
+  <path d="M7 24 C 9 16, 14 19, 15 13 S 21 9, 25 7"
+        fill="none" stroke="#fc5200" stroke-width="3"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Endpoint, nodding to the header brand dot -->
+  <circle cx="25" cy="7" r="2.6" fill="#fc5200"/>
+</svg>

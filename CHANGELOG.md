@@ -17,6 +17,15 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Favicon: a route-squiggle brand mark
+- **What:** Added `public/favicon.svg` — a Strava-orange (`#fc5200`) winding ride
+  track on the app's dark rounded tile, with an endpoint dot echoing the header
+  brand `.dot` — and linked it from the `<head>`.
+- **Why:** The app had no favicon (blank/default tab icon). The route-line motif
+  reuses the existing visual vocabulary (map/heatmap tracks, accent colour) so the
+  tab icon reads as the same product; an SVG keeps it crisp at any DPI and adds no
+  dependency or build tooling.
+
 ## Toolbar & navigation cohesion: group controls and clarify the view tabs
 - **What:** Grouped the controls in the header, scan bar and filter bar so each
   label stays attached to its control and related controls wrap as one block
