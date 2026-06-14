@@ -184,7 +184,7 @@ const openStats = new Set<string>();
 // Which GPX split-button menu is open, if any: a ride key for a per-ride button or
 // "sel" for the selection toolbar. Kept at module scope (like openStats/selected) so
 // it survives the frequent re-renders the job ticker triggers.
-let openGpxMenu: string | null = null;
+let openMenu: string | null = null;
 let preset = "month";
 let statGran: Granularity | "auto" = "auto";
 let statMetric: "distance" | "speed" = "distance";
@@ -539,13 +539,29 @@ function gpsBadge(): string {
  * the per-ride actions so the click handler knows which ride to act on.
  */
 function gpxSplit(scope: string, key: string): string {
-  const open = openGpxMenu === scope;
+  const open = openMenu === scope;
   const dataKey = key ? ` data-key="${key}"` : "";
   return (
     `<span class="split${open ? " open" : ""}">` +
     `<button class="small ghost" data-act="gpx-one"${dataKey} title="Download a rough route preview (no file saved)">Preview</button>` +
-    `<button class="small ghost caret" data-gpxmenu="${scope}" aria-haspopup="true" aria-expanded="${open}" title="More GPX options">▾</button>` +
+    `<button class="small ghost caret" data-splitmenu="${scope}" aria-haspopup="true" aria-expanded="${open}" title="More GPX options">▾</button>` +
     `<span class="splitmenu"><button class="small ghost" data-act="gpx-save-one"${dataKey} title="Download the full GPX and save it to disk">Save .gpx file</button></span>` +
+    `</span>`
+  );
+}
+/**
+ * Check split button: a primary "Check new" action (read details only for rides that have
+ * never been detailed) plus a caret revealing "Check all" (re-read every ride). `scope`
+ * identifies which menu is open; `newAct`/`allAct` are the data-act values and `dataAttr`
+ * (e.g. ` data-m="2026-06"`) is forwarded so the handler knows which month/year to act on.
+ */
+function checkSplit(scope: string, newAct: string, allAct: string, dataAttr: string): string {
+  const open = openMenu === scope;
+  return (
+    `<span class="split${open ? " open" : ""}">` +
+    `<button class="small ghost" data-act="${newAct}"${dataAttr} title="Check only rides that have never had their details read">Check new</button>` +
+    `<button class="small ghost caret" data-splitmenu="${scope}" aria-haspopup="true" aria-expanded="${open}" title="More check options">▾</button>` +
+    `<span class="splitmenu"><button class="small ghost" data-act="${allAct}"${dataAttr} title="Re-check every ride, even ones already detailed">Check all</button></span>` +
     `</span>`
   );
 }
@@ -857,9 +873,8 @@ function render(): void {
         ${bars(yup, ype, yRides.length)}
         <span class="ymeta">${yRides.length} rides · ${fmtKm(ykm)} · ${yup} up · ${ype} upload pending</span>
         <span class="yactions">
-          <button class="small ghost" data-act="status-year" data-y="${year}">Check all</button>
-          <button class="small ghost" data-act="status-year-new" data-y="${year}">Check new</button>
-          <button class="small ghost" data-act="gpx-year-missing" data-y="${year}">Get previews</button>
+          ${checkSplit("check-y:" + year, "status-year-new", "status-year", ` data-y="${year}"`)}
+          <button class="small ghost" data-act="gpx-year-missing" data-y="${year}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>
           <button class="small" data-act="upload-year" data-y="${year}">Upload pending to Strava</button>
         </span>
       </div>
@@ -887,9 +902,8 @@ function render(): void {
           ${bars(mup, mpe, m.rides.length)}
           <span class="mmeta">${m.rides.length} rides · ${fmtKm(mkm)} · ${mup} up · ${mpe} upload pending</span>
           <span class="mactions">
-            <button class="small ghost" data-act="status-month" data-m="${mkey}">Check</button>
-            <button class="small ghost" data-act="status-month-new" data-m="${mkey}">Check new</button>
-            <button class="small ghost" data-act="gpx-month-missing" data-m="${mkey}">Get previews</button>
+            ${checkSplit("check-m:" + mkey, "status-month-new", "status-month", ` data-m="${mkey}"`)}
+            <button class="small ghost" data-act="gpx-month-missing" data-m="${mkey}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>
             <button class="small" data-act="upload-month" data-m="${mkey}">Upload pending to Strava</button>
           </span>
         </div>
@@ -919,7 +933,7 @@ function render(): void {
           <div class="rbtns">
             <button class="small ghost" data-act="status-one" data-key="${r.key}">Check</button>
             ${gpxSplit(r.key, r.key)}
-            <button class="small" data-act="upload-one" data-key="${r.key}">Upload to Strava</button>
+            <button class="small accent" data-act="upload-one" data-key="${r.key}">Upload to Strava</button>
           </div>`;
         rowsEl.appendChild(el);
       }
@@ -929,9 +943,9 @@ function render(): void {
   if (activeView === "map") mountAllRidesMap();
   else mountMaps();
   // The selection toolbar's GPX split button lives in static markup (not rebuilt
-  // here), so sync its open state from the shared `openGpxMenu` flag.
+  // here), so sync its open state from the shared `openMenu` flag.
   const selSplit = document.getElementById("gpxSelMenu")?.closest(".split");
-  selSplit?.classList.toggle("open", openGpxMenu === "sel");
+  selSplit?.classList.toggle("open", openMenu === "sel");
   lastSig = stateSig();
 }
 
@@ -1137,14 +1151,14 @@ document.addEventListener("click", (e) => {
   if (target && target.tagName === "INPUT") return; // checkboxes handled on 'change'
   const t = (target.closest("button, a, .mhead, .yhead") as HTMLElement) || target;
 
-  // GPX split-button: toggle its dropdown. Any click outside an open menu closes it.
-  if (t.dataset && t.dataset.gpxmenu) {
-    openGpxMenu = openGpxMenu === t.dataset.gpxmenu ? null : t.dataset.gpxmenu;
+  // Split-button: toggle its dropdown. Any click outside an open menu closes it.
+  if (t.dataset && t.dataset.splitmenu) {
+    openMenu = openMenu === t.dataset.splitmenu ? null : t.dataset.splitmenu;
     render();
     return;
   }
-  if (openGpxMenu !== null && !target.closest(".split")) {
-    openGpxMenu = null;
+  if (openMenu !== null && !target.closest(".split")) {
+    openMenu = null;
     render();
     // fall through so this same click can still trigger whatever it landed on
   }
@@ -1220,7 +1234,7 @@ document.addEventListener("click", (e) => {
     return run(() => controller.downloadGpx([...selected]));
   }
   if (t.id === "btnGpxSaveSel") {
-    openGpxMenu = null;
+    openMenu = null;
     if (!selected.size) return toast("Select some rides first.");
     return run(() => controller.downloadGpx([...selected], true));
   }
@@ -1238,11 +1252,14 @@ document.addEventListener("click", (e) => {
   if (act === "status-one") return run(() => controller.status([t.dataset.key!]));
   if (act === "gpx-one") return run(() => controller.downloadGpx([t.dataset.key!]));
   if (act === "gpx-save-one") {
-    openGpxMenu = null;
+    openMenu = null;
     return run(() => controller.downloadGpx([t.dataset.key!], true));
   }
   if (act === "upload-one") return run(() => controller.upload([t.dataset.key!]));
-  if (act === "status-month") return run(() => controller.status(keysOfMonth(t.dataset.m!)));
+  if (act === "status-month") {
+    openMenu = null;
+    return run(() => controller.status(keysOfMonth(t.dataset.m!)));
+  }
   if (act === "status-month-new") {
     const keys = uncheckedOfMonth(t.dataset.m!);
     if (!keys.length) return toast("All rides this month are already checked.");
@@ -1258,7 +1275,10 @@ document.addEventListener("click", (e) => {
     if (!keys.length) return toast("All rides this month already have a preview.");
     return run(() => controller.downloadGpx(keys));
   }
-  if (act === "status-year") return run(() => controller.status(keysOfYear(t.dataset.y!)));
+  if (act === "status-year") {
+    openMenu = null;
+    return run(() => controller.status(keysOfYear(t.dataset.y!)));
+  }
   if (act === "status-year-new") {
     const keys = uncheckedOfYear(t.dataset.y!);
     if (!keys.length) return toast("All rides this year are already checked.");
@@ -1312,10 +1332,10 @@ document.addEventListener("click", (e) => {
   }
 });
 
-// Escape closes an open GPX split-button menu.
+// Escape closes an open split-button menu (GPX or Check).
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && openGpxMenu !== null) {
-    openGpxMenu = null;
+  if (e.key === "Escape" && openMenu !== null) {
+    openMenu = null;
     render();
   }
 });

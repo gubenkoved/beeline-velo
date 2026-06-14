@@ -18,6 +18,25 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Tidy ride-card button row & fuse the split controls
+- **What:** Fused the GPX "Preview ▾" split button into one segmented control (shared border,
+  single internal divider, outer-radius only, per-segment hover) instead of a caret floating as
+  a separate bordered pill; promoted per-ride **Upload to Strava** to a new softer `.accent`
+  variant so it reads as the row's primary action without a wall of orange; renamed the
+  month/year **"Get previews"** buttons to **"Preview routes"** (with a tooltip) to match the
+  per-ride *Preview* action and *gps* badge; and collapsed the month/year **Check / Check all +
+  Check new** pair into the same segmented split — **Check new** is now the primary (rides never
+  detailed) with **Check all** tucked under the caret. Generalized the single open-menu state
+  (`openGpxMenu`→`openMenu`, `data-gpxmenu`→`data-splitmenu`) and added a `checkSplit()` helper
+  so both splits share one toggle / outside-click / Escape mechanism. The caret's `▾` glyph is
+  hidden (kept only for the accessible name) and replaced with a crisp CSS border-drawn chevron
+  so it's pixel-snapped and consistent instead of a tiny, dim, font-dependent triangle.
+- **Why:** The standalone caret pill looked broken, the row had no clear primary, and the two
+  Check buttons wasted space; "Get previews" didn't convey that it fetches GPS routes. Mostly CSS
+  plus a small markup refactor — the per-ride and selection-toolbar split instances and all
+  action handlers keep working.
+- **Commits:** `TODO: hash`
+
 ## Improve deletion reliability
 - **What:** Added foreground/screen guards (and demo coverage) before a ride is marked deleted.
 - **Why:** Deletion is the one irreversible action — a single stray tap can drift to another

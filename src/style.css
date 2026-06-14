@@ -54,6 +54,10 @@ button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(
 button.ghost { background: transparent; }
 button.danger { color: #f8736a; border-color: #5a2420; }
 button.danger:hover:not(:disabled) { background: #2a1413; border-color: #7a2c27; }
+/* Softer accent: signals the primary action of a group without a full orange fill,
+   so a long list of rides doesn't become a wall of orange. Fills on hover. */
+button.accent { color: #ff7a33; border-color: #5a2a12; background: #221308; font-weight: 600; }
+button.accent:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.small { padding: 4px 10px; font-size: 12.5px; border-radius: 7px; }
 
 .conn { display: inline-flex; align-items: center; gap: 8px; }
@@ -256,11 +260,23 @@ details.help kbd { background: var(--line); border-radius: 4px; padding: 1px 5px
 .stats b { color: var(--text); font-weight: 600; font-size: 13px; }
 .rbtns { display: flex; gap: 6px; flex: 0 0 auto; }
 
-/* Split button: a primary action plus a caret that reveals a dropdown of related
-   actions (used for GPX Preview / Save .gpx file). */
-.split { position: relative; display: inline-flex; }
-.split > button.caret { padding-left: 6px; padding-right: 6px; }
-.split.open > button.caret { color: var(--text); }
+/* Split button: a primary action fused with a caret that reveals a dropdown of related
+   actions (used for GPX Preview / Save .gpx file). The two buttons read as ONE segmented
+   control — shared border, a single internal divider, rounded only on the outer edges. */
+.split { position: relative; display: inline-flex; isolation: isolate; }
+.split > button { border-radius: 0; }
+.split > button:first-child { border-top-left-radius: 7px; border-bottom-left-radius: 7px; }
+/* The caret hides its `▾` glyph (kept for the accessible name) and draws a crisp chevron
+   from two borders instead — consistent across fonts and pixel-snapped at any size. */
+.split > button.caret { border-top-right-radius: 7px; border-bottom-right-radius: 7px;
+  margin-left: -1px; color: var(--muted); position: relative; width: 26px; padding: 0;
+  font-size: 0; }
+.split > button.caret::before { content: ""; position: absolute; inset: 0; margin: auto;
+  width: 6px; height: 6px; border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); }
+/* Lift the hovered/open segment so its border wins the shared seam (no double line). */
+.split > button:hover:not(:disabled) { z-index: 1; }
+.split.open > button.caret { z-index: 1; color: var(--text); background: #222732; border-color: #333b48; }
 .splitmenu { display: none; position: absolute; top: calc(100% + 4px); right: 0; z-index: 30;
   background: var(--panel2); border: 1px solid var(--line); border-radius: 9px; padding: 4px;
   box-shadow: 0 8px 24px rgba(0,0,0,.45); white-space: nowrap; }
