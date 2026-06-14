@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { computeStats, parseKm, parseMeters, type StatsRide } from "../src/stats";
+import { computeStats, parseKm, parseLocaleNumber, parseMeters, type StatsRide } from "../src/stats";
 
 /** Build a StatsRide with sane defaults so each test only sets what it cares about. */
 function ride(partial: Partial<StatsRide> & { key: string }): StatsRide {
@@ -18,9 +18,35 @@ describe("parseKm", () => {
     expect(parseKm("42.5 km")).toBeCloseTo(42.5);
     expect(parseKm("1,234.5 km")).toBeCloseTo(1234.5);
   });
+  it("parses comma-decimal (European) kilometre strings", () => {
+    // Real strings captured from a device whose locale uses ',' as the decimal sep.
+    expect(parseKm("13,5km")).toBeCloseTo(13.5);
+    expect(parseKm("37,8km")).toBeCloseTo(37.8);
+    expect(parseKm("100,7km")).toBeCloseTo(100.7);
+    // Comma grouping must still survive when a dot decimal is also present.
+    expect(parseKm("20,834.6km")).toBeCloseTo(20834.6);
+    // European grouping + decimal: "1.234,5km" → 1234.5
+    expect(parseKm("1.234,5km")).toBeCloseTo(1234.5);
+  });
   it("returns 0 for missing or unrecognised input", () => {
     expect(parseKm("")).toBe(0);
     expect(parseKm("no distance")).toBe(0);
+  });
+});
+
+describe("parseLocaleNumber", () => {
+  it("detects the decimal separator instead of assuming it", () => {
+    expect(parseLocaleNumber("13,5")).toBeCloseTo(13.5);
+    expect(parseLocaleNumber("13.5")).toBeCloseTo(13.5);
+    expect(parseLocaleNumber("1,234")).toBeCloseTo(1234); // 3 trailing digits → grouping
+    expect(parseLocaleNumber("1,234,567")).toBeCloseTo(1234567);
+    expect(parseLocaleNumber("20,834.6")).toBeCloseTo(20834.6);
+    expect(parseLocaleNumber("1.234,5")).toBeCloseTo(1234.5);
+    expect(parseLocaleNumber("100,7")).toBeCloseTo(100.7);
+  });
+  it("returns NaN when there is no number", () => {
+    expect(Number.isNaN(parseLocaleNumber(""))).toBe(true);
+    expect(Number.isNaN(parseLocaleNumber("abc"))).toBe(true);
   });
 });
 
@@ -59,6 +85,15 @@ describe("computeStats totals", () => {
       ride({ key: "Wed Jun 3 2026 at 08:00", track_km: 7 }),
     ];
     expect(computeStats(rides).totalKm).toBeCloseTo(22);
+  });
+
+  it("does not inflate a comma-decimal detail 'Distance' (Check-job path)", () => {
+    // The Check job backfills the detail's "Distance" string into the store.
+    // On a comma-decimal device that's "13,5km" — it must total 13.5, not 135.
+    const rides = [
+      ride({ key: "Fri May 30 2025 at 08:45", distance: "13,5km", stats: { Distance: "13,5km" } }),
+    ];
+    expect(computeStats(rides).totalKm).toBeCloseTo(13.5);
   });
 
   it("ignores deleted rides entirely", () => {

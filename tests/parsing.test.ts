@@ -60,6 +60,21 @@ describe("parseJourneysList", () => {
       "</hierarchy>";
     expect(parseJourneysList(xml)[0].title).toBe("Morning ride");
   });
+
+  it("parses a real comma-decimal device dump (YAL-L21), keeping each card's own stats", () => {
+    const cards = parseJourneysList(read("20_journeys_yal.xml"));
+    const byKey = new Map(cards.map((c) => [c.key, c]));
+    // The 08:45 ride's stats sit directly below its datetime — they must not be
+    // mixed up with the next (08:24) card's stats.
+    const ride = byKey.get("Fri May 30 2025 at 08:45");
+    expect(ride).toBeDefined();
+    expect(ride!.title).toBe("Morning ride");
+    expect(ride!.duration).toBe("1:11:24");
+    expect(ride!.distance).toBe("13,5km");
+    const next = byKey.get("Fri May 30 2025 at 08:24");
+    expect(next!.duration).toBe("14:16");
+    expect(next!.distance).toBe("3,9km");
+  });
 });
 
 describe("parseRideDetail", () => {
@@ -89,6 +104,20 @@ describe("parseRideDetail", () => {
     expect(s["Elapsed time"]).toBe("1:37:52");
     expect(s["Elevation gain"]).toBe("25m");
     expect(s["Elevation loss"]).toBe("34m");
+  });
+
+  it("pairs the stats grid on a real comma-decimal device dump (YAL-L21)", () => {
+    const d = parseRideDetail(read("21_detail_yal.xml"));
+    expect(d.key).toBe("Fri May 30 2025 at 08:45");
+    expect(d.title).toBe("Morning ride, Kaatsheuvel");
+    // Each value must pair with its own label, not a neighbouring stat's.
+    expect(d.stats["Distance"]).toBe("13,5km");
+    expect(d.stats["Average speed"]).toBe("20,0km/h");
+    expect(d.stats["Max speed"]).toBe("33,4km/h");
+    expect(d.stats["Moving time"]).toBe("40:28");
+    expect(d.stats["Elapsed time"]).toBe("1:11:24");
+    expect(d.stats["Elevation gain"]).toBe("209m");
+    expect(d.stats["Elevation loss"]).toBe("215m");
   });
 });
 

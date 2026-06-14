@@ -70,6 +70,12 @@ function textNodes(xml: string): TextNode[] {
     if (!text) continue;
     const b = parseBounds(n.getAttribute("bounds") || "");
     if (b === null) continue;
+    // Drop invisible, zero-area nodes ([0,0][0,0] and the like). Some devices
+    // emit off-screen ghost duplicates (e.g. a collapsed "Elevation" section, or
+    // bottom-nav labels) that share a real label's text but sit at the origin;
+    // sorted by `top` they'd win a naive top-most scan and poison title/stat
+    // detection. They can never be a tap target, so they're always safe to skip.
+    if (b.right <= b.left || b.bottom <= b.top) continue;
     nodes.push({ text, bounds: b });
   }
   return nodes;
@@ -157,15 +163,37 @@ export function parseRideDetail(xml: string): RideDetail {
   };
 
   // datetime / title.
+  let dtNode: TextNode | null = null;
   for (const node of nodes) {
     if (DATETIME_RE.test(node.text)) {
       detail.key = node.text;
+      dtNode = node;
       break;
     }
   }
-  if (nodes.length) {
-    // Title is the topmost non-datetime text (the heading "<Name>, <City>"),
-    // skipping the top app-bar "Options" control which renders above it.
+  // Title: the heading "<Name>, <City>" sits directly ABOVE the datetime in the
+  // same left column. Anchoring to the datetime (rather than picking the top-most
+  // text) keeps this robust to chrome rendered above the heading on some devices —
+  // e.g. a "Rate this route:" prompt — which a naive top-most scan would mistake
+  // for the title.
+  if (dtNode) {
+    let best: TextNode | null = null;
+    let bestGap = Infinity;
+    for (const cand of nodes) {
+      if (cand === dtNode || DATETIME_RE.test(cand.text) || TITLE_SKIP.has(cand.text)) continue;
+      const gap = dtNode.bounds.top - cand.bounds.bottom;
+      if (gap < 0 || gap > 90) continue;
+      const aligned = Math.abs(cand.bounds.left - dtNode.bounds.left) <= 60;
+      if (!aligned) continue;
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = cand;
+      }
+    }
+    if (best) detail.title = best.text;
+  }
+  if (!detail.title && nodes.length) {
+    // Fallback (no datetime parsed): topmost non-datetime, non-chrome text.
     for (const node of [...nodes].sort((a, b) => a.bounds.top - b.bounds.top)) {
       if (!DATETIME_RE.test(node.text) && !TITLE_SKIP.has(node.text)) {
         detail.title = node.text;

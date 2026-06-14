@@ -17,6 +17,10 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Locale-resilient distance/elevation parsing (comma decimal separator)
+- **What:** `parseKm`/`parseMeters` now route through a new `parseLocaleNumber` that detects the decimal separator instead of stripping every comma. `parseRideDetail` now anchors the title to the datetime line (node directly above it, same column) instead of taking the top-most text, and `textNodes` drops invisible `[0,0][0,0]` ghost nodes globally. Added real new-device fixtures (`20_journeys_yal.xml`, `21_detail_yal.xml`) plus tests.
+- **Why:** A second Android device (YAL-L21, comma-decimal locale) exposed two parser bugs feeding the Check job. (1) `replace(/,/g, "")` turned `13,5km` into `135` — inflating distances ~10× across KPIs/records/charts; detecting the separator keeps both `20,834.6km` and `13,5km` correct. (2) The detail sheet renders a `Rate this route:` prompt and off-screen `Elevation` ghost nodes above the heading, so the old "top-most text" title scan picked `Elevation` as the ride title; anchoring to the datetime and dropping zero-area nodes makes title/stat detection device-independent.
+
 ## Date-range filter for the Map and Stats views
 - **What:** added a dual-handle date slider to both the all-rides **Map** view (filters the
   drawn tracks + the side-panel list, with an "N hidden by the date filter" note) and the
