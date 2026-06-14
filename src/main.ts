@@ -1091,7 +1091,7 @@ function renderJob(): void {
   // -- the rest of the queue: what is to be done ----------------------------
   const toggle = $("#btnQueueToggle") as HTMLElement;
   toggle.style.display = queuedTasks ? "" : "none";
-  toggle.textContent = `${queueExpanded ? "\u25be" : "\u25b8"} Up next (${queuedTasks})`;
+  toggle.textContent = `Up next (${queuedTasks})`;
   toggle.setAttribute("aria-expanded", String(queueExpanded));
   const list = $("#jobList");
   const showList = queueExpanded && queuedTasks > 0;

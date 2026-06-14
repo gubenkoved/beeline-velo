@@ -17,6 +17,14 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Fix the "Up next" disclosure arrow alignment
+- **What:** The queue toggle no longer swaps two different inline triangle glyphs
+  (`▸`/`▾`); it now renders the plain "Up next (N)" label with a single `::before`
+  arrow centered via flexbox and rotated 90° on expand, driven by `aria-expanded`.
+- **Why:** The two glyphs sat at different baselines, so the arrow floated misaligned
+  next to the label. Reusing the proven `details.help` summary-arrow pattern keeps it
+  vertically centered and gives a smooth rotate instead of a baseline jump.
+
 ## Map view: clicking a route pins matched rides instead of jumping away
 - **What:** A click on the map no longer redirects straight to Explore. It now pins the
   matched ride(s) into a "Matched" block at the top of the side panel — each with quick

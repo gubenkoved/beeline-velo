@@ -146,7 +146,13 @@ details.help kbd { background: var(--line); border-radius: 4px; padding: 1px 5px
 .qcount { font-size: 12px; color: #cfe0ff; background: rgba(76,141,255,.16);
   border: 1px solid rgba(76,141,255,.35); border-radius: 20px; padding: 2px 9px;
   flex: 0 0 auto; white-space: nowrap; }
-.job-toggle { flex: 0 0 auto; }
+/* the still-queued disclosure: a single arrow glyph centered with the label and
+   rotated on expand (same pattern as details.help) — avoids the baseline jump of
+   swapping two different triangle glyphs inline. */
+.job-toggle { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
+.job-toggle::before { content: "\25B8"; color: var(--muted); font-size: 11px;
+  transition: transform 0.15s ease; }
+.job-toggle[aria-expanded="true"]::before { transform: rotate(90deg); }
 .job button { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.14); }
 .job button:hover:not(:disabled) { background: rgba(255,255,255,.12);
   border-color: rgba(255,255,255,.22); }
