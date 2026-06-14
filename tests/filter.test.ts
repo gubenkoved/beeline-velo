@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { RideView } from "../src/controller";
 import {
   emptyFilters,
+  type Filters,
   filtersActive,
   matchesFilters,
   rideKm,
   visibleRides,
-  type Filters,
 } from "../src/filter";
-import { parseKm, parseDurationSec, parseKmh, parseMeters } from "../src/parsing";
+import { parseDurationSec, parseKm, parseKmh, parseMeters } from "../src/parsing";
 
 /**
  * Build a RideView with sensible defaults; override only what a test cares about.
@@ -48,16 +48,18 @@ function ride(over: Partial<RideView> = {}): RideView {
     ...over,
   };
   const st = base.stats;
-  const reportedKm = parseKm((st && st["Distance"]) || base.distance || "");
+  const reportedKm = parseKm(st?.Distance || base.distance || "");
   return {
     ...base,
-    distance_km: over.distance_km ?? (reportedKm > 0 ? reportedKm : base.track_km > 0 ? base.track_km : 0),
-    avg_speed_kmh: over.avg_speed_kmh ?? parseKmh((st && st["Average speed"]) || ""),
-    max_speed_kmh: over.max_speed_kmh ?? parseKmh((st && st["Max speed"]) || ""),
-    moving_sec: over.moving_sec ?? parseDurationSec((st && st["Moving time"]) || ""),
-    elapsed_sec: over.elapsed_sec ?? parseDurationSec((st && st["Elapsed time"]) || ""),
-    elevation_gain_m: over.elevation_gain_m ?? parseMeters((st && st["Elevation gain"]) || ""),
-    elevation_loss_m: over.elevation_loss_m ?? parseMeters((st && st["Elevation loss"]) || ""),
+    distance_km:
+      over.distance_km ??
+      (reportedKm > 0 ? reportedKm : base.track_km > 0 ? base.track_km : 0),
+    avg_speed_kmh: over.avg_speed_kmh ?? parseKmh(st?.["Average speed"] || ""),
+    max_speed_kmh: over.max_speed_kmh ?? parseKmh(st?.["Max speed"] || ""),
+    moving_sec: over.moving_sec ?? parseDurationSec(st?.["Moving time"] || ""),
+    elapsed_sec: over.elapsed_sec ?? parseDurationSec(st?.["Elapsed time"] || ""),
+    elevation_gain_m: over.elevation_gain_m ?? parseMeters(st?.["Elevation gain"] || ""),
+    elevation_loss_m: over.elevation_loss_m ?? parseMeters(st?.["Elevation loss"] || ""),
   };
 }
 
@@ -138,10 +140,14 @@ describe("matchesFilters — gps / details tri-states", () => {
   });
 
   it("details yes/no keys off the presence of checked stats", () => {
-    expect(matchesFilters(f({ details: "yes" }), ride({ stats: { Distance: "20 km" } }))).toBe(true);
+    expect(matchesFilters(f({ details: "yes" }), ride({ stats: { Distance: "20 km" } }))).toBe(
+      true,
+    );
     expect(matchesFilters(f({ details: "yes" }), ride({ stats: {} }))).toBe(false);
     expect(matchesFilters(f({ details: "no" }), ride({ stats: {} }))).toBe(true);
-    expect(matchesFilters(f({ details: "no" }), ride({ stats: { Distance: "20 km" } }))).toBe(false);
+    expect(matchesFilters(f({ details: "no" }), ride({ stats: { Distance: "20 km" } }))).toBe(
+      false,
+    );
   });
 });
 
@@ -156,13 +162,19 @@ describe("matchesFilters — deleted", () => {
 
 describe("matchesFilters — device", () => {
   it("matches a specific device model exactly", () => {
-    expect(matchesFilters(f({ device: "Pixel 10 Pro" }), ride({ device_model: "Pixel 10 Pro" }))).toBe(true);
-    expect(matchesFilters(f({ device: "Pixel 10 Pro" }), ride({ device_model: "Galaxy S25" }))).toBe(false);
+    expect(
+      matchesFilters(f({ device: "Pixel 10 Pro" }), ride({ device_model: "Pixel 10 Pro" })),
+    ).toBe(true);
+    expect(
+      matchesFilters(f({ device: "Pixel 10 Pro" }), ride({ device_model: "Galaxy S25" })),
+    ).toBe(false);
   });
 
   it("__none__ matches only rides with no recorded device", () => {
     expect(matchesFilters(f({ device: "__none__" }), ride({ device_model: "" }))).toBe(true);
-    expect(matchesFilters(f({ device: "__none__" }), ride({ device_model: "Pixel 10 Pro" }))).toBe(false);
+    expect(
+      matchesFilters(f({ device: "__none__" }), ride({ device_model: "Pixel 10 Pro" })),
+    ).toBe(false);
   });
 });
 
@@ -172,7 +184,9 @@ describe("matchesFilters — distance band", () => {
     expect(matchesFilters(f({ distMin: 25 }), ride({ distance: "20 km" }))).toBe(false);
     expect(matchesFilters(f({ distMax: 25 }), ride({ distance: "20 km" }))).toBe(true);
     expect(matchesFilters(f({ distMax: 15 }), ride({ distance: "20 km" }))).toBe(false);
-    expect(matchesFilters(f({ distMin: 10, distMax: 30 }), ride({ distance: "20 km" }))).toBe(true);
+    expect(matchesFilters(f({ distMin: 10, distMax: 30 }), ride({ distance: "20 km" }))).toBe(
+      true,
+    );
   });
 
   it("treats an unknown distance as 0 — dropped by a min bound, kept by a max-only bound", () => {
@@ -184,9 +198,31 @@ describe("matchesFilters — distance band", () => {
 
 describe("visibleRides", () => {
   const rides = [
-    ride({ key: "a", status: "uploaded", track: "xy", stats: { Distance: "40 km" }, distance: "40 km", device_model: "Pixel 10 Pro" }),
-    ride({ key: "b", status: "pending", track: "", stats: {}, distance: "5 km", device_model: "Galaxy S25" }),
-    ride({ key: "c", status: "pending", track: "xy", stats: { Distance: "20 km" }, distance: "20 km", deleted: true, device_model: "" }),
+    ride({
+      key: "a",
+      status: "uploaded",
+      track: "xy",
+      stats: { Distance: "40 km" },
+      distance: "40 km",
+      device_model: "Pixel 10 Pro",
+    }),
+    ride({
+      key: "b",
+      status: "pending",
+      track: "",
+      stats: {},
+      distance: "5 km",
+      device_model: "Galaxy S25",
+    }),
+    ride({
+      key: "c",
+      status: "pending",
+      track: "xy",
+      stats: { Distance: "20 km" },
+      distance: "20 km",
+      deleted: true,
+      device_model: "",
+    }),
   ];
 
   it("returns the same array reference when no filter is active", () => {
@@ -196,9 +232,13 @@ describe("visibleRides", () => {
   it("combines dimensions with AND", () => {
     // pending + has GPS → only the deleted ride 'c' has both, but status pending
     // excludes deleted-pending, so nothing matches.
-    expect(visibleRides(f({ status: "pending", gps: "yes" }), rides).map((r) => r.key)).toEqual([]);
+    expect(
+      visibleRides(f({ status: "pending", gps: "yes" }), rides).map((r) => r.key),
+    ).toEqual([]);
     // has GPS + not deleted → only 'a'.
-    expect(visibleRides(f({ gps: "yes", deleted: "none" }), rides).map((r) => r.key)).toEqual(["a"]);
+    expect(visibleRides(f({ gps: "yes", deleted: "none" }), rides).map((r) => r.key)).toEqual([
+      "a",
+    ]);
     // distance ≥ 10 → 'a' (40) and 'c' (20).
     expect(visibleRides(f({ distMin: 10 }), rides).map((r) => r.key)).toEqual(["a", "c"]);
     // device __none__ → only 'c'.

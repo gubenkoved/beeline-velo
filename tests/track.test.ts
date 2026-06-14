@@ -5,9 +5,9 @@ import {
   encodePolyline,
   extractTrack,
   gpxToRoughTrack,
+  type LatLon,
   simplify,
   trackLengthKm,
-  type LatLon,
 } from "../src/track";
 
 const GPX = `<?xml version="1.0"?>

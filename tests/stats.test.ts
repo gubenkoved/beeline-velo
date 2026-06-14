@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { computeStats, parseKm, parseLocaleNumber, parseMeters, type StatsRide } from "../src/stats";
+import {
+  computeStats,
+  parseKm,
+  parseLocaleNumber,
+  parseMeters,
+  type StatsRide,
+} from "../src/stats";
 
 /** Build a StatsRide with sane defaults so each test only sets what it cares about. */
 function ride(partial: Partial<StatsRide> & { key: string }): StatsRide {
@@ -68,8 +74,16 @@ describe("parseMeters", () => {
 describe("computeStats totals", () => {
   it("sums distance, moving time and elevation across rides", () => {
     const rides = [
-      ride({ key: "Mon Jun 1 2026 at 08:00", distance: "10 km", stats: { "Moving time": "0:30:00", "Elevation gain": "100 m" } }),
-      ride({ key: "Tue Jun 2 2026 at 08:00", distance: "20 km", stats: { "Moving time": "1:00:00", "Elevation gain": "200 m" } }),
+      ride({
+        key: "Mon Jun 1 2026 at 08:00",
+        distance: "10 km",
+        stats: { "Moving time": "0:30:00", "Elevation gain": "100 m" },
+      }),
+      ride({
+        key: "Tue Jun 2 2026 at 08:00",
+        distance: "20 km",
+        stats: { "Moving time": "1:00:00", "Elevation gain": "200 m" },
+      }),
     ];
     const s = computeStats(rides);
     expect(s.rideCount).toBe(2);
@@ -91,7 +105,11 @@ describe("computeStats totals", () => {
     // The Check job backfills the detail's "Distance" string into the store.
     // On a comma-decimal device that's "13,5km" — it must total 13.5, not 135.
     const rides = [
-      ride({ key: "Fri May 30 2025 at 08:45", distance: "13,5km", stats: { Distance: "13,5km" } }),
+      ride({
+        key: "Fri May 30 2025 at 08:45",
+        distance: "13,5km",
+        stats: { Distance: "13,5km" },
+      }),
     ];
     expect(computeStats(rides).totalKm).toBeCloseTo(13.5);
   });

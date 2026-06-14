@@ -22,7 +22,7 @@ import {
   AdbDaemonWebUsbDeviceManager,
 } from "@yume-chan/adb-daemon-webusb";
 
-import { AdbError, shellQuote, type AdbDevice, type Size } from "./types";
+import { type AdbDevice, AdbError, type Size, shellQuote } from "./types";
 
 function concatChunks(chunks: Uint8Array[]): Uint8Array {
   const total = chunks.reduce((sum, c) => sum + c.length, 0);
@@ -48,7 +48,7 @@ export class WebUsbAdb implements AdbDevice {
     try {
       device = await manager.requestDevice();
     } catch (err) {
-      throw new AdbError("USB permission request failed: " + (err as Error).message);
+      throw new AdbError(`USB permission request failed: ${(err as Error).message}`);
     }
     if (!device) {
       throw new AdbError("No device selected.");
@@ -74,7 +74,8 @@ export class WebUsbAdb implements AdbDevice {
       return null;
     }
     if (!devices.length) return null;
-    const device = (preferSerial && devices.find((d) => d.serial === preferSerial)) || devices[0];
+    const device =
+      (preferSerial && devices.find((d) => d.serial === preferSerial)) || devices[0];
     try {
       return await WebUsbAdb.authenticate(device);
     } catch {
@@ -108,7 +109,7 @@ export class WebUsbAdb implements AdbDevice {
           "Device is busy. Stop any local adb server (adb kill-server) or other app using it, then retry.",
         );
       }
-      throw new AdbError("Connection failed: " + (err as Error).message);
+      throw new AdbError(`Connection failed: ${(err as Error).message}`);
     }
   }
 

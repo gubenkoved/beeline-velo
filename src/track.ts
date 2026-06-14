@@ -118,7 +118,7 @@ function encodeSigned(value: number): string {
 
 /** Encode lat/lon points as a Google polyline string. */
 export function encodePolyline(points: LatLon[], precision = 5): string {
-  const factor = Math.pow(10, precision);
+  const factor = 10 ** precision;
   let lastLat = 0;
   let lastLon = 0;
   let out = "";
@@ -135,7 +135,7 @@ export function encodePolyline(points: LatLon[], precision = 5): string {
 
 /** Decode a Google polyline string back into lat/lon points. */
 export function decodePolyline(encoded: string, precision = 5): LatLon[] {
-  const factor = Math.pow(10, precision);
+  const factor = 10 ** precision;
   const points: LatLon[] = [];
   let index = 0;
   let lat = 0;

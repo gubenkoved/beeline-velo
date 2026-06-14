@@ -7,8 +7,9 @@
  * (the transport is async); blocking sleeps become awaited delays.
  */
 
-import { realSleep, shellQuote, type AdbDevice, type Sleep } from "./adb/types";
+import { type AdbDevice, realSleep, type Sleep, shellQuote } from "./adb/types";
 import {
+  type Bounds,
   boundsCx,
   boundsCy,
   findOptionsButton,
@@ -20,11 +21,10 @@ import {
   isRideDetail,
   parseJourneysList,
   parseRideDetail,
-  rideDatetime,
-  rideShortLabel,
-  type Bounds,
   type RideCard,
   type RideDetail,
+  rideDatetime,
+  rideShortLabel,
   type StravaStatus,
 } from "./parsing";
 
@@ -68,6 +68,7 @@ export function gpxDownloadName(key: string, title: string): string {
     `${p2(dt.getHours())}-${p2(dt.getMinutes())}`;
   // Strip path separators and control chars; collapse runs of whitespace.
   const clean = title
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately strips C0 control chars (\x00-\x1f) so they can't land in a filename.
     .replace(/[/\\<>:"|?*\x00-\x1f]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -84,9 +85,7 @@ export interface GpxFile {
 }
 
 /** Per-ride outcome of the native GPX export flow. */
-export type GpxExport =
-  | { ok: true; file: GpxFile }
-  | { ok: false; reason: string };
+export type GpxExport = { ok: true; file: GpxFile } | { ok: false; reason: string };
 
 /** Result of a catalogue scan. `complete` is true only when the Journeys list was
  *  read end-to-end while we were verifiably on it — the precondition for trusting
@@ -97,7 +96,6 @@ export interface CatalogResult {
   cards: RideCard[];
   complete: boolean;
 }
-
 
 // A callback the long-running passes call to report progress and check for cancel.
 // It receives a short status message; returning true asks the operation to stop.
@@ -497,7 +495,8 @@ export class BeelineApp {
 
     if (await progress("opening Journeys…")) return { cards: [], complete: false };
     await this.openJourneys();
-    if (await progress("scrolling to your newest ride…")) return { cards: [], complete: false };
+    if (await progress("scrolling to your newest ride…"))
+      return { cards: [], complete: false };
     await this.scrollListToTop();
     const seen = new Map<string, RideCard>();
     let stale = 0;
@@ -520,7 +519,12 @@ export class BeelineApp {
       }
       const emit = fresh.filter((c) => passesSince(c.key));
       if (emit.length) onCards(emit); // hand rides to the caller as they appear
-      if (await progress(`scrolling Journeys — ${seen.size} ride${seen.size === 1 ? "" : "s"} found`)) break;
+      if (
+        await progress(
+          `scrolling Journeys — ${seen.size} ride${seen.size === 1 ? "" : "s"} found`,
+        )
+      )
+        break;
       if (reachedCutoff) {
         complete = true; // saw a real ride past the cutoff → the window is fully covered
         break;
@@ -635,7 +639,9 @@ export class BeelineApp {
         // distinguishable; untitled rides already show the date via the key.
         const dateLabel = rideShortLabel(target.key);
         const name =
-          target.title && dateLabel ? `${target.title} (${dateLabel})` : target.title || target.key;
+          target.title && dateLabel
+            ? `${target.title} (${dateLabel})`
+            : target.title || target.key;
         if (await visit(target, name, stop)) break; // aborted (e.g. cancelled)
         remaining.delete(target.key);
         exhaustedUp = exhaustedDown = false; // position moved; both ends open again
@@ -695,9 +701,7 @@ export class BeelineApp {
       // when a target lies past an end we've already CONFIRMED we cannot scroll
       // toward, the ride is gone — we stop instead of reversing into the opposite
       // direction (the old bug that made one missed up-swipe scroll down forever).
-      const remDates = [...remaining]
-        .map(rideDatetime)
-        .filter((d): d is Date => d !== null);
+      const remDates = [...remaining].map(rideDatetime).filter((d): d is Date => d !== null);
       const hasUndated = [...remaining].some((k) => rideDatetime(k) === null);
       const needUp = remDates.some((d) => newestVisible !== null && d > newestVisible);
       const needDown = remDates.some((d) => oldestVisible !== null && d < oldestVisible);
@@ -719,10 +723,14 @@ export class BeelineApp {
         // gap to the visible window) so the only leg we later re-cross is the short
         // one. newestVisible/oldestVisible are non-null here (canUp/canDown imply it).
         const upGap = Math.min(
-          ...remDates.filter((d) => d > newestVisible!).map((d) => d.getTime() - newestVisible!.getTime()),
+          ...remDates
+            .filter((d) => d > newestVisible!)
+            .map((d) => d.getTime() - newestVisible!.getTime()),
         );
         const downGap = Math.min(
-          ...remDates.filter((d) => d < oldestVisible!).map((d) => oldestVisible!.getTime() - d.getTime()),
+          ...remDates
+            .filter((d) => d < oldestVisible!)
+            .map((d) => oldestVisible!.getTime() - d.getTime()),
         );
         committedUp = upGap <= downGap;
         goUp = committedUp;
@@ -781,7 +789,10 @@ export class BeelineApp {
       const before = cards.map((c) => c.key);
       for (let s = 0; s < stride; s++) await this.moveList(goUp, fling); // blind between dumps
       cards = await this.listCards();
-      let moved = !sameKeys(before, cards.map((c) => c.key));
+      let moved = !sameKeys(
+        before,
+        cards.map((c) => c.key),
+      );
       if (!moved) {
         // The list may simply not have settled before we dumped — the fast profiles
         // use very short settle delays. Give it one more beat and look again before
@@ -789,7 +800,10 @@ export class BeelineApp {
         // to accumulate into a bogus "reached the end" and reverse our direction.
         await this.sleep(this.timing.scroll_settle);
         cards = await this.listCards();
-        moved = !sameKeys(before, cards.map((c) => c.key));
+        moved = !sameKeys(
+          before,
+          cards.map((c) => c.key),
+        );
       }
       if (!moved) {
         if (fling) {
@@ -834,7 +848,9 @@ export class BeelineApp {
         // This costs one focus read + one dump, but only when there's something to
         // delete (missing.size > 0), so the all-found happy path pays nothing.
         if (await this.onJourneysList()) {
-          await progress(`${missing.size} ride${missing.size === 1 ? "" : "s"} no longer on the phone — marked deleted`);
+          await progress(
+            `${missing.size} ride${missing.size === 1 ? "" : "s"} no longer on the phone — marked deleted`,
+          );
           onMissing([...missing]);
         } else {
           await progress(
@@ -996,7 +1012,9 @@ export class BeelineApp {
   /** Pick the most-recently-modified path (falls back to the last one listed). */
   private async newestGpx(paths: string[]): Promise<string> {
     if (paths.length === 1) return paths[0];
-    const out = await this.adb.shell(`stat -c '%Y %n' ${paths.map(shellQuote).join(" ")} 2>/dev/null`);
+    const out = await this.adb.shell(
+      `stat -c '%Y %n' ${paths.map(shellQuote).join(" ")} 2>/dev/null`,
+    );
     let best = paths[paths.length - 1];
     let bestMtime = -1;
     for (const line of out.split("\n")) {
@@ -1016,7 +1034,10 @@ export class BeelineApp {
   }
 
   /** Poll the UI up to `tries` times until `find` returns a target. */
-  private async pollFor(find: (xml: string) => Bounds | null, tries = 8): Promise<Bounds | null> {
+  private async pollFor(
+    find: (xml: string) => Bounds | null,
+    tries = 8,
+  ): Promise<Bounds | null> {
     for (let i = 0; i < tries; i++) {
       const target = find(await this.adb.uiDump());
       if (target) return target;
@@ -1061,7 +1082,8 @@ export class BeelineApp {
       await progress(reason);
       return { ok: false, reason };
     }
-    if (await progress(`exporting GPX: ${key}`)) return { ok: false, reason: `cancelled before exporting ${key}` };
+    if (await progress(`exporting GPX: ${key}`))
+      return { ok: false, reason: `cancelled before exporting ${key}` };
     await this.tapBounds(riddenRoute);
 
     // Wait out the "Downloading GPX route" progress, then tap Save in the system dialog.
@@ -1097,7 +1119,13 @@ export class BeelineApp {
       // message is conclusive even if `find` itself is the problem: it shows what's
       // actually sitting in the default save location.
       const dl = (await this.adb.shell(`ls -1 ${shellQuote(downloadDir)} 2>/dev/null`)).trim();
-      const dlList = dl ? dl.split("\n").map((s) => s.trim()).filter(Boolean).join(", ") : "(empty)";
+      const dlList = dl
+        ? dl
+            .split("\n")
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .join(", ")
+        : "(empty)";
       const reason =
         `could not find the exported GPX file for ${key}: no new .gpx appeared after ` +
         `tapping Save. The Save dialog likely targeted a folder we don't scan, or a ` +
@@ -1112,7 +1140,9 @@ export class BeelineApp {
     const finalName = gpxFilename(key);
     const dst = `${downloadDir}/${finalName}`;
     if (newPath !== dst) {
-      await this.adb.shell(`rm -f ${shellQuote(dst)} && mv ${shellQuote(newPath)} ${shellQuote(dst)}`);
+      await this.adb.shell(
+        `rm -f ${shellQuote(dst)} && mv ${shellQuote(newPath)} ${shellQuote(dst)}`,
+      );
     }
     const bytes = await this.adb.readFile(dst);
     return {

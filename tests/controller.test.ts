@@ -8,7 +8,11 @@ import { Store } from "../src/store";
 
 function makeController(device: AdbDevice): Controller {
   // near-instant sleep so polling/scroll waits don't slow the suite
-  return new Controller(async () => device, new Store(memoryBackend()), async () => {});
+  return new Controller(
+    async () => device,
+    new Store(memoryBackend()),
+    async () => {},
+  );
 }
 
 describe("Controller + DemoAdb (real orchestration, no phone)", () => {
@@ -61,7 +65,11 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
   it("backfills the summary distance/duration from detail stats on Check", async () => {
     const device = new DemoAdb();
     const store = new Store(memoryBackend());
-    const c = new Controller(async () => device, store, async () => {});
+    const c = new Controller(
+      async () => device,
+      store,
+      async () => {},
+    );
     await c.connect();
 
     // Simulate a ride the list scan recorded WITHOUT distance/duration (the card
@@ -84,7 +92,11 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
   it("captures the ride detail while downloading GPX for a never-opened ride", async () => {
     const device = new DemoAdb();
     const store = new Store(memoryBackend());
-    const c = new Controller(async () => device, store, async () => {});
+    const c = new Controller(
+      async () => device,
+      store,
+      async () => {},
+    );
     await c.connect();
 
     // A ride the list scan recorded with only its base title — no detail loaded yet
@@ -249,7 +261,10 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     expect(c.state().rides.find((r) => r.key === key)!.deleted).toBe(true);
 
     // It is NOT counted as pending anymore.
-    const pendingKeys = c.state().rides.filter((r) => r.status === "pending" && !r.deleted).map((r) => r.key);
+    const pendingKeys = c
+      .state()
+      .rides.filter((r) => r.status === "pending" && !r.deleted)
+      .map((r) => r.key);
     expect(pendingKeys).not.toContain(key);
   });
 
@@ -269,7 +284,10 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
 
     // The scan was incomplete (we couldn't confirm we were on the Journeys list), so
     // NOT A SINGLE ride may be flagged deleted despite none being seen this pass.
-    const deleted = c.state().rides.filter((r) => r.deleted).map((r) => r.key);
+    const deleted = c
+      .state()
+      .rides.filter((r) => r.deleted)
+      .map((r) => r.key);
     expect(deleted).toEqual([]);
   });
 
@@ -359,7 +377,11 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     // raw strings use ',' as the decimal separator. controller.state() must parse
     // them ONCE, at the boundary, into the numeric fields the rest of the app uses.
     const store = new Store(memoryBackend());
-    const c = new Controller(async () => new DemoAdb(), store, async () => {});
+    const c = new Controller(
+      async () => new DemoAdb(),
+      store,
+      async () => {},
+    );
     const key = "Fri May 30 2025 at 08:45";
     store.upsert(key, {
       title_base: "Morning ride",
@@ -390,9 +412,19 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     // Both separators must yield identical numbers — the canonical parser is the
     // single source of truth regardless of the source phone's locale.
     const store = new Store(memoryBackend());
-    const c = new Controller(async () => new DemoAdb(), store, async () => {});
-    store.upsert("comma", { distance: "13,5km", stats: { Distance: "13,5km", "Average speed": "20,0km/h" } });
-    store.upsert("period", { distance: "13.5km", stats: { Distance: "13.5km", "Average speed": "20.0km/h" } });
+    const c = new Controller(
+      async () => new DemoAdb(),
+      store,
+      async () => {},
+    );
+    store.upsert("comma", {
+      distance: "13,5km",
+      stats: { Distance: "13,5km", "Average speed": "20,0km/h" },
+    });
+    store.upsert("period", {
+      distance: "13.5km",
+      stats: { Distance: "13.5km", "Average speed": "20.0km/h" },
+    });
 
     const rides = c.state().rides;
     const comma = rides.find((r) => r.key === "comma")!;

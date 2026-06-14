@@ -361,7 +361,10 @@ export class Store {
     this.settings.speedTrimSlowPct = clampTrimPct(slowPct);
     this.settings.speedTrimFastPct = clampTrimPct(fastPct);
     this.save();
-    return { slowPct: this.settings.speedTrimSlowPct, fastPct: this.settings.speedTrimFastPct };
+    return {
+      slowPct: this.settings.speedTrimSlowPct,
+      fastPct: this.settings.speedTrimFastPct,
+    };
   }
 
   /** Update the heatmap glow radius (px) and persist. Returns the clamped value. */

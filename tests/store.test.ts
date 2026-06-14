@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { memoryBackend, type KeyValueStore } from "../src/kv";
+import { type KeyValueStore, memoryBackend } from "../src/kv";
 import { DEFAULT_TRACK_POINTS_PER_KM, STORAGE_KEY, Store } from "../src/store";
 
 describe("Store", () => {
@@ -112,7 +112,10 @@ describe("Store", () => {
 
   it("export shape matches the Python rides.json (updated_at + rides map)", async () => {
     const s = await Store.load(backend);
-    s.upsert("Sat Jun 13 2026 at 14:22", { title: "Afternoon ride", strava_status: "uploaded" });
+    s.upsert("Sat Jun 13 2026 at 14:22", {
+      title: "Afternoon ride",
+      strava_status: "uploaded",
+    });
     const parsed = JSON.parse(s.exportJson());
     expect(typeof parsed.updated_at).toBe("string");
     expect(Object.keys(parsed.rides)).toContain("Sat Jun 13 2026 at 14:22");

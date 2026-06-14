@@ -17,7 +17,16 @@ describe("trimmedSpeed", () => {
 
   it("returns 0 for an empty set or rides without usable data", () => {
     expect(trimmedSpeed([], 0, 0)).toBe(0);
-    expect(trimmedSpeed([{ km: 0, sec: 100 }, { km: 5, sec: 0 }], 0, 0)).toBe(0);
+    expect(
+      trimmedSpeed(
+        [
+          { km: 0, sec: 100 },
+          { km: 5, sec: 0 },
+        ],
+        0,
+        0,
+      ),
+    ).toBe(0);
   });
 
   it("keeps a single ride's own speed regardless of trim %", () => {

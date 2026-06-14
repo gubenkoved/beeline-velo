@@ -26,7 +26,8 @@ function haversineM(a: LatLon, b: LatLon): number {
   const dLon = (b[1] - a[1]) * toRad;
   const lat1 = a[0] * toRad;
   const lat2 = b[0] * toRad;
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 

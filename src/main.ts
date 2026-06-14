@@ -13,14 +13,38 @@ import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 
 import { DemoAdb } from "./adb/demo";
-import { AdbError, type AdbDevice } from "./adb/types";
+import { type AdbDevice, AdbError } from "./adb/types";
 import { WebUsbAdb } from "./adb/webusb";
-import { Controller, type AppState, type RideView } from "./controller";
-import { emptyFilters, filtersActive, visibleRides, type Filters, type TriState } from "./filter";
-import { ridesWithTracks, nearestRides, ridesInLatLngBox, dateRange, filterRidesByRange, type DateRange, type LatLngBox, type PixelPoint, type ProjectedTrack, type RideTrack } from "./mapview";
-import { autoGranularity, bucketRide, compareRideKeysDesc, rideShortLabel, trimmedSpeed, type Granularity } from "./parsing";
+import { type AppState, Controller, type RideView } from "./controller";
+import {
+  emptyFilters,
+  type Filters,
+  filtersActive,
+  type TriState,
+  visibleRides,
+} from "./filter";
+import { BASE_SPACING_M, buildHeatPoints, type HeatBounds, spacingForZoom } from "./heatmap";
+import {
+  type DateRange,
+  dateRange,
+  filterRidesByRange,
+  type LatLngBox,
+  nearestRides,
+  type PixelPoint,
+  type ProjectedTrack,
+  type RideTrack,
+  ridesInLatLngBox,
+  ridesWithTracks,
+} from "./mapview";
+import {
+  autoGranularity,
+  bucketRide,
+  compareRideKeysDesc,
+  type Granularity,
+  rideShortLabel,
+  trimmedSpeed,
+} from "./parsing";
 import { computeStats, type PeriodRecord } from "./stats";
-import { buildHeatPoints, spacingForZoom, BASE_SPACING_M, type HeatBounds } from "./heatmap";
 import "leaflet.heat";
 import { idbBackend, memoryBackend } from "./kv";
 import { Store } from "./store";
@@ -91,7 +115,10 @@ function activate(next: Controller, demo: boolean): void {
 }
 
 async function goDemo(): Promise<void> {
-  const c = new Controller(async () => new DemoAdb({ latencyMs: 110 }), new Store(memoryBackend()));
+  const c = new Controller(
+    async () => new DemoAdb({ latencyMs: 110 }),
+    new Store(memoryBackend()),
+  );
   activate(c, true);
   try {
     await c.connect();
@@ -163,13 +190,19 @@ async function leaveReal(): Promise<void> {
   await goOffline(); // keep showing the user's stored rides, just without a phone
 }
 
-
 // --------------------------------------------------------------------------- //
 // UI state
 // --------------------------------------------------------------------------- //
 let STATE: AppState = {
   rides: [],
-  jobs: { current: null, current_keys: [], queue: [], history: [], active_keys: [], busy: false },
+  jobs: {
+    current: null,
+    current_keys: [],
+    queue: [],
+    history: [],
+    active_keys: [],
+    busy: false,
+  },
   speed: "normal",
   settings: { trackPointsPerKm: 10, speedTrimSlowPct: 0, speedTrimFastPct: 0, heatRadius: 12 },
   connected: false,
@@ -217,7 +250,11 @@ function esc(s: string): string {
 }
 /** Escape text/attribute values for safe interpolation into innerHTML. */
 function escHtml(s: string): string {
-  return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return (s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 // --------------------------------------------------------------------------- //
@@ -269,7 +306,10 @@ function detailsBlock(r: RideView): string {
       : `No details yet — press <b>Check</b> to load this ride's stats and route.`;
     return `<div class="rdetailhint">${msg}</div>`;
   }
-  return `<div class="stats open" id="st-${esc(r.key)}">${fmtStats(r)}</div>` + trackBlock(r.key, r.track);
+  return (
+    `<div class="stats open" id="st-${esc(r.key)}">${fmtStats(r)}</div>` +
+    trackBlock(r.key, r.track)
+  );
 }
 
 /** (Re)create Leaflet maps for every visible track container after a render. */
@@ -282,11 +322,14 @@ function mountMaps(): void {
     }
   }
   document.querySelectorAll<HTMLElement>(".rmap").forEach((host) => {
-    if (mapRegistry.has(host.dataset.map!) && mapRegistry.get(host.dataset.map!)!.getContainer() === host) {
+    if (
+      mapRegistry.has(host.dataset.map!) &&
+      mapRegistry.get(host.dataset.map!)!.getContainer() === host
+    ) {
       return; // already mounted on this exact node
     }
     const ride = STATE.rides.find((r) => esc(r.key) === host.dataset.map);
-    if (!ride || !ride.track) return;
+    if (!ride?.track) return;
     let pts: [number, number][];
     try {
       pts = decodePolyline(ride.track);
@@ -331,7 +374,13 @@ function mountMaps(): void {
 // still lists the rest, flagged, so nothing is silently hidden.
 // --------------------------------------------------------------------------- //
 const CLICK_PX = 8; // how close (in screen px) a click must land to "hit" a track
-const BASE_TRACK = { color: "#ff5a1f", weight: 3.5, opacity: 0.62, lineJoin: "round", lineCap: "round" } as const;
+const BASE_TRACK = {
+  color: "#ff5a1f",
+  weight: 3.5,
+  opacity: 0.62,
+  lineJoin: "round",
+  lineCap: "round",
+} as const;
 const HOT_TRACK = { color: "#ffe066", weight: 6, opacity: 1 } as const;
 
 let allRidesMap: L.Map | null = null;
@@ -395,7 +444,10 @@ const dayIndex = (bounds: DateRange, ms: number): number =>
   Math.round((startOfDayMs(ms) - startOfDayMs(bounds.minMs)) / DAY_MS);
 
 /** The full selection (both edges at day-start) covering an entire bounds span. */
-const fullRange = (bounds: DateRange): DateRange => ({ minMs: startOfDayMs(bounds.minMs), maxMs: startOfDayMs(bounds.maxMs) });
+const fullRange = (bounds: DateRange): DateRange => ({
+  minMs: startOfDayMs(bounds.minMs),
+  maxMs: startOfDayMs(bounds.maxMs),
+});
 
 /** Keep only rides within a day-granular selection (the end day is fully included). */
 const ridesInRange = (rides: RideView[], sel: DateRange): RideView[] =>
@@ -408,7 +460,11 @@ const ridesInRange = (rides: RideView[], sel: DateRange): RideView[] =>
  * rides extend the visible window instead of being filtered out); any other handle
  * is just clamped into the new bounds. Edges are kept on day-start boundaries.
  */
-function reconcileRange(sel: DateRange | null, oldBounds: DateRange | null, bounds: DateRange): DateRange {
+function reconcileRange(
+  sel: DateRange | null,
+  oldBounds: DateRange | null,
+  bounds: DateRange,
+): DateRange {
   const lo = startOfDayMs(bounds.minMs);
   const hi = startOfDayMs(bounds.maxMs);
   if (!sel || !oldBounds) return { minMs: lo, maxMs: hi };
@@ -433,12 +489,18 @@ function refreshRange(which: RangeView): void {
   }
 }
 
-const rangeOf = (which: RangeView): DateRange | null => (which === "map" ? mapRange : statsRange);
-const boundsOf = (which: RangeView): DateRange | null => (which === "map" ? mapRangeBounds : statsRangeBounds);
+const rangeOf = (which: RangeView): DateRange | null =>
+  which === "map" ? mapRange : statsRange;
+const boundsOf = (which: RangeView): DateRange | null =>
+  which === "map" ? mapRangeBounds : statsRangeBounds;
 
 /** Compact local day label for a slider edge, e.g. "Jun 1, 2026". */
 function fmtDay(ms: number): string {
-  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return new Date(ms).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 /** Markup for one view's dual-range date slider (two overlaid day-index inputs). */
@@ -525,7 +587,10 @@ function onRangeInput(which: RangeView, el: HTMLInputElement): void {
     hiIdx = loIdx;
     hi.value = String(hiIdx);
   }
-  const next: DateRange = { minMs: addDays(bounds.minMs, loIdx), maxMs: addDays(bounds.minMs, hiIdx) };
+  const next: DateRange = {
+    minMs: addDays(bounds.minMs, loIdx),
+    maxMs: addDays(bounds.minMs, hiIdx),
+  };
   if (which === "map") mapRange = next;
   else statsRange = next;
   updateRangeLabels(which);
@@ -545,7 +610,6 @@ function resetRange(which: RangeView): void {
     mountStatsView({ fit: true });
   }
 }
-
 
 /** Project the current tracks into container pixels for a one-off click hit-test. */
 function projectTracksNow(): ProjectedTrack[] {
@@ -607,7 +671,11 @@ function onMapClick(e: L.LeafletMouseEvent): void {
   if (selectMode) return; // the area-drag gesture owns clicks while armed
   // Project tracks on the fly for this one click (no per-frame cost), then select
   // the single nearest ride under the cursor. A miss clears the selection.
-  const keys = nearestRides(projectTracksNow(), { x: e.containerPoint.x, y: e.containerPoint.y }, CLICK_PX);
+  const keys = nearestRides(
+    projectTracksNow(),
+    { x: e.containerPoint.x, y: e.containerPoint.y },
+    CLICK_PX,
+  );
   setSelected(keys.length ? [keys[0]] : []);
 }
 
@@ -678,7 +746,9 @@ function onSelectUp(e: MouseEvent): void {
   // A real drag selects every ride crossing the box; a stray click selects nothing
   // (and just disarms). Run the box filter once on release.
   if (Math.abs(end.x - start.x) >= 4 || Math.abs(end.y - start.y) >= 4) {
-    setSelected(ridesInLatLngBox(currentTracks, boxFromCorners(start, { x: end.x, y: end.y })));
+    setSelected(
+      ridesInLatLngBox(currentTracks, boxFromCorners(start, { x: end.x, y: end.y })),
+    );
   }
   // Defer disarming so the trailing Leaflet 'click' is still suppressed by selectMode.
   setTimeout(() => setSelectMode(false), 0);
@@ -700,7 +770,7 @@ function boxFromCorners(a: PixelPoint, b: PixelPoint): LatLngBox {
 function openRideInExplore(key: string): void {
   const ride = STATE.rides.find((r) => r.key === key);
   if (!ride) return;
-  openYears.delete("c" + yearOf(ride.month_key)); // a year is open when NOT collapsed
+  openYears.delete(`c${yearOf(ride.month_key)}`); // a year is open when NOT collapsed
   openMonths.add(ride.month_key);
   openStats.add(key);
   setView("explore");
@@ -759,7 +829,9 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
   const sub = missing
     ? `${tracks.length} on map · ${missing} without a route — press <b>GPX</b> to add them`
     : `${tracks.length} on map`;
-  const hiddenNote = hidden ? `<div class="ms-hidden">${hidden} hidden by the date filter</div>` : "";
+  const hiddenNote = hidden
+    ? `<div class="ms-hidden">${hidden} hidden by the date filter</div>`
+    : "";
   side.innerHTML =
     `<div class="ms-head"><h2>All rides</h2><span class="ms-count" id="msCount"></span></div>` +
     renderMatched() +
@@ -800,7 +872,6 @@ function renderMatched(): string {
   );
 }
 
-
 /** (Re)draw the all-rides map for the current state; lazily creates the map. */
 function mountAllRidesMap(opts: { fit?: boolean } = {}): void {
   const host = document.getElementById("allRidesMap");
@@ -812,7 +883,11 @@ function mountAllRidesMap(opts: { fit?: boolean } = {}): void {
   currentMissing = missing;
 
   if (!allRidesMap) {
-    allRidesMap = L.map(host, { attributionControl: true, zoomControl: true, fadeAnimation: false });
+    allRidesMap = L.map(host, {
+      attributionControl: true,
+      zoomControl: true,
+      fadeAnimation: false,
+    });
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: "© OpenStreetMap",
@@ -835,13 +910,17 @@ function mountAllRidesMap(opts: { fit?: boolean } = {}): void {
     trackLines.clear();
     const all: L.LatLngExpression[] = [];
     for (const t of tracks) {
-      const line = L.polyline(t.points as L.LatLngExpression[], { ...BASE_TRACK, className: "track-line" }).addTo(allRidesLayer!);
+      const line = L.polyline(t.points as L.LatLngExpression[], {
+        ...BASE_TRACK,
+        className: "track-line",
+      }).addTo(allRidesLayer!);
       trackLines.set(t.key, line);
       for (const p of t.points) all.push(p as L.LatLngExpression);
     }
     // Drop any selected rides whose track is no longer drawn (e.g. deleted/re-scanned).
     selectedKeys = selectedKeys.filter((k) => trackLines.has(k));
-    if (all.length && opts.fit !== false) allRidesMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
+    if (all.length && opts.fit !== false)
+      allRidesMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
   }
   renderMapSide(tracks, missing);
   syncRangeControl("map");
@@ -862,9 +941,9 @@ function applyView(): void {
   document.getElementById("scanbar")?.classList.toggle("hidden", isMap || isStats);
   if (!isMap && document.body.classList.contains("map-expanded")) setMapExpanded(false);
   if (!isMap && selectMode) setSelectMode(false);
-  document
-    .querySelectorAll<HTMLButtonElement>("#viewTabs .vtab")
-    .forEach((b) => b.classList.toggle("active", b.dataset.view === activeView));
+  document.querySelectorAll<HTMLButtonElement>("#viewTabs .vtab").forEach((b) => {
+    b.classList.toggle("active", b.dataset.view === activeView);
+  });
 }
 
 /** Switch the active view, persist the choice, and re-render. */
@@ -890,7 +969,6 @@ function setMapExpanded(on: boolean): void {
     allRidesMap?.invalidateSize();
   });
 }
-
 
 // --------------------------------------------------------------------------- //
 // Stats view — lifetime totals, distance records and a route-frequency heatmap.
@@ -933,12 +1011,12 @@ function freqHeatBounds(): HeatBounds | undefined {
  * exposes different segments) alongside the track set.
  */
 function freqHeatSig(tracks: ReadonlyArray<RideTrack>): string {
-  if (!freqHeatMap) return "0#" + tracks.map((t) => t.key).join("|");
+  if (!freqHeatMap) return `0#${tracks.map((t) => t.key).join("|")}`;
   const zoom = Math.round(freqHeatMap.getZoom());
   const c = freqHeatMap.getCenter();
   // Center to ~3 decimals (~100 m) is enough to detect a meaningful pan.
   const view = `${zoom}@${c.lat.toFixed(3)},${c.lng.toFixed(3)}`;
-  return `${view}#` + tracks.map((t) => t.key).join("|");
+  return `${view}#${tracks.map((t) => t.key).join("|")}`;
 }
 
 /** (Re)build the heat layer from `lastHeatTracks` for the current zoom/viewport. */
@@ -983,7 +1061,7 @@ function fmtDuration(totalSec: number): string {
 
 /** Compact metres/kilometres label for an elevation total. */
 function fmtElevation(m: number): string {
-  return m >= 1000 ? (m / 1000).toFixed(1) + "k m" : Math.round(m) + " m";
+  return m >= 1000 ? `${(m / 1000).toFixed(1)}k m` : `${Math.round(m)} m`;
 }
 
 /** One totals/record card: a big value, a label, and an optional sub-line. */
@@ -998,7 +1076,11 @@ function statCard(value: string, label: string, sub = ""): string {
 /** Record card for a best period (muted placeholder when there's no data). */
 function periodCard(rec: PeriodRecord | null, label: string): string {
   if (!rec) return statCard("—", label);
-  return statCard(fmtKm(rec.km), label, `${rec.label} · ${rec.count} ride${rec.count === 1 ? "" : "s"}`);
+  return statCard(
+    fmtKm(rec.km),
+    label,
+    `${rec.label} · ${rec.count} ride${rec.count === 1 ? "" : "s"}`,
+  );
 }
 
 /** Render the Stats view: totals, records and the route-frequency heatmap. */
@@ -1028,7 +1110,11 @@ function mountStatsView(opts: { fit?: boolean } = {}): void {
   const records = document.getElementById("statsRecords");
   if (records) {
     const biggest = s.biggestRide
-      ? statCard(fmtKm(s.biggestRide.km), "biggest ride", rideShortLabel(s.biggestRide.key) || s.biggestRide.key)
+      ? statCard(
+          fmtKm(s.biggestRide.km),
+          "biggest ride",
+          rideShortLabel(s.biggestRide.key) || s.biggestRide.key,
+        )
       : statCard("—", "biggest ride");
     records.innerHTML = [
       biggest,
@@ -1067,7 +1153,11 @@ function mountFreqHeatmap(rides: RideView[], hidden: number, fit: boolean): void
   }
 
   if (!freqHeatMap) {
-    freqHeatMap = L.map(host, { attributionControl: true, zoomControl: true, fadeAnimation: false });
+    freqHeatMap = L.map(host, {
+      attributionControl: true,
+      zoomControl: true,
+      fadeAnimation: false,
+    });
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: "© OpenStreetMap",
@@ -1101,15 +1191,19 @@ function mountFreqHeatmap(rides: RideView[], hidden: number, fit: boolean): void
   setTimeout(() => freqHeatMap!.invalidateSize(), 0);
 }
 
-
 // --------------------------------------------------------------------------- //
 // Small render helpers (ported verbatim)
 // --------------------------------------------------------------------------- //
 function badge(s: string): string {
   const label =
-    ({ pending: "upload pending", uploaded: "uploaded", processing: "working", unknown: "\u2014" } as Record<string, string>)[
-      s
-    ] || s;
+    (
+      {
+        pending: "upload pending",
+        uploaded: "uploaded",
+        processing: "working",
+        unknown: "\u2014",
+      } as Record<string, string>
+    )[s] || s;
   return `<span class="badge ${s}">${label}</span>`;
 }
 function queueBadge(key: string): string {
@@ -1167,7 +1261,7 @@ function fmtStats(r: RideView): string {
   const add = (label: string, present: boolean, value: string): void => {
     if (present) rows.push([label, value]);
   };
-  add("Distance", st["Distance"] != null, fmtKmDetail(r.distance_km));
+  add("Distance", st.Distance != null, fmtKmDetail(r.distance_km));
   add("Average speed", st["Average speed"] != null, fmtSpeed(r.avg_speed_kmh));
   add("Max speed", st["Max speed"] != null, fmtSpeed(r.max_speed_kmh));
   add("Moving time", st["Moving time"] != null, st["Moving time"]);
@@ -1183,14 +1277,14 @@ function bars(up: number, pe: number, total: number): string {
   return `<span class="bars"><i class="up" style="width:${u}%"></i><i class="pe" style="width:${p}%"></i></span>`;
 }
 function fmtKm(v: number): string {
-  return v >= 1000 ? (v / 1000).toFixed(1) + "k km" : Math.round(v) + " km";
+  return v >= 1000 ? `${(v / 1000).toFixed(1)}k km` : `${Math.round(v)} km`;
 }
 /** Distance with one decimal (detail grid / row meta), e.g. "13.5 km". */
 function fmtKmDetail(v: number): string {
-  return v.toFixed(1) + " km";
+  return `${v.toFixed(1)} km`;
 }
 function fmtSpeed(v: number): string {
-  return v.toFixed(1) + " km/h";
+  return `${v.toFixed(1)} km/h`;
 }
 
 // -- filter bar (predicates live in ./filter) -----------------------------
@@ -1198,9 +1292,9 @@ function fmtSpeed(v: number): string {
 /** Reflect the filter state in the bar: device options, chip labels, active classes. */
 function syncFilterBar(allRides: AppState["rides"]): void {
   // Status segment.
-  document
-    .querySelectorAll<HTMLButtonElement>("#fStatus button")
-    .forEach((b) => b.classList.toggle("active", b.dataset.fstatus === filters.status));
+  document.querySelectorAll<HTMLButtonElement>("#fStatus button").forEach((b) => {
+    b.classList.toggle("active", b.dataset.fstatus === filters.status);
+  });
 
   // Tri-state chips: glyph + active styling reflect the current state.
   const chip = (id: string, label: string, state: string, yes: string): void => {
@@ -1229,7 +1323,9 @@ function syncFilterBar(allRides: AppState["rides"]): void {
       sel.innerHTML = want;
     }
     // Selected value may have vanished (e.g. cache cleared) — fall back to All.
-    const valid = filters.device === "all" || models.includes(filters.device) ||
+    const valid =
+      filters.device === "all" ||
+      models.includes(filters.device) ||
       (filters.device === "__none__" && hasMissing);
     if (!valid) filters.device = "all";
     sel.value = filters.device;
@@ -1238,8 +1334,10 @@ function syncFilterBar(allRides: AppState["rides"]): void {
   // Distance inputs (don't clobber the field being typed into).
   const min = $<HTMLInputElement>("#fDistMin");
   const max = $<HTMLInputElement>("#fDistMax");
-  if (min && document.activeElement !== min) min.value = filters.distMin === null ? "" : String(filters.distMin);
-  if (max && document.activeElement !== max) max.value = filters.distMax === null ? "" : String(filters.distMax);
+  if (min && document.activeElement !== min)
+    min.value = filters.distMin === null ? "" : String(filters.distMin);
+  if (max && document.activeElement !== max)
+    max.value = filters.distMax === null ? "" : String(filters.distMax);
 
   // Clear button visibility.
   $("#fClear").classList.toggle("hidden", !filtersActive(filters));
@@ -1247,7 +1345,8 @@ function syncFilterBar(allRides: AppState["rides"]): void {
 
 /** Advance a tri-state chip one step on click. */
 function cycleChip(which: string): void {
-  const nextTri = (s: TriState): TriState => (s === "any" ? "yes" : s === "yes" ? "no" : "any");
+  const nextTri = (s: TriState): TriState =>
+    s === "any" ? "yes" : s === "yes" ? "no" : "any";
   if (which === "gps") filters.gps = nextTri(filters.gps);
   else if (which === "details") filters.details = nextTri(filters.details);
   else if (which === "deleted") {
@@ -1266,7 +1365,6 @@ function clearFilters(): void {
   filters.distMin = null;
   filters.distMax = null;
 }
-
 
 /** Push persisted trim percentages into the sliders/outputs (skip a slider being dragged). */
 function syncTrimControls(): void {
@@ -1291,12 +1389,12 @@ function renderStats(rides: AppState["rides"]): void {
   panel.classList.remove("hidden");
 
   const gran: Granularity = statGran === "auto" ? autoGranularity(rides) : statGran;
-  document
-    .querySelectorAll<HTMLButtonElement>("#statGran button")
-    .forEach((b) => b.classList.toggle("active", b.dataset.gran === statGran));
-  document
-    .querySelectorAll<HTMLButtonElement>("#statMetric button")
-    .forEach((b) => b.classList.toggle("active", b.dataset.metric === statMetric));
+  document.querySelectorAll<HTMLButtonElement>("#statGran button").forEach((b) => {
+    b.classList.toggle("active", b.dataset.gran === statGran);
+  });
+  document.querySelectorAll<HTMLButtonElement>("#statMetric button").forEach((b) => {
+    b.classList.toggle("active", b.dataset.metric === statMetric);
+  });
 
   // Outlier-trim sliders belong to the speed view only.
   $("#spTrim").classList.toggle("hidden", statMetric !== "speed");
@@ -1321,7 +1419,8 @@ function renderStats(rides: AppState["rides"]): void {
   for (const r of rides) {
     const km = r.distance_km;
     const [bkey, label, short] = bucketRide(r.key, gran);
-    if (!byM.has(bkey)) byM.set(bkey, { label, short, km: 0, n: 0, spKm: 0, spSec: 0, spN: 0, rides: [] });
+    if (!byM.has(bkey))
+      byM.set(bkey, { label, short, km: 0, n: 0, spKm: 0, spSec: 0, spN: 0, rides: [] });
     const e = byM.get(bkey)!;
     e.km += km;
     e.n += 1;
@@ -1358,7 +1457,11 @@ type StatBucket = {
   rides: { km: number; sec: number }[];
 };
 
-function renderDistance(gran: Granularity, items: [string, StatBucket][], rideCount: number): void {
+function renderDistance(
+  gran: Granularity,
+  items: [string, StatBucket][],
+  rideCount: number,
+): void {
   ($(".sp-title") as HTMLElement).textContent = `Distance per ${gran}`;
   $("#spNote").classList.add("hidden");
 
@@ -1509,10 +1612,12 @@ function render(): void {
   const emptyEl = $("#empty") as HTMLElement;
   if (allRides.length === 0) {
     emptyEl.style.display = "block";
-    emptyEl.innerHTML = "Pick a range and press <b>Scan</b> to read your rides from the phone.";
+    emptyEl.innerHTML =
+      "Pick a range and press <b>Scan</b> to read your rides from the phone.";
   } else if (rides.length === 0) {
     emptyEl.style.display = "block";
-    emptyEl.innerHTML = "No rides match the current filters. <a href=\"#\" id=\"emptyClear\">Clear filters</a>";
+    emptyEl.innerHTML =
+      'No rides match the current filters. <a href="#" id="emptyClear">Clear filters</a>';
   } else {
     emptyEl.style.display = "none";
   }
@@ -1521,12 +1626,16 @@ function render(): void {
 
   const byMonth = new Map<string, { label: string; rides: AppState["rides"] }>();
   for (const r of rides) {
-    if (!byMonth.has(r.month_key)) byMonth.set(r.month_key, { label: r.month_label, rides: [] });
+    if (!byMonth.has(r.month_key))
+      byMonth.set(r.month_key, { label: r.month_label, rides: [] });
     byMonth.get(r.month_key)!.rides.push(r);
   }
   const months = [...byMonth.entries()].sort((a, b) => b[0].localeCompare(a[0]));
 
-  const byYear = new Map<string, Array<[string, { label: string; rides: AppState["rides"] }]>>();
+  const byYear = new Map<
+    string,
+    Array<[string, { label: string; rides: AppState["rides"] }]>
+  >();
   for (const [mkey, m] of months) {
     const y = yearOf(mkey);
     if (!byYear.has(y)) byYear.set(y, []);
@@ -1537,16 +1646,18 @@ function render(): void {
   const up = rides.filter((r) => r.status === "uploaded").length;
   const pe = rides.filter((r) => r.status === "pending" && !r.deleted).length;
   const del = rides.filter((r) => r.deleted).length;
-  const shown = filtersActive(filters) ? `${rides.length} of ${allRides.length} rides` : `${rides.length} rides`;
+  const shown = filtersActive(filters)
+    ? `${rides.length} of ${allRides.length} rides`
+    : `${rides.length} rides`;
   $("#totals").textContent =
     `${shown} · ${up} uploaded · ${pe} upload pending` +
     (del ? ` · ${del} deleted` : "") +
     (selected.size ? ` · ${selected.size} selected` : "");
 
   if (STATE.speed) {
-    document
-      .querySelectorAll<HTMLButtonElement>("#speeds button")
-      .forEach((b) => b.classList.toggle("active", b.dataset.speed === STATE.speed));
+    document.querySelectorAll<HTMLButtonElement>("#speeds button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.speed === STATE.speed);
+    });
   }
 
   const tp = $<HTMLInputElement>("#trackPoints");
@@ -1565,7 +1676,7 @@ function render(): void {
     const yup = yRides.filter((r) => r.status === "uploaded").length;
     const ype = yRides.filter((r) => r.status === "pending" && !r.deleted).length;
     const ykm = yRides.reduce((s, r) => s + r.distance_km, 0);
-    const yOpen = !openYears.has("c" + year);
+    const yOpen = !openYears.has(`c${year}`);
     const ySel = allSelState(yKeys);
 
     const ybox = document.createElement("div");
@@ -1578,7 +1689,7 @@ function render(): void {
         ${bars(yup, ype, yRides.length)}
         <span class="ymeta">${yRides.length} rides · ${fmtKm(ykm)} · ${yup} up · ${ype} upload pending</span>
         <span class="yactions">
-          ${checkSplit("check-y:" + year, "status-year-new", "status-year", ` data-y="${year}"`)}
+          ${checkSplit(`check-y:${year}`, "status-year-new", "status-year", ` data-y="${year}"`)}
           <button class="small ghost" data-act="gpx-year-missing" data-y="${year}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>
           <button class="small" data-act="upload-year" data-y="${year}">Upload pending to Strava</button>
         </span>
@@ -1607,7 +1718,7 @@ function render(): void {
           ${bars(mup, mpe, m.rides.length)}
           <span class="mmeta">${m.rides.length} rides · ${fmtKm(mkm)} · ${mup} up · ${mpe} upload pending</span>
           <span class="mactions">
-            ${checkSplit("check-m:" + mkey, "status-month-new", "status-month", ` data-m="${mkey}"`)}
+            ${checkSplit(`check-m:${mkey}`, "status-month-new", "status-month", ` data-m="${mkey}"`)}
             <button class="small ghost" data-act="gpx-month-missing" data-m="${mkey}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>
             <button class="small" data-act="upload-month" data-m="${mkey}">Upload pending to Strava</button>
           </span>
@@ -1623,9 +1734,11 @@ function render(): void {
         // summary figures, so a Checked ride shows real numbers instead of "?".
         const summaryDistance = r.distance_km > 0 ? fmtKmDetail(r.distance_km) : "?";
         const summaryDuration =
-          r.duration || (r.stats && (r.stats["Elapsed time"] || r.stats["Moving time"])) || "?";
+          r.duration ||
+          (r.stats && (r.stats["Elapsed time"] || r.stats["Moving time"])) ||
+          "?";
         const el = document.createElement("div");
-        el.className = "rrow" + (r.deleted ? " deleted" : "");
+        el.className = `rrow${r.deleted ? " deleted" : ""}`;
         el.dataset.key = r.key;
         el.innerHTML = `
           <input type="checkbox" class="chk" data-key="${r.key}" ${selected.has(r.key) ? "checked" : ""}>
@@ -1683,7 +1796,8 @@ function renderJob(): void {
     const p = cur.progress;
     if (p && p.total > 0) {
       bar.style.display = "";
-      ($("#jobBarFill") as HTMLElement).style.width = `${Math.round((p.done / p.total) * 100)}%`;
+      ($("#jobBarFill") as HTMLElement).style.width =
+        `${Math.round((p.done / p.total) * 100)}%`;
     } else {
       bar.style.display = "none";
     }
@@ -1701,7 +1815,9 @@ function renderJob(): void {
   qc.style.display = total ? "" : "none";
 
   // Minimized handle mirrors the count (or the live verb when nothing is queued).
-  $("#jobHandleText").textContent = total ? `${total} ride${total === 1 ? "" : "s"}` : "Working\u2026";
+  $("#jobHandleText").textContent = total
+    ? `${total} ride${total === 1 ? "" : "s"}`
+    : "Working\u2026";
 
   // -- the rest of the queue: what is to be done ----------------------------
   const toggle = $("#btnQueueToggle") as HTMLElement;
@@ -1734,21 +1850,26 @@ function taskTitle(t: JobTask): string {
   const verb = TASK_VERB[t.kind] || t.kind;
   if (t.kind === "scan") return t.label ? `${verb} ${t.label}` : verb;
   const p = t.progress;
-  if (p && p.total > 0) return `${verb} ${p.done} of ${p.total} ride${p.total === 1 ? "" : "s"}`;
+  if (p && p.total > 0)
+    return `${verb} ${p.done} of ${p.total} ride${p.total === 1 ? "" : "s"}`;
   return `${verb} ${t.count} ride${t.count === 1 ? "" : "s"}`;
 }
 
 /** A waiting-queue row: verb + count, with a per-item remove button. */
 function queueItemHtml(t: JobTask): string {
   const verb = TASK_VERB[t.kind] || t.kind;
-  const desc = t.kind === "scan" ? (t.label ? `${verb} ${t.label}` : verb) : `${verb} ${t.count} ride${t.count === 1 ? "" : "s"}`;
+  const desc =
+    t.kind === "scan"
+      ? t.label
+        ? `${verb} ${t.label}`
+        : verb
+      : `${verb} ${t.count} ride${t.count === 1 ? "" : "s"}`;
   return `<div class="job-item">
     <span class="ji-dot"></span>
     <span class="ji-text">${escHtml(desc)}</span>
     <button class="ji-x" data-cancel="${t.id}" title="Remove from queue" aria-label="Remove from queue">\u00d7</button>
   </div>`;
 }
-
 
 function shortError(text: string): string {
   if (!text) return "";
@@ -1769,7 +1890,8 @@ function renderError(jobs: AppState["jobs"]): void {
     return;
   }
   bar.classList.add("show");
-  $("#errTitle").textContent = `${latest.kind} failed${latest.label ? " — " + latest.label : ""}`;
+  $("#errTitle").textContent =
+    `${latest.kind} failed${latest.label ? ` — ${latest.label}` : ""}`;
   $("#errMsg").textContent = shortError(latest.error);
   bar.dataset.id = String(latest.id);
   bar.dataset.full = latest.error;
@@ -1780,30 +1902,40 @@ function renderError(jobs: AppState["jobs"]): void {
   }
 }
 
-const keysOfMonth = (m: string): string[] => STATE.rides.filter((r) => r.month_key === m).map((r) => r.key);
+const keysOfMonth = (m: string): string[] =>
+  STATE.rides.filter((r) => r.month_key === m).map((r) => r.key);
 const pendingOfMonth = (m: string): string[] =>
-  STATE.rides.filter((r) => r.month_key === m && r.status === "pending" && !r.deleted).map((r) => r.key);
+  STATE.rides
+    .filter((r) => r.month_key === m && r.status === "pending" && !r.deleted)
+    .map((r) => r.key);
 const keysOfYear = (y: string): string[] =>
   STATE.rides.filter((r) => (r.month_key || "").slice(0, 4) === y).map((r) => r.key);
 const pendingOfYear = (y: string): string[] =>
   STATE.rides
-    .filter((r) => (r.month_key || "").slice(0, 4) === y && r.status === "pending" && !r.deleted)
+    .filter(
+      (r) => (r.month_key || "").slice(0, 4) === y && r.status === "pending" && !r.deleted,
+    )
     .map((r) => r.key);
 
 // A ride is "never checked" until its detail sheet has been opened, which is the
 // only thing that fills `stats` (a scan sets just title/distance/duration).
-const isUnchecked = (r: AppState["rides"][number]): boolean => !r.deleted && Object.keys(r.stats).length === 0;
+const isUnchecked = (r: AppState["rides"][number]): boolean =>
+  !r.deleted && Object.keys(r.stats).length === 0;
 const uncheckedOfMonth = (m: string): string[] =>
   STATE.rides.filter((r) => r.month_key === m && isUnchecked(r)).map((r) => r.key);
 const uncheckedOfYear = (y: string): string[] =>
-  STATE.rides.filter((r) => (r.month_key || "").slice(0, 4) === y && isUnchecked(r)).map((r) => r.key);
+  STATE.rides
+    .filter((r) => (r.month_key || "").slice(0, 4) === y && isUnchecked(r))
+    .map((r) => r.key);
 
 // A ride is "missing a preview" until a GPX download has stored its rough track.
 const hasNoPreview = (r: AppState["rides"][number]): boolean => !r.deleted && !r.track;
 const missingPreviewOfMonth = (m: string): string[] =>
   STATE.rides.filter((r) => r.month_key === m && hasNoPreview(r)).map((r) => r.key);
 const missingPreviewOfYear = (y: string): string[] =>
-  STATE.rides.filter((r) => (r.month_key || "").slice(0, 4) === y && hasNoPreview(r)).map((r) => r.key);
+  STATE.rides
+    .filter((r) => (r.month_key || "").slice(0, 4) === y && hasNoPreview(r))
+    .map((r) => r.key);
 
 function toggleGroup(keys: string[]): void {
   const allSel = keys.length > 0 && keys.every((k) => selected.has(k));
@@ -1856,7 +1988,10 @@ function run(fn: () => void): void {
 
 function doScan(): void {
   const days = parseInt(($("#days") as HTMLInputElement).value, 10);
-  if (days > 0) return run(() => controller.scan("custom", days));
+  if (days > 0) {
+    run(() => controller.scan("custom", days));
+    return;
+  }
   run(() => controller.scan(preset, null));
 }
 
@@ -1874,7 +2009,11 @@ function exportRides(): void {
 }
 
 /** Trigger a browser "Save As" for a GPX file pulled off the phone. */
-function saveGpxFile(file: { filename: string; downloadName: string; bytes: Uint8Array }): void {
+function saveGpxFile(file: {
+  filename: string;
+  downloadName: string;
+  bytes: Uint8Array;
+}): void {
   // Demo GPX bytes are synthetic, and saving them would pop a browser "Save As"
   // dialog for every ride (especially with "ask where to save each file" on),
   // which makes the demo/test flow unusable. The route is already drawn on the
@@ -1903,7 +2042,7 @@ function importRides(file: File): void {
       const n = controller.importJson(String(reader.result));
       toast(`Imported — ${n} new ride${n === 1 ? "" : "s"}.`);
     } catch (err) {
-      toast("Import failed: " + (err as Error).message, true);
+      toast(`Import failed: ${(err as Error).message}`, true);
     }
   };
   reader.readAsText(file);
@@ -1915,7 +2054,11 @@ function importRides(file: File): void {
  * phone is never touched. Guarded by a single confirm().
  */
 async function resetEverything(): Promise<void> {
-  if (!confirm("Erase all locally stored rides, settings, and the remembered phone? This cannot be undone and returns the app to offline mode. Nothing on your phone is deleted.")) {
+  if (
+    !confirm(
+      "Erase all locally stored rides, settings, and the remembered phone? This cannot be undone and returns the app to offline mode. Nothing on your phone is deleted.",
+    )
+  ) {
     return;
   }
   controller.reset(); // clear the active controller's cache (IndexedDB) + job queue
@@ -1933,7 +2076,7 @@ document.addEventListener("click", (e) => {
   const t = (target.closest("button, a, .mhead, .yhead") as HTMLElement) || target;
 
   // Split-button: toggle its dropdown. Any click outside an open menu closes it.
-  if (t.dataset && t.dataset.splitmenu) {
+  if (t.dataset?.splitmenu) {
     openMenu = openMenu === t.dataset.splitmenu ? null : t.dataset.splitmenu;
     render();
     return;
@@ -1944,7 +2087,7 @@ document.addEventListener("click", (e) => {
     // fall through so this same click can still trigger whatever it landed on
   }
 
-  if (t.dataset && t.dataset.view) {
+  if (t.dataset?.view) {
     setView(t.dataset.view as ViewName);
     return;
   }
@@ -1956,16 +2099,16 @@ document.addEventListener("click", (e) => {
     setSelectMode(!selectMode);
     return;
   }
-  if (t.dataset && t.dataset.rangereset) {
+  if (t.dataset?.rangereset) {
     resetRange(t.dataset.rangereset as RangeView);
     return;
   }
-  if (t.dataset && t.dataset.fstatus) {
+  if (t.dataset?.fstatus) {
     filters.status = t.dataset.fstatus as Filters["status"];
     applyState();
     return;
   }
-  if (t.dataset && t.dataset.fchip) {
+  if (t.dataset?.fchip) {
     cycleChip(t.dataset.fchip);
     applyState();
     return;
@@ -1976,35 +2119,35 @@ document.addEventListener("click", (e) => {
     applyState();
     return;
   }
-  if (t.dataset && t.dataset.preset) {
+  if (t.dataset?.preset) {
     preset = t.dataset.preset;
     ($("#days") as HTMLInputElement).value = "";
     syncDaysField();
-    document
-      .querySelectorAll<HTMLButtonElement>("#presets button")
-      .forEach((b) => b.classList.toggle("active", b.dataset.preset === preset));
+    document.querySelectorAll<HTMLButtonElement>("#presets button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.preset === preset);
+    });
     return;
   }
-  if (t.dataset && t.dataset.gran) {
+  if (t.dataset?.gran) {
     statGran = t.dataset.gran as Granularity | "auto";
-    document
-      .querySelectorAll<HTMLButtonElement>("#statGran button")
-      .forEach((b) => b.classList.toggle("active", b.dataset.gran === statGran));
+    document.querySelectorAll<HTMLButtonElement>("#statGran button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.gran === statGran);
+    });
     render();
     return;
   }
-  if (t.dataset && t.dataset.metric) {
+  if (t.dataset?.metric) {
     statMetric = t.dataset.metric as "distance" | "speed";
-    document
-      .querySelectorAll<HTMLButtonElement>("#statMetric button")
-      .forEach((b) => b.classList.toggle("active", b.dataset.metric === statMetric));
+    document.querySelectorAll<HTMLButtonElement>("#statMetric button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.metric === statMetric);
+    });
     render();
     return;
   }
-  if (t.dataset && t.dataset.speed) {
-    document
-      .querySelectorAll<HTMLButtonElement>("#speeds button")
-      .forEach((b) => b.classList.toggle("active", b.dataset.speed === t.dataset.speed));
+  if (t.dataset?.speed) {
+    document.querySelectorAll<HTMLButtonElement>("#speeds button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.speed === t.dataset.speed);
+    });
     run(() => controller.setSpeed(t.dataset.speed!));
     applyState();
     return;
@@ -2035,7 +2178,7 @@ document.addEventListener("click", (e) => {
     renderJob();
     return;
   }
-  if (t.dataset && t.dataset.cancel) {
+  if (t.dataset?.cancel) {
     return run(() => controller.cancel(parseInt(t.dataset.cancel!, 10)));
   }
   if (t.id === "errDismiss") {
@@ -2072,12 +2215,14 @@ document.addEventListener("click", (e) => {
     return run(() => controller.upload(keys));
   }
   if (t.id === "btnUploadPending") {
-    const keys = STATE.rides.filter((r) => r.status === "pending" && !r.deleted).map((r) => r.key);
+    const keys = STATE.rides
+      .filter((r) => r.status === "pending" && !r.deleted)
+      .map((r) => r.key);
     if (!keys.length) return toast("No known pending rides. Check status first.");
     return run(() => controller.upload(keys));
   }
 
-  const act = t.dataset && t.dataset.act;
+  const act = t.dataset?.act;
   if (act === "status-one") return run(() => controller.status([t.dataset.key!]));
   if (act === "gpx-one") return run(() => controller.downloadGpx([t.dataset.key!]));
   if (act === "gpx-save-one") {
@@ -2128,7 +2273,7 @@ document.addEventListener("click", (e) => {
     return run(() => controller.downloadGpx(keys));
   }
 
-  if (t.dataset && t.dataset.stats) {
+  if (t.dataset?.stats) {
     e.preventDefault();
     const k = t.dataset.stats;
     openStats.has(k) ? openStats.delete(k) : openStats.add(k);
@@ -2141,7 +2286,7 @@ document.addEventListener("click", (e) => {
   // details/map area, so the user can interact with those without collapsing.
   if (!target.closest("button, a, input, .stats, .rmap, .rmapnote, .rmaphint, .rdetailhint")) {
     const rrow = target.closest(".rrow") as HTMLElement | null;
-    if (rrow && rrow.dataset.key) {
+    if (rrow?.dataset.key) {
       const k = rrow.dataset.key;
       openStats.has(k) ? openStats.delete(k) : openStats.add(k);
       render();
@@ -2149,15 +2294,19 @@ document.addEventListener("click", (e) => {
     }
   }
 
-  const yhead = t.classList && t.classList.contains("yhead") ? t : t.closest && (t.closest(".yhead") as HTMLElement | null);
+  const yhead = t.classList?.contains("yhead")
+    ? t
+    : t.closest && (t.closest(".yhead") as HTMLElement | null);
   if (yhead) {
-    const c = "c" + yhead.dataset.y;
+    const c = `c${yhead.dataset.y}`;
     openYears.has(c) ? openYears.delete(c) : openYears.add(c);
     render();
     return;
   }
 
-  const mhead = t.classList && t.classList.contains("mhead") ? t : t.closest && (t.closest(".mhead") as HTMLElement | null);
+  const mhead = t.classList?.contains("mhead")
+    ? t
+    : t.closest && (t.closest(".mhead") as HTMLElement | null);
   if (mhead) {
     const m = mhead.dataset.m!;
     openMonths.has(m) ? openMonths.delete(m) : openMonths.add(m);
@@ -2175,16 +2324,16 @@ document.addEventListener("keydown", (e) => {
 
 document.addEventListener("change", (e) => {
   const cb = e.target as HTMLInputElement;
-  if (cb.classList && cb.classList.contains("chk")) {
+  if (cb.classList?.contains("chk")) {
     cb.checked ? selected.add(cb.dataset.key!) : selected.delete(cb.dataset.key!);
     render();
     return;
   }
-  if (cb.dataset && cb.dataset.selmonth) {
+  if (cb.dataset?.selmonth) {
     toggleGroup(keysOfMonth(cb.dataset.selmonth));
     return;
   }
-  if (cb.dataset && cb.dataset.selyear) {
+  if (cb.dataset?.selyear) {
     toggleGroup(keysOfYear(cb.dataset.selyear));
     return;
   }
@@ -2239,7 +2388,10 @@ function syncDaysField(): void {
   pill.classList.toggle("set", v.length > 0);
   // Auto-size: "n" placeholder width up to the digits actually typed.
   input.style.width = `${Math.max(1, v.length || 1) + 1.2}ch`;
-  if (v) document.querySelectorAll<HTMLButtonElement>("#presets button").forEach((b) => b.classList.remove("active"));
+  if (v)
+    document.querySelectorAll<HTMLButtonElement>("#presets button").forEach((b) => {
+      b.classList.remove("active");
+    });
 }
 
 $("#days").addEventListener("input", syncDaysField);
@@ -2277,7 +2429,8 @@ window.addEventListener("beforeunload", (e) => {
 
 // Esc leaves the full-screen map.
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && document.body.classList.contains("map-expanded")) setMapExpanded(false);
+  if (e.key === "Escape" && document.body.classList.contains("map-expanded"))
+    setMapExpanded(false);
 });
 
 /** Show the build version in the header; hover reveals commit + build date. */

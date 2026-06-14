@@ -9,7 +9,12 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lint": "biome lint",
+    "format": "biome format --write",
+    "check": "biome check",
+    "check:fix": "biome check --write",
+    "verify": "tsc --noEmit && biome check && vitest run"
   },
   "dependencies": {
     "@yume-chan/adb": "^2.1.0",
@@ -19,6 +24,7 @@
     "leaflet.heat": "^0.2.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.0",
     "@types/leaflet": "^1.9.12",
     "@types/leaflet.heat": "^0.2.5",
     "@types/node": "^22.10.0",

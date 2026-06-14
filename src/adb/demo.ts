@@ -11,8 +11,8 @@
  * action = Strava). Geometry assumes a 1080×2400 screen, matching `Geometry`.
  */
 
-import { AdbError, type AdbDevice, type Size } from "./types";
 import { DETAIL_STAT_LABELS } from "../parsing";
+import { type AdbDevice, AdbError, type Size } from "./types";
 
 interface DemoRide {
   key: string;
@@ -94,8 +94,18 @@ function makeRides(): DemoRide[] {
 
 const WEEKDAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH_ABBR = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
 ];
 
 /**
@@ -356,7 +366,8 @@ export class DemoAdb implements AdbDevice {
       if (this.flingDeaf && isFling) return; // fling ignored: counted, but no movement
       const step = isFling ? Math.max(6, Math.round(frac * 18)) : 5;
       const maxOffset = Math.max(0, this.rides.length - VISIBLE);
-      if (y1 > y2) this.offset = Math.min(this.offset + step, maxOffset); // scroll down
+      if (y1 > y2)
+        this.offset = Math.min(this.offset + step, maxOffset); // scroll down
       else this.offset = Math.max(this.offset - step, 0); // scroll up
     } else if (this.view === "detail") {
       // Swiping up reveals the bottom-sheet action buttons (and pushes the

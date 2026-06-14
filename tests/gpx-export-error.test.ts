@@ -63,12 +63,20 @@ class NoOptionsAdb implements AdbDevice {
 }
 
 function makeController(device: AdbDevice): Controller {
-  return new Controller(async () => device, new Store(memoryBackend()), async () => {});
+  return new Controller(
+    async () => device,
+    new Store(memoryBackend()),
+    async () => {},
+  );
 }
 
 describe("downloadGpx surfaces mid-flow export failures", () => {
   it("reports the failing ride via onFail instead of silently skipping it", async () => {
-    const app = await BeelineApp.create(new NoOptionsAdb(new DemoAdb()), PROFILES.normal, instant);
+    const app = await BeelineApp.create(
+      new NoOptionsAdb(new DemoAdb()),
+      PROFILES.normal,
+      instant,
+    );
     const key = "Sat Jun 13 2026 at 14:22";
 
     const failed: Array<{ key: string; reason: string }> = [];

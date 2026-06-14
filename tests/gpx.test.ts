@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { DemoAdb } from "../src/adb/demo";
 import type { AdbDevice, Size } from "../src/adb/types";
-import { BeelineApp, DOWNLOAD_DIR, gpxDownloadName, gpxFilename, PROFILES } from "../src/beeline";
+import {
+  BeelineApp,
+  DOWNLOAD_DIR,
+  gpxDownloadName,
+  gpxFilename,
+  PROFILES,
+} from "../src/beeline";
 import { findOptionsButton } from "../src/parsing";
 
 const instant = async (): Promise<void> => {};
@@ -71,7 +77,9 @@ class SymlinkedSdcardAdb implements AdbDevice {
  */
 const DL = "/sdcard/Download";
 class SafDedupAdb implements AdbDevice {
-  private fs = new Map<string, Uint8Array>([[`${DL}/ride.gpx`, new TextEncoder().encode("seed")]]);
+  private fs = new Map<string, Uint8Array>([
+    [`${DL}/ride.gpx`, new TextEncoder().encode("seed")],
+  ]);
   private imported = new Set<string>();
   private counter = 0;
   constructor(private readonly inner: DemoAdb) {}
@@ -109,7 +117,10 @@ class SafDedupAdb implements AdbDevice {
   /** Pull any GPX the inner demo just "saved" into our FS under a SAF-deduped name. */
   private async syncFromInner(): Promise<void> {
     const listing = await this.inner.shell(`ls -1 ${DL}`);
-    for (const name of listing.split("\n").map((s) => s.trim()).filter(Boolean)) {
+    for (const name of listing
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean)) {
       if (!name.toLowerCase().endsWith(".gpx") || this.imported.has(name)) continue;
       this.imported.add(name);
       const bytes = await this.inner.readFile(`${DL}/${name}`);
@@ -142,7 +153,7 @@ class SafDedupAdb implements AdbDevice {
       return "";
     }
     if (/\bls\b/.test(command)) {
-      return [...this.fs.keys()].map((p) => p.split("/").pop()).join("\n") + "\n";
+      return `${[...this.fs.keys()].map((p) => p.split("/").pop()).join("\n")}\n`;
     }
     return "";
   }
@@ -158,7 +169,9 @@ class SafDedupAdb implements AdbDevice {
 
 describe("gpxFilename", () => {
   it("derives a stable, slugified name from the ride key", () => {
-    expect(gpxFilename("Sat Jun 13 2026 at 14:22")).toBe("Beeline-Sat-Jun-13-2026-at-14-22.gpx");
+    expect(gpxFilename("Sat Jun 13 2026 at 14:22")).toBe(
+      "Beeline-Sat-Jun-13-2026-at-14-22.gpx",
+    );
   });
 
   it("maps different rides to different names and the same ride to one name", () => {
@@ -227,7 +240,11 @@ describe("downloadGpx (export flow)", () => {
 
   it("finds the export when /sdcard is a symlink to /storage/emulated/0", async () => {
     const demo = new DemoAdb();
-    const app = await BeelineApp.create(new SymlinkedSdcardAdb(demo), PROFILES.normal, instant);
+    const app = await BeelineApp.create(
+      new SymlinkedSdcardAdb(demo),
+      PROFILES.normal,
+      instant,
+    );
     const key = "Sat Jun 13 2026 at 14:22";
 
     const files = await app.downloadGpx(new Set([key]));
@@ -238,7 +255,11 @@ describe("downloadGpx (export flow)", () => {
   });
 
   it("detects a SAF-deduplicated export named 'ride.gpx (N)'", async () => {
-    const app = await BeelineApp.create(new SafDedupAdb(new DemoAdb()), PROFILES.normal, instant);
+    const app = await BeelineApp.create(
+      new SafDedupAdb(new DemoAdb()),
+      PROFILES.normal,
+      instant,
+    );
     const key = "Sat Jun 13 2026 at 14:22";
 
     const files = await app.downloadGpx(new Set([key]));

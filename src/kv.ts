@@ -69,7 +69,8 @@ export function idbBackend(): KeyValueStore {
           const tx = database.transaction(STORE_NAME, mode);
           const request = op(tx.objectStore(STORE_NAME));
           request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
+          request.onerror = () =>
+            reject(request.error ?? new Error("IndexedDB request failed"));
         }),
     );
   }

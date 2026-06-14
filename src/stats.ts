@@ -17,7 +17,6 @@ import { bucketRide, parseDurationSec, parseKm, parseMeters } from "./parsing";
 // existing stats-focused tests and callers can keep importing them from here.
 export { parseKm, parseLocaleNumber, parseMeters } from "./parsing";
 
-
 /** The slice of a ride record this module needs (a structural subset of RideView). */
 export interface StatsRide {
   key: string;
@@ -65,12 +64,15 @@ export interface RideStats {
 
 /** A ride's distance in km: prefer the detail's "Distance", fall back to the summary, then the measured track. */
 function rideKm(r: StatsRide): number {
-  const fromText = parseKm((r.stats && r.stats["Distance"]) || r.distance || "");
+  const fromText = parseKm(r.stats?.Distance || r.distance || "");
   return fromText > 0 ? fromText : r.track_km > 0 ? r.track_km : 0;
 }
 
 /** Best (highest-distance) bucket at one granularity, or null when nothing is datable. */
-function bestPeriod(rides: ReadonlyArray<StatsRide>, gran: "day" | "week" | "month"): PeriodRecord | null {
+function bestPeriod(
+  rides: ReadonlyArray<StatsRide>,
+  gran: "day" | "week" | "month",
+): PeriodRecord | null {
   const byBucket = new Map<string, PeriodRecord>();
   for (const r of rides) {
     const km = rideKm(r);
@@ -106,8 +108,8 @@ export function computeStats(rides: ReadonlyArray<StatsRide>): RideStats {
   for (const r of live) {
     const km = rideKm(r);
     totalKm += km;
-    totalMovingSec += parseDurationSec((r.stats && r.stats["Moving time"]) || "");
-    totalElevationM += parseMeters((r.stats && r.stats["Elevation gain"]) || "");
+    totalMovingSec += parseDurationSec(r.stats?.["Moving time"] || "");
+    totalElevationM += parseMeters(r.stats?.["Elevation gain"] || "");
     if (km > 0 && (!biggestRide || km > biggestRide.km)) biggestRide = { key: r.key, km };
   }
 

@@ -54,7 +54,7 @@ export interface AdbDevice {
  * as '\''. Essential because pulled GPX filenames contain spaces.
  */
 export function shellQuote(value: string): string {
-  return "'" + value.replace(/'/g, "'\\''") + "'";
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 /** Sleep helper used by the orchestration layer; injectable for fast tests. */

@@ -69,7 +69,8 @@ export function matchesFilters(f: Filters, r: RideView): boolean {
   // (a deleted ride is never pending work); "other" = processing/unknown.
   if (f.status === "pending" && !(r.status === "pending" && !r.deleted)) return false;
   if (f.status === "uploaded" && r.status !== "uploaded") return false;
-  if (f.status === "other" && (r.status === "pending" || r.status === "uploaded")) return false;
+  if (f.status === "other" && (r.status === "pending" || r.status === "uploaded"))
+    return false;
 
   // Route-preview presence.
   const hasGps = r.track.length > 0;
@@ -87,7 +88,8 @@ export function matchesFilters(f: Filters, r: RideView): boolean {
 
   // Source device the ride was scanned from.
   if (f.device === "__none__" && r.device_model) return false;
-  if (f.device !== "all" && f.device !== "__none__" && r.device_model !== f.device) return false;
+  if (f.device !== "all" && f.device !== "__none__" && r.device_model !== f.device)
+    return false;
 
   // Distance band (km). A ride with no parseable distance counts as 0, so it
   // drops out once a lower bound is set but survives an upper-only bound.

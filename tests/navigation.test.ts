@@ -298,10 +298,7 @@ describe("sequential batch order (one monotonic pass)", () => {
     // Targets straddle the parked view: one just BELOW (near), one far ABOVE.
     // A minimal-movement sweep heads to the nearer (below) target first, then makes
     // one reversal upward to the far target — never the far end first.
-    const details = await app.processTargets(
-      new Set([rides[4].key, rides[34].key]),
-      false,
-    );
+    const details = await app.processTargets(new Set([rides[4].key, rides[34].key]), false);
 
     expect(details.map((d) => d.key)).toEqual([
       rides[34].key, // nearer (just below the parked view) — visited first

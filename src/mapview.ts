@@ -112,7 +112,11 @@ export function dateRange(rides: RideView[]): DateRange | null {
  * the slider. Deleted rides pass through untouched (downstream `ridesWithTracks`
  * is what drops them), so callers can reuse this for both the map and side panel.
  */
-export function filterRidesByRange(rides: RideView[], fromMs: number, toMs: number): RideView[] {
+export function filterRidesByRange(
+  rides: RideView[],
+  fromMs: number,
+  toMs: number,
+): RideView[] {
   return rides.filter((r) => {
     const dt = rideDatetime(r.key);
     if (!dt) return true;
@@ -151,7 +155,11 @@ export function distToTrackPx(cursor: PixelPoint, pts: PixelPoint[]): number {
  * multiple results mean several rides overlap there (which the caller lists in
  * the side panel so the user can tell them apart).
  */
-export function nearestRides(projected: ProjectedTrack[], cursor: PixelPoint, thresholdPx: number): string[] {
+export function nearestRides(
+  projected: ProjectedTrack[],
+  cursor: PixelPoint,
+  thresholdPx: number,
+): string[] {
   const hits: Array<{ key: string; dist: number }> = [];
   for (const track of projected) {
     const d = distToTrackPx(cursor, track.pts);

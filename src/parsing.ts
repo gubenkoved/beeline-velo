@@ -200,7 +200,8 @@ export function parseRideDetail(xml: string): RideDetail {
     let best: TextNode | null = null;
     let bestGap = Infinity;
     for (const cand of nodes) {
-      if (cand === dtNode || DATETIME_RE.test(cand.text) || TITLE_SKIP.has(cand.text)) continue;
+      if (cand === dtNode || DATETIME_RE.test(cand.text) || TITLE_SKIP.has(cand.text))
+        continue;
       if (looksLikeStat(cand.text)) continue;
       const gap = dtNode.bounds.top - cand.bounds.bottom;
       if (gap < 0 || gap > 90) continue;
@@ -236,13 +237,14 @@ export function parseRideDetail(xml: string): RideDetail {
   if (actionNodes.length) {
     const strava = actionNodes[0];
     detail.stravaTap = strava.bounds;
-    detail.stravaStatus = (
-      {
-        [STRAVA_PENDING]: "pending",
-        [STRAVA_PROCESSING]: "processing",
-        [STRAVA_UPLOADED]: "uploaded",
-      } as Record<string, StravaStatus>
-    )[strava.text] ?? "unknown";
+    detail.stravaStatus =
+      (
+        {
+          [STRAVA_PENDING]: "pending",
+          [STRAVA_PROCESSING]: "processing",
+          [STRAVA_UPLOADED]: "uploaded",
+        } as Record<string, StravaStatus>
+      )[strava.text] ?? "unknown";
   }
   return detail;
 }
@@ -307,7 +309,9 @@ const TITLE_SKIP = new Set<string>(["Options"]);
 /** First text node whose trimmed text matches `matcher` (string = exact, else regex). */
 export function findNodeByText(xml: string, matcher: string | RegExp): Bounds | null {
   const test =
-    typeof matcher === "string" ? (t: string) => t === matcher : (t: string) => matcher.test(t);
+    typeof matcher === "string"
+      ? (t: string) => t === matcher
+      : (t: string) => matcher.test(t);
   for (const n of textNodes(xml)) {
     if (test(n.text)) return n.bounds;
   }
@@ -463,7 +467,11 @@ export function bucketRide(key: string, gran: Granularity): [string, string, str
     const s = startOfWeek(dt);
     const sortKey = `${s.getFullYear()}-${pad2(s.getMonth() + 1)}-${pad2(s.getDate())}`;
     const sAbbr = MONTHS[s.getMonth()].slice(0, 3);
-    return [sortKey, `Week of ${sAbbr} ${s.getDate()}, ${s.getFullYear()}`, `${sAbbr} ${s.getDate()}`];
+    return [
+      sortKey,
+      `Week of ${sAbbr} ${s.getDate()}, ${s.getFullYear()}`,
+      `${sAbbr} ${s.getDate()}`,
+    ];
   }
   // day
   const sortKey = `${y}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
@@ -611,7 +619,7 @@ export function autoGranularity(rides: ReadonlyArray<{ key: string }>): Granular
     if (t < min) min = t;
     if (t > max) max = t;
   }
-  if (!isFinite(min) || !isFinite(max)) return "month";
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return "month";
   const days = (max - min) / 86_400_000;
   if (days <= 21) return "day";
   if (days <= 120) return "week";

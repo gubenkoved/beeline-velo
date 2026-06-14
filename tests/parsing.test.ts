@@ -97,7 +97,7 @@ describe("parseRideDetail", () => {
 
   it("parses the stats grid", () => {
     const s = parseRideDetail(read("14_ride_scrolled.xml")).stats;
-    expect(s["Distance"]).toBe("22.6km");
+    expect(s.Distance).toBe("22.6km");
     expect(s["Average speed"]).toBe("20.0km/h");
     expect(s["Max speed"]).toBe("57.0km/h");
     expect(s["Moving time"]).toBe("1:07:42");
@@ -111,7 +111,7 @@ describe("parseRideDetail", () => {
     expect(d.key).toBe("Fri May 30 2025 at 08:45");
     expect(d.title).toBe("Morning ride, Kaatsheuvel");
     // Each value must pair with its own label, not a neighbouring stat's.
-    expect(d.stats["Distance"]).toBe("13,5km");
+    expect(d.stats.Distance).toBe("13,5km");
     expect(d.stats["Average speed"]).toBe("20,0km/h");
     expect(d.stats["Max speed"]).toBe("33,4km/h");
     expect(d.stats["Moving time"]).toBe("40:28");
@@ -184,13 +184,21 @@ describe("date helpers", () => {
   it("autoGranularity picks resolution from the date span", () => {
     const day = (k: string): { key: string } => ({ key: k });
     // ~2 weeks -> day
-    expect(autoGranularity([day("Mon Jun 1 2026 at 10:00"), day("Sat Jun 13 2026 at 14:22")])).toBe("day");
+    expect(
+      autoGranularity([day("Mon Jun 1 2026 at 10:00"), day("Sat Jun 13 2026 at 14:22")]),
+    ).toBe("day");
     // ~2 months -> week
-    expect(autoGranularity([day("Wed Apr 15 2026 at 10:00"), day("Sat Jun 13 2026 at 14:22")])).toBe("week");
+    expect(
+      autoGranularity([day("Wed Apr 15 2026 at 10:00"), day("Sat Jun 13 2026 at 14:22")]),
+    ).toBe("week");
     // ~1.5 years -> month
-    expect(autoGranularity([day("Sun Jan 1 2025 at 10:00"), day("Sat Jun 13 2026 at 14:22")])).toBe("month");
+    expect(
+      autoGranularity([day("Sun Jan 1 2025 at 10:00"), day("Sat Jun 13 2026 at 14:22")]),
+    ).toBe("month");
     // ~5 years -> year
-    expect(autoGranularity([day("Mon Jan 1 2021 at 10:00"), day("Sat Jun 13 2026 at 14:22")])).toBe("year");
+    expect(
+      autoGranularity([day("Mon Jan 1 2021 at 10:00"), day("Sat Jun 13 2026 at 14:22")]),
+    ).toBe("year");
     // no parseable dates -> month
     expect(autoGranularity([day("garbage")])).toBe("month");
   });

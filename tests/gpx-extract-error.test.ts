@@ -18,7 +18,11 @@ import { memoryBackend } from "../src/kv";
 import { Store } from "../src/store";
 
 function makeController(device: AdbDevice): Controller {
-  return new Controller(async () => device, new Store(memoryBackend()), async () => {});
+  return new Controller(
+    async () => device,
+    new Store(memoryBackend()),
+    async () => {},
+  );
 }
 
 describe("download-gpx surfaces extraction failures", () => {

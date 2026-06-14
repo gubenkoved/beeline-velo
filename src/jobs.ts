@@ -98,13 +98,9 @@ export class JobQueue {
     kind: TaskKind,
     opts: { label?: string; keys?: string[]; payload?: Record<string, unknown> } = {},
   ): TaskSnapshot {
-    const task = new Task(
-      ++this.counter,
-      kind,
-      opts.label ?? "",
-      [...(opts.keys ?? [])],
-      { ...(opts.payload ?? {}) },
-    );
+    const task = new Task(++this.counter, kind, opts.label ?? "", [...(opts.keys ?? [])], {
+      ...(opts.payload ?? {}),
+    });
     this.queue.push(task);
     this.onChange();
     // Defer draining to a microtask so a synchronous burst of submits accumulates
@@ -228,7 +224,8 @@ export class JobQueue {
           task.status = this.cancelCurrent ? "cancelled" : "done";
         } catch (exc) {
           task.status = "error";
-          task.error = exc instanceof Error ? `${exc.message}\n${exc.stack ?? ""}` : String(exc);
+          task.error =
+            exc instanceof Error ? `${exc.message}\n${exc.stack ?? ""}` : String(exc);
         } finally {
           task.finished_at = Date.now() / 1000;
           this.history.unshift(task);

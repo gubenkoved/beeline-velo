@@ -8,20 +8,20 @@
  * controller emits a "change" event whenever anything moves, and the UI re-renders.
  */
 
-import { AdbError, realSleep, type AdbDevice, type Sleep } from "./adb/types";
-import { BeelineApp, DEFAULT_PROFILE, PROFILES, type GpxFile } from "./beeline";
+import { type AdbDevice, AdbError, realSleep, type Sleep } from "./adb/types";
+import { BeelineApp, DEFAULT_PROFILE, type GpxFile, PROFILES } from "./beeline";
 import { JobQueue, type JobsSnapshot, type Report, type Task } from "./jobs";
 import {
   parseDurationSec,
   parseKm,
   parseKmh,
   parseMeters,
+  type RideDetail,
   rideDatetime,
   rideMonth,
   sinceFromPreset,
-  type RideDetail,
 } from "./parsing";
-import { monthKey, monthLabel, Store, type Settings, type UpsertFields } from "./store";
+import { monthKey, monthLabel, type Settings, type Store, type UpsertFields } from "./store";
 import { gpxToRoughTrack } from "./track";
 
 export interface RideView {
@@ -103,7 +103,10 @@ export class Controller {
     private readonly sleep: Sleep = realSleep,
   ) {
     this.store = store;
-    this.jobs = new JobQueue((task, report) => this.runTask(task, report), () => this.notify());
+    this.jobs = new JobQueue(
+      (task, report) => this.runTask(task, report),
+      () => this.notify(),
+    );
   }
 
   // -- change notification ----------------------------------------------
@@ -172,6 +175,7 @@ export class Controller {
 
   private appFor(): Promise<BeelineApp> {
     if (this.app) return Promise.resolve(this.app);
+    // biome-ignore lint/nursery/noMisusedPromises: presence check on the nullable in-flight init lock to coalesce concurrent callers — we return the pending promise, not await its truthiness.
     if (this.appLock) return this.appLock;
     this.appLock = (async () => {
       if (!this.device) {
@@ -208,7 +212,7 @@ export class Controller {
       // Normalize every numeric figure here, once, via the canonical locale-aware
       // parsers — this is the boundary where localized phone strings become the
       // numbers the rest of the app computes and displays from.
-      const reportedKm = parseKm((stats && stats["Distance"]) || r.distance || "");
+      const reportedKm = parseKm(stats?.Distance || r.distance || "");
       const distance_km = reportedKm > 0 ? reportedKm : r.track_km > 0 ? r.track_km : 0;
       return {
         key: r.key,
@@ -224,12 +228,12 @@ export class Controller {
         track_km: r.track_km,
         track_bytes: r.track_bytes,
         distance_km,
-        avg_speed_kmh: parseKmh((stats && stats["Average speed"]) || ""),
-        max_speed_kmh: parseKmh((stats && stats["Max speed"]) || ""),
-        moving_sec: parseDurationSec((stats && stats["Moving time"]) || ""),
-        elapsed_sec: parseDurationSec((stats && stats["Elapsed time"]) || ""),
-        elevation_gain_m: parseMeters((stats && stats["Elevation gain"]) || ""),
-        elevation_loss_m: parseMeters((stats && stats["Elevation loss"]) || ""),
+        avg_speed_kmh: parseKmh(stats?.["Average speed"] || ""),
+        max_speed_kmh: parseKmh(stats?.["Max speed"] || ""),
+        moving_sec: parseDurationSec(stats?.["Moving time"] || ""),
+        elapsed_sec: parseDurationSec(stats?.["Elapsed time"] || ""),
+        elevation_gain_m: parseMeters(stats?.["Elevation gain"] || ""),
+        elevation_loss_m: parseMeters(stats?.["Elevation loss"] || ""),
         device_model: r.device_model,
         month_key: monthKey(r),
         month_label: monthLabel(r),
@@ -271,24 +275,20 @@ export class Controller {
     };
     rep(`scanning (${label})…`);
     const seen = new Set<string>();
-    const { cards, complete } = await app.enumerateCatalog(
-      rep,
-      since,
-      (fresh) => {
-        // Persist and surface each page of rides the moment they are found.
-        for (const c of fresh) {
-          seen.add(c.key);
-          this.store.upsert(c.key, {
-            ...this.deviceFields(),
-            title_base: c.title,
-            distance: c.distance,
-            duration: c.duration,
-          });
-        }
-        this.store.save();
-        this.notify();
-      },
-    );
+    const { cards, complete } = await app.enumerateCatalog(rep, since, (fresh) => {
+      // Persist and surface each page of rides the moment they are found.
+      for (const c of fresh) {
+        seen.add(c.key);
+        this.store.upsert(c.key, {
+          ...this.deviceFields(),
+          title_base: c.title,
+          distance: c.distance,
+          duration: c.duration,
+        });
+      }
+      this.store.save();
+      this.notify();
+    });
     // A scan reads the COMPLETE list for its window, so any ride we knew about
     // within that window but did not see has been deleted on the phone. Only
     // reconcile when the scan both ran to completion AND was verified to have read
@@ -340,7 +340,8 @@ export class Controller {
       },
     );
     const suffix = removed ? `, ${removed} deleted` : "";
-    if (doUpload) report(`done: ${uploaded} now on Strava (${details.length} processed)${suffix}`);
+    if (doUpload)
+      report(`done: ${uploaded} now on Strava (${details.length} processed)${suffix}`);
     else report(`checked ${details.length} rides${suffix}`);
   }
 
@@ -358,7 +359,7 @@ export class Controller {
       strava_status: d.stravaStatus,
       stats: d.stats,
     };
-    if (!cur?.distance && d.stats["Distance"]) fields.distance = d.stats["Distance"];
+    if (!cur?.distance && d.stats.Distance) fields.distance = d.stats.Distance;
     if (!cur?.duration) {
       const dur = d.stats["Elapsed time"] || d.stats["Moving time"];
       if (dur) fields.duration = dur;
@@ -445,7 +446,10 @@ export class Controller {
     // single choke point every caller funnels through (per-ride, selection, month, year,
     // all-pending), so no UI path can submit a duplicate upload.
     const fresh = keys.filter((k) => this.store.rides.get(k)?.strava_status !== "uploaded");
-    return this.jobs.submit("upload", { label: label || `${fresh.length} rides`, keys: fresh });
+    return this.jobs.submit("upload", {
+      label: label || `${fresh.length} rides`,
+      keys: fresh,
+    });
   }
 
   /**

@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildHeatPoints,
   densifyTrack,
+  type HeatPoint,
   metresPerPixel,
   spacingForZoom,
-  type HeatPoint,
 } from "../src/heatmap";
 import type { RideTrack } from "../src/mapview";
 import type { LatLon } from "../src/track";
@@ -54,7 +54,12 @@ describe("buildHeatPoints", () => {
   const track = (key: string, points: LatLon[]): RideTrack => ({ key, title: key, points });
 
   it("emits weighted [lat, lon, weight] samples for every track", () => {
-    const tracks = [track("a", [[52.0, 4.0], [52.005, 4.0]])];
+    const tracks = [
+      track("a", [
+        [52.0, 4.0],
+        [52.005, 4.0],
+      ]),
+    ];
     const pts = buildHeatPoints(tracks, 100, 1);
     expect(pts.length).toBeGreaterThan(1);
     for (const p of pts as HeatPoint[]) {
@@ -76,7 +81,8 @@ describe("buildHeatPoints", () => {
     const twiceRidden = buildHeatPoints([track("a", corridor), track("b", corridor)], 50);
     // Two passes over the same corridor yield strictly more samples there, which
     // is what makes a frequently-ridden stretch glow hotter than a one-off.
-    const near = (p: HeatPoint) => Math.abs(p[0] - 52.01) < 0.02 && Math.abs(p[1] - 4.0) < 0.01;
+    const near = (p: HeatPoint) =>
+      Math.abs(p[0] - 52.01) < 0.02 && Math.abs(p[1] - 4.0) < 0.01;
     const onceCount = (onceRidden as HeatPoint[]).filter(near).length;
     const twiceCount = (twiceRidden as HeatPoint[]).filter(near).length;
     expect(twiceCount).toBeGreaterThan(onceCount);
@@ -103,7 +109,16 @@ describe("buildHeatPoints", () => {
   });
 
   it("scales sample weight so callers can keep glow energy constant", () => {
-    const pts = buildHeatPoints([track("a", [[52.0, 4.0], [52.005, 4.0]])], 50, 0.25);
+    const pts = buildHeatPoints(
+      [
+        track("a", [
+          [52.0, 4.0],
+          [52.005, 4.0],
+        ]),
+      ],
+      50,
+      0.25,
+    );
     for (const p of pts as HeatPoint[]) expect(p[2]).toBe(0.25);
   });
 });

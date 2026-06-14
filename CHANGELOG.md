@@ -17,6 +17,24 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Add Biome (format + lint) and a CI gate that runs type-check + lint + tests
+
+- **What:** Adopted Biome 2.5 as the formatter and linter (`biome.json`), reformatted the
+  whole codebase once, and added `lint`/`format`/`check`/`check:fix`/`verify` npm scripts.
+  Enabled the type-aware async-safety rules `noFloatingPromises` and `noMisusedPromises` as
+  errors (verified the scanner actually flags an unawaited Promise); kept the recommended
+  set but turned off rules that fight this app's deliberate, safe patterns
+  (`noNonNullAssertion` for the DOM `!` style, `useButtonType` since the SPA has no `<form>`,
+  `noDescendingSpecificity` for the hand-authored cascade) and downgraded the noisy
+  `useIterableCallbackReturn` to a warning. Fixed the one real `noVoidTypeReturn` and added
+  two narrowly-scoped `biome-ignore`s (deliberate control-char filename sanitizer; nullable
+  init-lock presence check). New `.github/workflows/ci.yml` runs `npm run verify` on PRs and
+  non-`main` pushes; the existing Pages deploy workflow is unchanged.
+- **Why:** LLM-driven edits need a safety net the type-checker can't give — above all
+  catching a dropped `await` on a `uiDump`/tap that would silently break a sweep — and the
+  repo previously ran no linter, no formatter, and never ran tests in CI (build ran only on
+  push to `main`). This makes correctness checks enforceable and gates them on every PR.
+
 ## Disable per-ride "Upload to Strava" when already uploaded
 
 - **What:** The per-ride Upload to Strava button is now rendered `disabled` (with an
