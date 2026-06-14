@@ -18,6 +18,9 @@ import { WebUsbAdb } from "./adb/webusb";
 import { Controller, type AppState, type RideView } from "./controller";
 import { ridesWithTracks, nearestRides, type PixelPoint, type ProjectedTrack, type RideTrack } from "./mapview";
 import { autoGranularity, bucketRide, compareRideKeysDesc, parseDurationSec, rideShortLabel, trimmedSpeed, type Granularity } from "./parsing";
+import { computeStats, type PeriodRecord } from "./stats";
+import { buildHeatPoints } from "./heatmap";
+import "leaflet.heat";
 import { LEGACY_STORAGE_KEY, STORAGE_KEY, Store } from "./store";
 import { decodePolyline } from "./track";
 
@@ -215,11 +218,12 @@ function escHtml(s: string): string {
 // Top-level view ("Explore" = the rides list/stats; "Map" = all-rides heatmap).
 // Remembered across reloads; defaults to Explore on first run.
 // --------------------------------------------------------------------------- //
-type ViewName = "explore" | "map";
+type ViewName = "explore" | "map" | "stats";
 const VIEW_KEY = "beeline_uploader.view";
 const readView = (): ViewName => {
   try {
-    return localStorage.getItem(VIEW_KEY) === "map" ? "map" : "explore";
+    const v = localStorage.getItem(VIEW_KEY);
+    return v === "map" || v === "stats" ? v : "explore";
   } catch {
     return "explore";
   }
@@ -562,9 +566,11 @@ function mountAllRidesMap(): void {
 /** Reflect the active view in the DOM (visibility, tab state, scan bar). */
 function applyView(): void {
   const isMap = activeView === "map";
-  document.getElementById("exploreView")?.classList.toggle("hidden", isMap);
+  const isStats = activeView === "stats";
+  document.getElementById("exploreView")?.classList.toggle("hidden", isMap || isStats);
   document.getElementById("mapView")?.classList.toggle("hidden", !isMap);
-  document.getElementById("scanbar")?.classList.toggle("hidden", isMap);
+  document.getElementById("statsView")?.classList.toggle("hidden", !isStats);
+  document.getElementById("scanbar")?.classList.toggle("hidden", isMap || isStats);
   if (!isMap && document.body.classList.contains("map-expanded")) setMapExpanded(false);
   document
     .querySelectorAll<HTMLButtonElement>("#viewTabs .vtab")
@@ -594,6 +600,123 @@ function setMapExpanded(on: boolean): void {
     allRidesMap?.invalidateSize();
     reprojectTracks();
   });
+}
+
+
+// --------------------------------------------------------------------------- //
+// Stats view — lifetime totals, distance records and a route-frequency heatmap.
+// Totals/records come from the cheap per-ride scalars (computeStats); the heatmap
+// resamples every track to evenly-spaced points so often-ridden corridors glow
+// far brighter than the Map view's translucent line stacking ever could.
+// --------------------------------------------------------------------------- //
+let freqHeatMap: L.Map | null = null;
+let freqHeatLayer: L.Layer | null = null;
+let lastHeatSig = "";
+
+/** Whole hours-and-minutes label for a duration, e.g. "12h 30m" or "45m". */
+function fmtDuration(totalSec: number): string {
+  const mins = Math.round(totalSec / 60);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
+}
+
+/** Compact metres/kilometres label for an elevation total. */
+function fmtElevation(m: number): string {
+  return m >= 1000 ? (m / 1000).toFixed(1) + "k m" : Math.round(m) + " m";
+}
+
+/** One totals/record card: a big value, a label, and an optional sub-line. */
+function statCard(value: string, label: string, sub = ""): string {
+  const subHtml = sub ? `<span class="sc-sub">${escHtml(sub)}</span>` : "";
+  return (
+    `<div class="stat-card"><b class="sc-val">${escHtml(value)}</b>` +
+    `<span class="sc-label">${escHtml(label)}</span>${subHtml}</div>`
+  );
+}
+
+/** Record card for a best period (muted placeholder when there's no data). */
+function periodCard(rec: PeriodRecord | null, label: string): string {
+  if (!rec) return statCard("—", label);
+  return statCard(fmtKm(rec.km), label, `${rec.label} · ${rec.count} ride${rec.count === 1 ? "" : "s"}`);
+}
+
+/** Render the Stats view: totals, records and the route-frequency heatmap. */
+function mountStatsView(): void {
+  const live = STATE.rides.filter((r) => !r.deleted);
+  document.getElementById("statsEmpty")?.classList.toggle("hidden", live.length > 0);
+  document.getElementById("statsBody")?.classList.toggle("hidden", live.length === 0);
+  if (live.length === 0) return;
+
+  const s = computeStats(STATE.rides);
+  const totals = document.getElementById("statsTotals");
+  if (totals) {
+    totals.innerHTML = [
+      statCard(fmtKm(s.totalKm), "total distance"),
+      statCard(fmtDuration(s.totalMovingSec), "moving time"),
+      statCard(fmtElevation(s.totalElevationM), "elevation gain"),
+      statCard(String(s.rideCount), s.rideCount === 1 ? "ride" : "rides"),
+    ].join("");
+  }
+  const records = document.getElementById("statsRecords");
+  if (records) {
+    const biggest = s.biggestRide
+      ? statCard(fmtKm(s.biggestRide.km), "biggest ride", rideShortLabel(s.biggestRide.key) || s.biggestRide.key)
+      : statCard("—", "biggest ride");
+    records.innerHTML = [
+      biggest,
+      periodCard(s.bestDay, "best day"),
+      periodCard(s.bestWeek, "best week"),
+      periodCard(s.bestMonth, "best month"),
+    ].join("");
+  }
+  mountFreqHeatmap();
+}
+
+/** (Re)draw the route-frequency heatmap for the current tracks; lazily creates the map. */
+function mountFreqHeatmap(): void {
+  const host = document.getElementById("freqHeatMap");
+  if (!host) return;
+  const { tracks, missing } = ridesWithTracks(STATE.rides);
+  const note = document.getElementById("statsHeatNote");
+  if (note) {
+    note.textContent = tracks.length
+      ? ` ${tracks.length} route${tracks.length === 1 ? "" : "s"}` +
+        (missing ? ` · ${missing} without a downloaded route` : "")
+      : " no downloaded routes yet — press GPX on a ride in Explore";
+  }
+
+  if (!freqHeatMap) {
+    freqHeatMap = L.map(host, { attributionControl: true, zoomControl: true, fadeAnimation: false });
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "© OpenStreetMap",
+      className: "map-tiles",
+    }).addTo(freqHeatMap);
+    freqHeatMap.setView([20, 0], 2); // sane default until the first track is drawn
+  }
+
+  const sig = tracks.map((t) => t.key).join("|");
+  if (sig !== lastHeatSig) {
+    lastHeatSig = sig;
+    if (freqHeatLayer) {
+      freqHeatMap.removeLayer(freqHeatLayer);
+      freqHeatLayer = null;
+    }
+    const pts = buildHeatPoints(tracks);
+    if (pts.length) {
+      freqHeatLayer = L.heatLayer(pts as [number, number, number][], {
+        radius: 12,
+        blur: 14,
+        minOpacity: 0.25,
+        gradient: { 0.0: "#1e3a8a", 0.4: "#22d3ee", 0.7: "#facc15", 1.0: "#f97316" },
+      }).addTo(freqHeatMap);
+      const all = tracks.flatMap((t) => t.points) as L.LatLngExpression[];
+      if (all.length) freqHeatMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
+    }
+  }
+  // The container is only correctly sized once its view becomes visible.
+  setTimeout(() => freqHeatMap!.invalidateSize(), 0);
 }
 
 
@@ -1037,6 +1160,7 @@ function render(): void {
   }
   renderJob();
   if (activeView === "map") mountAllRidesMap();
+  else if (activeView === "stats") mountStatsView();
   else mountMaps();
   // The selection toolbar's GPX split button lives in static markup (not rebuilt
   // here), so sync its open state from the shared `openMenu` flag.

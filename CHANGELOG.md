@@ -17,6 +17,19 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Stats view: lifetime totals, distance records and a route-frequency heatmap
+- **What:** Added a third top-level tab ("Stats") next to Explore and Map. It shows
+  lifetime totals (distance, moving time, elevation gain, ride count), distance-based
+  records (biggest ride, best day/week/month), and a dedicated route-frequency heatmap.
+  New pure modules `src/stats.ts` (`computeStats`) and `src/heatmap.ts` (`densifyTrack`/
+  `buildHeatPoints`) carry the logic, with `leaflet.heat` rendering the map; covered by
+  `tests/stats.test.ts` and `tests/heatmap.test.ts`.
+- **Why:** The Map view's translucent overlapping lines only hint at how often a stretch is
+  ridden. Resampling every track to evenly-spaced points feeds a true heat layer, so a daily
+  commute glows while a one-off stays faint — answering "where, and how frequently" at a
+  glance. Totals/records reuse the cheap per-ride scalars we already parse (no track decode),
+  keeping the page fast and the new compute trivially unit-testable.
+
 ## Fix the "Up next" disclosure arrow alignment
 - **What:** The queue toggle no longer swaps two different inline triangle glyphs
   (`▸`/`▾`); it now renders the plain "Up next (N)" label with a single `::before`

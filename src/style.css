@@ -344,8 +344,36 @@ details.help kbd { background: var(--line); border-radius: 4px; padding: 1px 5px
   border-radius: 9px; padding: 7px 16px; font-size: 13.5px; font-weight: 600; }
 .vtab:hover:not(.active) { background: #222732; border-color: #333b48; }
 .vtab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-#mapView.hidden, #exploreView.hidden { display: none; }
+#mapView.hidden, #exploreView.hidden, #statsView.hidden { display: none; }
 #scanbar.hidden { display: none; }
+
+/* -- stats view (totals / records / route-frequency heatmap) -------------- */
+.stats-empty { color: var(--muted); font-size: 13px; line-height: 1.7;
+  border: 1px dashed var(--line); border-radius: var(--radius);
+  padding: 22px 18px; max-width: 640px; }
+.stats-body.hidden, .stats-empty.hidden { display: none; }
+.stats-section { margin: 0 0 22px; }
+.stats-h { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 11px; font-size: 14px; font-weight: 650; }
+.stats-h .stats-sub { color: var(--muted); font-size: 12px; font-weight: 400; }
+.stats-cards { display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.stat-card { background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 13px 15px; display: flex; flex-direction: column;
+  gap: 3px; min-width: 0; }
+.stat-card .sc-val { font-size: 24px; font-weight: 700; line-height: 1.1;
+  color: var(--text); letter-spacing: -.01em; }
+.stat-card .sc-label { font-size: 12px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .04em; }
+.stat-card .sc-sub { font-size: 12px; color: var(--text); opacity: .85;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.freq-wrap { height: calc(100vh - 430px); min-height: 360px; }
+#freqHeatMap { height: 100%; border-radius: var(--radius); overflow: hidden;
+  border: 1px solid var(--line); background: var(--bg); isolation: isolate; }
+#freqHeatMap .leaflet-container { height: 100%; width: 100%; background: #05070a; }
+/* Keep the dark, desaturated basemap treatment in sync with the Map view. */
+#freqHeatMap .leaflet-tile-pane { filter: grayscale(85%) brightness(.6) contrast(1.1); }
+
 
 /* -- all-rides heatmap (Map view) ----------------------------------------- */
 .map-wrap { display: grid; grid-template-columns: 1fr 280px; gap: 12px;

@@ -72,6 +72,7 @@
   <div class="viewtabs" id="viewTabs" role="tablist">
     <button class="vtab active" data-view="explore" role="tab">Explore</button>
     <button class="vtab" data-view="map" role="tab">Map</button>
+    <button class="vtab" data-view="stats" role="tab">Stats</button>
   </div>
   <div class="notice" id="demoNotice">
     <span>🧪</span>
@@ -136,6 +137,28 @@
         <button class="map-expand" id="btnMapExpand" title="Toggle full-screen map (Esc to exit)">⤢ Expand</button>
       </div>
       <aside class="map-side" id="mapSide"></aside>
+    </div>
+  </div>
+  <div id="statsView" class="hidden">
+    <div class="stats-empty" id="statsEmpty">
+      No rides yet. Press <b>Scan</b> in the Explore tab to read your phone, then come back to see
+      your lifetime totals, records and a route-frequency heatmap.
+    </div>
+    <div class="stats-body" id="statsBody">
+      <section class="stats-section">
+        <h2 class="stats-h">Lifetime totals</h2>
+        <div class="stats-cards" id="statsTotals"></div>
+      </section>
+      <section class="stats-section">
+        <h2 class="stats-h">Records</h2>
+        <div class="stats-cards" id="statsRecords"></div>
+      </section>
+      <section class="stats-section">
+        <h2 class="stats-h">Route frequency<span class="stats-sub" id="statsHeatNote"></span></h2>
+        <div class="freq-wrap">
+          <div id="freqHeatMap"></div>
+        </div>
+      </section>
     </div>
   </div>
 </main>
