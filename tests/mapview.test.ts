@@ -7,9 +7,14 @@ import {
   dateRange,
   filterRidesByRange,
   nearestRides,
+  ridesInLatLngBox,
   ridesWithTracks,
+  segmentIntersectsLatLngBox,
+  trackIntersectsLatLngBox,
+  type LatLngBox,
   type PixelPoint,
   type ProjectedTrack,
+  type RideTrack,
 } from "../src/mapview";
 import { encodePolyline, type LatLon } from "../src/track";
 
@@ -139,6 +144,70 @@ describe("nearestRides", () => {
 
   it("returns nothing when the cursor misses every track", () => {
     expect(nearestRides(projected, { x: 5, y: 50 }, 6)).toEqual([]);
+  });
+});
+
+describe("segmentIntersectsLatLngBox", () => {
+  // A 1°×1° box around the origin: lat ∈ [0,1], lon ∈ [0,1]. LatLon is [lat, lon].
+  const box: LatLngBox = { minLat: 0, minLon: 0, maxLat: 1, maxLon: 1 };
+
+  it("is true when an endpoint lies inside the box", () => {
+    expect(segmentIntersectsLatLngBox([0.5, 0.5], [5, 5], box)).toBe(true);
+  });
+
+  it("is true when the segment crosses the box without an endpoint inside", () => {
+    // Diagonal line passing through the box but starting/ending well outside it.
+    expect(segmentIntersectsLatLngBox([-1, -1], [2, 2], box)).toBe(true);
+  });
+
+  it("is false when the segment stays entirely outside", () => {
+    expect(segmentIntersectsLatLngBox([2, 2], [3, 3], box)).toBe(false);
+  });
+
+  it("is false for a segment parallel to and clear of the box", () => {
+    // Horizontal line at lat=5, well above the box.
+    expect(segmentIntersectsLatLngBox([5, -10], [5, 10], box)).toBe(false);
+  });
+
+  it("treats a degenerate (point) segment as inside-or-not", () => {
+    expect(segmentIntersectsLatLngBox([0.5, 0.5], [0.5, 0.5], box)).toBe(true);
+    expect(segmentIntersectsLatLngBox([9, 9], [9, 9], box)).toBe(false);
+  });
+});
+
+describe("trackIntersectsLatLngBox", () => {
+  const box: LatLngBox = { minLat: 0, minLon: 0, maxLat: 1, maxLon: 1 };
+
+  it("is true if any segment of the polyline enters the box", () => {
+    // Three points; only the last leg dips into the box.
+    expect(trackIntersectsLatLngBox([[5, 5], [3, 3], [0.5, 0.5]], box)).toBe(true);
+  });
+
+  it("is false when the whole polyline stays outside", () => {
+    expect(trackIntersectsLatLngBox([[5, 5], [6, 6], [7, 7]], box)).toBe(false);
+  });
+
+  it("handles a single-point route by containment", () => {
+    expect(trackIntersectsLatLngBox([[0.5, 0.5]], box)).toBe(true);
+    expect(trackIntersectsLatLngBox([[9, 9]], box)).toBe(false);
+  });
+});
+
+describe("ridesInLatLngBox", () => {
+  const box: LatLngBox = { minLat: 0, minLon: 0, maxLat: 1, maxLon: 1 };
+  const tracks: RideTrack[] = [
+    { key: "inside", title: "A", points: [[0.2, 0.2], [0.8, 0.8]] },
+    { key: "crossing", title: "B", points: [[-1, -1], [2, 2]] },
+    { key: "outside", title: "C", points: [[5, 5], [6, 6]] },
+  ];
+
+  it("returns the keys of every ride whose route intersects the box", () => {
+    expect(ridesInLatLngBox(tracks, box)).toEqual(["inside", "crossing"]);
+  });
+
+  it("returns an empty array when no ride intersects", () => {
+    const far: LatLngBox = { minLat: 80, minLon: 80, maxLat: 81, maxLon: 81 };
+    expect(ridesInLatLngBox(tracks, far)).toEqual([]);
   });
 });
 

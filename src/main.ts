@@ -17,7 +17,7 @@ import { AdbError, type AdbDevice } from "./adb/types";
 import { WebUsbAdb } from "./adb/webusb";
 import { Controller, type AppState, type RideView } from "./controller";
 import { emptyFilters, filtersActive, parseKm, visibleRides, type Filters, type TriState } from "./filter";
-import { ridesWithTracks, nearestRides, dateRange, filterRidesByRange, type DateRange, type PixelPoint, type ProjectedTrack, type RideTrack } from "./mapview";
+import { ridesWithTracks, nearestRides, ridesInLatLngBox, dateRange, filterRidesByRange, type DateRange, type LatLngBox, type PixelPoint, type ProjectedTrack, type RideTrack } from "./mapview";
 import { autoGranularity, bucketRide, compareRideKeysDesc, parseDurationSec, rideShortLabel, trimmedSpeed, type Granularity } from "./parsing";
 import { computeStats, type PeriodRecord } from "./stats";
 import { buildHeatPoints } from "./heatmap";
@@ -322,12 +322,14 @@ function mountMaps(): void {
 // --------------------------------------------------------------------------- //
 // All-rides heatmap ("Map" view). One interactive Leaflet map draws every
 // downloaded track as a translucent line, so stretches you ride often stack up
-// brighter. Hovering a track (or an area where several overlap) highlights the
-// matching rides and lists them in the side panel; clicking jumps to that ride's
-// details in the Explore view. Only rides with a downloaded route can be drawn;
-// the side panel still lists the rest, flagged, so nothing is silently hidden.
+// brighter. Clicking a track selects that ride; the "Select area" toggle lets you
+// drag a rectangle to select every ride passing through it in one shot (cheap even
+// with thousands of tracks, unlike a per-frame hover scan). Selected rides are
+// highlighted and listed in the side panel, where clicking one opens it in the
+// Explore view. Only rides with a downloaded route can be drawn; the side panel
+// still lists the rest, flagged, so nothing is silently hidden.
 // --------------------------------------------------------------------------- //
-const HOVER_PX = 8; // how close (in screen px) the cursor must be to "hit" a track
+const CLICK_PX = 8; // how close (in screen px) a click must land to "hit" a track
 const BASE_TRACK = { color: "#ff5a1f", weight: 3.5, opacity: 0.62, lineJoin: "round", lineCap: "round" } as const;
 const HOT_TRACK = { color: "#ffe066", weight: 6, opacity: 1 } as const;
 
@@ -336,12 +338,14 @@ let allRidesLayer: L.LayerGroup | null = null;
 const trackLines = new Map<string, L.Polyline>();
 let currentTracks: RideTrack[] = [];
 let currentMissing = 0;
-let projectedTracks: ProjectedTrack[] = [];
-let hotKeys: string[] = []; // rides under the cursor right now (ephemeral)
-let pinnedKeys: string[] = []; // rides matched by the last click (persist until next click)
-let lastCursor: PixelPoint | null = null;
-let hoverRaf = 0;
+let hotKeys: string[] = []; // ride highlighted by hovering its side-panel row (ephemeral)
+let selectedKeys: string[] = []; // rides selected by a click or area-drag (persist until next selection)
 let lastTrackSig = "";
+
+// Area-select (rubber-band) gesture state.
+let selectMode = false; // true while the "Select area" toggle is armed
+let dragStart: PixelPoint | null = null; // container-pixel origin of the current drag
+let rubberBand: HTMLDivElement | null = null; // the dashed selection rectangle being drawn
 
 const sameKeys = (a: string[], b: string[]): boolean =>
   a.length === b.length && a.every((k, i) => k === b[i]);
@@ -542,25 +546,26 @@ function resetRange(which: RangeView): void {
 }
 
 
-/** Recompute each track's pixel polyline for the current map view (for hit-testing). */
-function reprojectTracks(): void {
-  if (!allRidesMap) return;
-  projectedTracks = currentTracks.map((t) => ({
+/** Project the current tracks into container pixels for a one-off click hit-test. */
+function projectTracksNow(): ProjectedTrack[] {
+  if (!allRidesMap) return [];
+  const map = allRidesMap;
+  return currentTracks.map((t) => ({
     key: t.key,
     pts: t.points.map(([lat, lon]) => {
-      const p = allRidesMap!.latLngToContainerPoint([lat, lon]);
+      const p = map.latLngToContainerPoint([lat, lon]);
       return { x: p.x, y: p.y };
     }),
   }));
 }
 
 /**
- * Repaint track + side-panel emphasis from the current hover and pinned sets.
- * Pinned rides (matched by the last click) stay highlighted even with no cursor;
- * hovered rides are highlighted on top, transiently.
+ * Repaint track + side-panel emphasis from the current selection and hover sets.
+ * Selected rides (from a click or area-drag) stay highlighted; the ride whose
+ * side-panel row is hovered is highlighted on top, transiently.
  */
 function paintEmphasis(): void {
-  const emphasized = new Set<string>([...pinnedKeys, ...hotKeys]);
+  const emphasized = new Set<string>([...selectedKeys, ...hotKeys]);
   for (const [key, pl] of trackLines) {
     if (emphasized.has(key)) {
       pl.setStyle(HOT_TRACK);
@@ -572,24 +577,22 @@ function paintEmphasis(): void {
   document.querySelectorAll<HTMLElement>("#mapSide .ms-item").forEach((el) => {
     const k = el.dataset.key;
     el.classList.toggle("hot", !!k && hotKeys.includes(k));
-    el.classList.toggle("pinned", !!k && pinnedKeys.includes(k));
+    el.classList.toggle("pinned", !!k && selectedKeys.includes(k));
   });
   const cnt = document.getElementById("msCount");
-  if (cnt) cnt.textContent = hotKeys.length ? `${hotKeys.length} under cursor` : "";
-  const host = allRidesMap?.getContainer();
-  if (host) host.style.cursor = hotKeys.length ? "pointer" : "";
+  if (cnt) cnt.textContent = selectedKeys.length ? `${selectedKeys.length} selected` : "";
 }
 
-/** Set the hover (cursor) emphasis; pinned rides stay highlighted regardless. */
+/** Set the side-panel hover emphasis; selected rides stay highlighted regardless. */
 function setHot(keys: string[]): void {
   if (sameKeys(keys, hotKeys)) return;
   hotKeys = keys;
   paintEmphasis();
 }
 
-/** Pin the rides matched by a click (empty clears the pin); refresh the side panel. */
-function setPinned(keys: string[]): void {
-  pinnedKeys = keys;
+/** Replace the selection (empty clears it); refresh the side panel. */
+function setSelected(keys: string[]): void {
+  selectedKeys = keys;
   refreshMapSide();
 }
 
@@ -599,20 +602,97 @@ function refreshMapSide(): void {
   paintEmphasis();
 }
 
-function onMapMove(e: L.LeafletMouseEvent): void {
-  lastCursor = { x: e.containerPoint.x, y: e.containerPoint.y };
-  if (hoverRaf) return;
-  hoverRaf = requestAnimationFrame(() => {
-    hoverRaf = 0;
-    if (lastCursor) setHot(nearestRides(projectedTracks, lastCursor, HOVER_PX));
-  });
+function onMapClick(e: L.LeafletMouseEvent): void {
+  if (selectMode) return; // the area-drag gesture owns clicks while armed
+  // Project tracks on the fly for this one click (no per-frame cost), then select
+  // the single nearest ride under the cursor. A miss clears the selection.
+  const keys = nearestRides(projectTracksNow(), { x: e.containerPoint.x, y: e.containerPoint.y }, CLICK_PX);
+  setSelected(keys.length ? [keys[0]] : []);
 }
 
-function onMapClick(e: L.LeafletMouseEvent): void {
-  const keys = nearestRides(projectedTracks, { x: e.containerPoint.x, y: e.containerPoint.y }, HOVER_PX);
-  // First click pins the matched ride(s) into the side panel (keeping map context);
-  // a second click on a matched entry opens it in Explore. A miss clears the pin.
-  setPinned(keys);
+// -- Area-select (rubber-band) gesture ------------------------------------- //
+
+/** Arm or disarm area-select: toggles the button, cursor, and map panning. */
+function setSelectMode(on: boolean): void {
+  selectMode = on;
+  const btn = document.getElementById("btnMapSelect");
+  if (btn) {
+    btn.classList.toggle("active", on);
+    btn.textContent = on ? "✕ Cancel" : "▢ Select area";
+  }
+  const c = allRidesMap?.getContainer();
+  if (c) c.classList.toggle("selecting", on);
+  // While selecting, panning/box-zoom would fight the rubber-band drag.
+  if (allRidesMap) {
+    if (on) {
+      allRidesMap.dragging.disable();
+      allRidesMap.boxZoom.disable();
+    } else {
+      allRidesMap.dragging.enable();
+      allRidesMap.boxZoom.enable();
+    }
+  }
+  if (!on && rubberBand) {
+    rubberBand.remove();
+    rubberBand = null;
+    dragStart = null;
+  }
+}
+
+/** Resize the rubber-band rectangle to span from the drag origin to (x, y). */
+function updateRubber(x: number, y: number): void {
+  if (!rubberBand || !dragStart) return;
+  rubberBand.style.left = `${Math.min(dragStart.x, x)}px`;
+  rubberBand.style.top = `${Math.min(dragStart.y, y)}px`;
+  rubberBand.style.width = `${Math.abs(x - dragStart.x)}px`;
+  rubberBand.style.height = `${Math.abs(y - dragStart.y)}px`;
+}
+
+function onSelectDown(e: MouseEvent): void {
+  if (!selectMode || !allRidesMap || e.button !== 0) return;
+  const p = allRidesMap.mouseEventToContainerPoint(e);
+  dragStart = { x: p.x, y: p.y };
+  rubberBand = document.createElement("div");
+  rubberBand.className = "map-rubber";
+  allRidesMap.getContainer().appendChild(rubberBand);
+  updateRubber(p.x, p.y);
+  e.preventDefault(); // suppress text selection while dragging
+}
+
+function onSelectMove(e: MouseEvent): void {
+  if (!selectMode || !dragStart || !allRidesMap) return;
+  const p = allRidesMap.mouseEventToContainerPoint(e);
+  updateRubber(p.x, p.y);
+}
+
+function onSelectUp(e: MouseEvent): void {
+  if (!selectMode || !dragStart || !allRidesMap) return;
+  const start = dragStart;
+  const end = allRidesMap.mouseEventToContainerPoint(e);
+  dragStart = null;
+  if (rubberBand) {
+    rubberBand.remove();
+    rubberBand = null;
+  }
+  // A real drag selects every ride crossing the box; a stray click selects nothing
+  // (and just disarms). Run the box filter once on release.
+  if (Math.abs(end.x - start.x) >= 4 || Math.abs(end.y - start.y) >= 4) {
+    setSelected(ridesInLatLngBox(currentTracks, boxFromCorners(start, { x: end.x, y: end.y })));
+  }
+  // Defer disarming so the trailing Leaflet 'click' is still suppressed by selectMode.
+  setTimeout(() => setSelectMode(false), 0);
+}
+
+/** Convert two container-pixel corners into a lat/lng selection box. */
+function boxFromCorners(a: PixelPoint, b: PixelPoint): LatLngBox {
+  const c1 = allRidesMap!.containerPointToLatLng([a.x, a.y]);
+  const c2 = allRidesMap!.containerPointToLatLng([b.x, b.y]);
+  return {
+    minLat: Math.min(c1.lat, c2.lat),
+    maxLat: Math.max(c1.lat, c2.lat),
+    minLon: Math.min(c1.lng, c2.lng),
+    maxLon: Math.max(c1.lng, c2.lng),
+  };
 }
 
 /** Switch to the Explore view and reveal a specific ride's details. */
@@ -687,12 +767,12 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
 }
 
 /**
- * The "Matched" block: rides hit by the last click on the map, each with quick stats
- * (date · distance · avg speed). Clicking an entry opens it in the Explore view.
+ * The "Selected" block: rides chosen by a click or an area-drag, each with quick
+ * stats (date · distance · avg speed). Clicking an entry opens it in the Explore view.
  */
 function renderMatched(): string {
-  if (!pinnedKeys.length) return "";
-  const matched = pinnedKeys
+  if (!selectedKeys.length) return "";
+  const matched = selectedKeys
     .map((k) => STATE.rides.find((r) => r.key === k && !r.deleted))
     .filter((r): r is RideView => !!r);
   if (!matched.length) return "";
@@ -713,7 +793,7 @@ function renderMatched(): string {
   const noun = matched.length === 1 ? "ride" : "rides";
   return (
     `<div class="ms-matched">` +
-    `<div class="ms-mhead"><h3>Matched · ${matched.length} ${noun}</h3>` +
+    `<div class="ms-mhead"><h3>Selected · ${matched.length} ${noun}</h3>` +
     `<button class="ms-clear" id="msClear" title="Clear the selection">Clear</button></div>` +
     `<div class="ms-mhint">Click a ride below to open it in Explore.</div>` +
     `<div class="ms-list">${cards}</div></div>`
@@ -740,10 +820,11 @@ function mountAllRidesMap(opts: { fit?: boolean } = {}): void {
     }).addTo(allRidesMap);
     allRidesLayer = L.layerGroup().addTo(allRidesMap);
     allRidesMap.setView([20, 0], 2); // sane default until the first track is drawn
-    allRidesMap.on("mousemove", onMapMove);
-    allRidesMap.on("mouseout", () => setHot([]));
     allRidesMap.on("click", onMapClick);
-    allRidesMap.on("moveend zoomend", reprojectTracks);
+    const cont = allRidesMap.getContainer();
+    cont.addEventListener("mousedown", onSelectDown);
+    cont.addEventListener("mousemove", onSelectMove);
+    window.addEventListener("mouseup", onSelectUp);
   }
 
   const sig = tracks.map((t) => t.key).join("|");
@@ -758,8 +839,8 @@ function mountAllRidesMap(opts: { fit?: boolean } = {}): void {
       trackLines.set(t.key, line);
       for (const p of t.points) all.push(p as L.LatLngExpression);
     }
-    // Drop any pinned rides whose track is no longer drawn (e.g. deleted/re-scanned).
-    pinnedKeys = pinnedKeys.filter((k) => trackLines.has(k));
+    // Drop any selected rides whose track is no longer drawn (e.g. deleted/re-scanned).
+    selectedKeys = selectedKeys.filter((k) => trackLines.has(k));
     if (all.length && opts.fit !== false) allRidesMap.fitBounds(L.latLngBounds(all), { padding: [24, 24] });
   }
   renderMapSide(tracks, missing);
@@ -768,7 +849,6 @@ function mountAllRidesMap(opts: { fit?: boolean } = {}): void {
   // The container is only correctly sized once its view becomes visible.
   setTimeout(() => {
     allRidesMap!.invalidateSize();
-    reprojectTracks();
   }, 0);
 }
 
@@ -781,6 +861,7 @@ function applyView(): void {
   document.getElementById("statsView")?.classList.toggle("hidden", !isStats);
   document.getElementById("scanbar")?.classList.toggle("hidden", isMap || isStats);
   if (!isMap && document.body.classList.contains("map-expanded")) setMapExpanded(false);
+  if (!isMap && selectMode) setSelectMode(false);
   document
     .querySelectorAll<HTMLButtonElement>("#viewTabs .vtab")
     .forEach((b) => b.classList.toggle("active", b.dataset.view === activeView));
@@ -804,10 +885,9 @@ function setMapExpanded(on: boolean): void {
   document.body.classList.toggle("map-expanded", on);
   const btn = document.getElementById("btnMapExpand");
   if (btn) btn.textContent = on ? "⤡ Exit full screen" : "⤢ Expand";
-  // The container changed size; let Leaflet re-measure and re-fit the hit-test grid.
+  // The container changed size; let Leaflet re-measure to match.
   requestAnimationFrame(() => {
     allRidesMap?.invalidateSize();
-    reprojectTracks();
   });
 }
 
@@ -1789,6 +1869,10 @@ document.addEventListener("click", (e) => {
     setMapExpanded(!document.body.classList.contains("map-expanded"));
     return;
   }
+  if (t.id === "btnMapSelect") {
+    setSelectMode(!selectMode);
+    return;
+  }
   if (t.dataset && t.dataset.rangereset) {
     resetRange(t.dataset.rangereset as RangeView);
     return;
@@ -2082,7 +2166,7 @@ if (mapSideEl) {
   mapSideEl.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
     if (target.closest(".ms-clear")) {
-      setPinned([]);
+      setSelected([]);
       return;
     }
     const item = target.closest(".ms-item") as HTMLElement | null;

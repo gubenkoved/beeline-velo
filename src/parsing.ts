@@ -405,16 +405,17 @@ export function compareRideKeysDesc(a: string, b: string): number {
 }
 
 /**
- * Short, human date for a ride key, e.g. 'Jun 13, 14:22'. Used to disambiguate
- * rides that share a title in progress/status messages. Returns '' if the key
- * can't be parsed (the caller can fall back to the raw key).
+ * Short, human date for a ride key, e.g. 'Jun 13, 2026, 14:22'. Used to
+ * disambiguate rides that share a title in progress/status messages and the map
+ * side panel. Returns '' if the key can't be parsed (the caller can fall back to
+ * the raw key).
  */
 export function rideShortLabel(key: string): string {
   const dt = rideDatetime(key);
   if (dt === null) return "";
   const hh = String(dt.getHours()).padStart(2, "0");
   const mm = String(dt.getMinutes()).padStart(2, "0");
-  return `${MONTHS[dt.getMonth()].slice(0, 3)} ${dt.getDate()}, ${hh}:${mm}`;
+  return `${MONTHS[dt.getMonth()].slice(0, 3)} ${dt.getDate()}, ${dt.getFullYear()}, ${hh}:${mm}`;
 }
 
 /** Return [sortKey 'YYYY-MM', label 'Month YYYY'] for a ride key. */

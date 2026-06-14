@@ -17,6 +17,25 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Map: area-select replaces per-frame hover
+- **What:** dropped the Map view's mousemove hover hit-test (which, on every rAF frame,
+  scanned all tracks × all points) in favour of a "Select area" toggle: drag a rectangle
+  and a single `ridesInLatLngBox` filter selects every ride crossing it. Single-click
+  still selects the nearest track (projected on-the-fly per click), and hovering a
+  side-panel row still highlights its track. Removed the cached `projectedTracks` /
+  `reprojectTracks` machinery and its `moveend/zoomend` rebuild; selection geometry now
+  works directly in lat/lng (Liang–Barsky segment-vs-box test). Renamed the "pinned" set
+  to "selected"; the side panel's block is now "Selected · N rides".
+- **Why:** at 2000+ tracks the hover scan was O(tracks × points) per frame and made the
+  map sluggish. A draw-a-box gesture runs the filter once on release, so cost is
+  independent of frame rate and stays smooth at thousands of tracks — and doing the
+  test in lat/lng also let us delete the per-pan/zoom pixel reprojection entirely.
+
+## Map side panel: show the year in ride dates
+- **What:** `rideShortLabel` now includes the year (e.g. `Jun 13, 2026, 14:22`).
+- **Why:** the map side panel, stats "biggest ride" card, and Beeline progress messages
+  all dropped the year, which was ambiguous once rides span multiple years.
+
 ## Heatmap thickness slider
 - **What:** added a persisted "Thickness" slider above the Stats view's route-frequency
   heatmap that drives the `L.heatLayer` glow radius/blur (`heatRadius` in `Settings`,

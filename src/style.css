@@ -445,6 +445,24 @@ body:has(#mapFilter:not(.hidden)) .job-handle { bottom: 74px; z-index: 501; }
   backdrop-filter: blur(6px); box-shadow: 0 2px 10px rgba(0,0,0,.35); }
 .map-expand:hover { background: #222732; border-color: #333b48; }
 
+/* Floating area-select toggle, top-right, stacked under the Expand button so it
+   clears Leaflet's top-left zoom control. When armed it lights up with the accent
+   colour and the map cursor becomes a crosshair. */
+.map-select { position: absolute; top: 50px; right: 10px; z-index: 500;
+  background: rgba(20,23,29,.92); border: 1px solid var(--line); color: var(--text);
+  border-radius: 8px; padding: 6px 11px; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; backdrop-filter: blur(6px); box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+.map-select:hover { background: #222732; border-color: #333b48; }
+.map-select.active { background: var(--accent); border-color: var(--accent); color: #1a1206; }
+/* Crosshair while selecting; override Leaflet's own grab/pointer cursors. */
+#allRidesMap.selecting,
+#allRidesMap.selecting .leaflet-grab,
+#allRidesMap.selecting .leaflet-interactive { cursor: crosshair; }
+/* The dashed rubber-band rectangle drawn during an area-select drag. */
+.map-rubber { position: absolute; z-index: 600; pointer-events: none;
+  border: 1.5px dashed var(--accent); background: rgba(255,90,31,.12);
+  border-radius: 2px; }
+
 /* -- date range filter (shared by Map + Stats views) ---------------------- */
 .range-filter { display: flex; align-items: center; gap: 12px; }
 .range-filter.hidden { display: none; }

@@ -160,3 +160,70 @@ export function nearestRides(projected: ProjectedTrack[], cursor: PixelPoint, th
   hits.sort((a, b) => a.dist - b.dist);
   return hits.map((h) => h.key);
 }
+
+/** A lat/lng rectangle (axis-aligned), as drawn by the area-select gesture. */
+export interface LatLngBox {
+  minLat: number;
+  minLon: number;
+  maxLat: number;
+  maxLon: number;
+}
+
+/**
+ * True if the segment `a`–`b` enters (or lies inside) the box. Latitude/longitude
+ * are treated as a local Cartesian plane (lon = x, lat = y) — exact enough at the
+ * city/region scale a hand-drawn selection box covers. Uses the Liang–Barsky clip
+ * test, which also reports `true` when a degenerate segment (a == b) sits inside
+ * the box, so single-point handling falls out for free.
+ */
+export function segmentIntersectsLatLngBox(a: LatLon, b: LatLon, box: LatLngBox): boolean {
+  const x0 = a[1];
+  const y0 = a[0];
+  const dx = b[1] - x0;
+  const dy = b[0] - y0;
+  const p = [-dx, dx, -dy, dy];
+  const q = [x0 - box.minLon, box.maxLon - x0, y0 - box.minLat, box.maxLat - y0];
+  let t0 = 0;
+  let t1 = 1;
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      // Segment is parallel to this edge: reject only if it starts outside it.
+      if (q[i] < 0) return false;
+    } else {
+      const r = q[i] / p[i];
+      if (p[i] < 0) {
+        if (r > t1) return false;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return false;
+        if (r < t1) t1 = r;
+      }
+    }
+  }
+  return true;
+}
+
+/** True if any part of the polyline `points` falls within the box. */
+export function trackIntersectsLatLngBox(points: LatLon[], box: LatLngBox): boolean {
+  if (points.length === 1) {
+    const [lat, lon] = points[0];
+    return lat >= box.minLat && lat <= box.maxLat && lon >= box.minLon && lon <= box.maxLon;
+  }
+  for (let i = 1; i < points.length; i++) {
+    if (segmentIntersectsLatLngBox(points[i - 1], points[i], box)) return true;
+  }
+  return false;
+}
+
+/**
+ * Keys of every ride whose route intersects `box`. This is the one-shot filter
+ * behind the area-select gesture: drawing a rectangle runs it once (vs. the old
+ * per-frame hover scan), so it stays cheap even with a few thousand tracks.
+ */
+export function ridesInLatLngBox(tracks: RideTrack[], box: LatLngBox): string[] {
+  const hits: string[] = [];
+  for (const t of tracks) {
+    if (trackIntersectsLatLngBox(t.points, box)) hits.push(t.key);
+  }
+  return hits;
+}
