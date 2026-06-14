@@ -17,6 +17,14 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Dark-theme the native checkboxes
+- **What:** Added `color-scheme: dark` to `:root` so the native ride/select-all checkboxes
+  (and other form controls) render against the dark UI instead of the browser's light theme.
+- **Why:** Unchecked checkboxes were drawn as bright white boxes because `accent-color` only
+  tints the *checked* fill; the unchecked control kept its default light rendering and stood
+  out against the dark app. One line fixes every native control at once and keeps the checked
+  state Strava-orange and the select-all indeterminate dash intact.
+
 ## Selection actions folded into one "Check selected" split + clearer route wording
 - **What:** Collapsed the four selection-scoped header buttons (Check selected / Preview
   selected / Save .gpx files / Upload selected to Strava) into one `.split`: "Check
