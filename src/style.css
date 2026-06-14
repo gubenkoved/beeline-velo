@@ -1117,6 +1117,16 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
   gap: 6px;
   flex: 0 0 auto;
 }
+/* The "⋯" overflow toggle and its grouping wrapper exist only for the mobile
+   layout: on desktop the toggle is hidden and `.ovr-items` collapses (display:
+   contents) so the real action buttons flow directly inside the cluster flex
+   exactly as before. The @media (max-width: 768px) block re-activates them. */
+.ovr {
+  display: none;
+}
+.ovr-items {
+  display: contents;
+}
 
 /* Split button: a primary action fused with a caret that reveals a dropdown of related
    actions (used for GPX Preview / Save .gpx file). The two buttons read as ONE segmented
@@ -1890,4 +1900,183 @@ body.map-expanded {
 /* lift transient toasts above the floating progress pill when a job is active */
 body.job-active .toast {
   bottom: 84px;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Mobile / narrow viewports (phones + small tablets).                       */
+/* The rest of the sheet targets ~1000px desktops; below this width fixed    */
+/* column widths and packed button rows wrap into many lines and feel        */
+/* bloated. Here we: compact the chrome, declutter the group headers, and    */
+/* collapse each per-ride / per-group action cluster behind a "⋯" toggle     */
+/* that reveals a floating stacked menu (reusing the existing openMenu flag).*/
+/* ------------------------------------------------------------------------ */
+@media (max-width: 768px) {
+  /* -- overall chrome: trim padding / gaps that eat a 375px viewport ------ */
+  main {
+    padding: 14px 12px 56px;
+  }
+  header {
+    padding: 10px 12px;
+  }
+  .row {
+    gap: 6px;
+  }
+  /* The header carries a lot of buttons; at full padding they wrap into a
+     tall stack. Compact every button (and the segmented controls) so the
+     same actions pack into far fewer, shorter rows. */
+  header button {
+    padding: 5px 9px;
+    font-size: 12.5px;
+    border-radius: 7px;
+  }
+  header button.small {
+    padding: 4px 8px;
+  }
+  .brand h1 {
+    font-size: 14.5px;
+  }
+  .brand .ver {
+    display: none; /* build hash is desktop-only chrome */
+  }
+  .totals {
+    font-size: 11.5px;
+  }
+  /* The flexible spacer separates info from bulk-actions (header) and the Scan
+     group from the Interaction-speed group (scanbar). At full width it grows and
+     shoves a lone label to the far edge while its segment wraps below it. On
+     mobile force it to a zero-height full-width break instead, so each labelled
+     group starts a fresh line with its label still attached to its controls. */
+  .row .spacer {
+    flex-basis: 100%;
+    height: 0;
+  }
+  .scanbar,
+  .filterbar {
+    gap: 6px;
+  }
+  /* Scan / Interaction-speed / Track-detail labels are verbose; the segmented
+     controls below them already imply the meaning, so shrink the labels. */
+  .scanbar .totals {
+    font-size: 11px;
+  }
+  .custom {
+    padding: 5px 10px;
+    font-size: 12.5px;
+  }
+  .seg button {
+    padding: 6px 10px;
+    font-size: 12.5px;
+  }
+  .fchip {
+    padding: 5px 9px;
+    font-size: 12.5px;
+  }
+
+  /* -- group headers: drop the fixed title columns + progress bar, let the
+        secondary meta wrap onto its own line so the title row stays short -- */
+  .yhead,
+  .mhead {
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    padding: 8px 10px;
+  }
+  .bars {
+    display: none;
+  }
+  .ytitle {
+    min-width: 0;
+    font-size: 15px;
+  }
+  .mtitle {
+    min-width: 0;
+  }
+  .ymeta,
+  .mmeta {
+    order: 10; /* push below the title row (after the right-aligned ⋯) */
+    flex-basis: 100%;
+    font-size: 11.5px;
+  }
+  .rrow {
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  /* -- action clusters collapse behind the "⋯" toggle -------------------- */
+  .ovr {
+    display: inline-flex;
+  }
+  .yactions,
+  .mactions,
+  .rbtns {
+    position: relative;
+  }
+  /* Float the grouped real actions as a stacked dropdown anchored to the
+     cluster; hidden until the cluster carries `.open`. */
+  .ovr-items {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 30;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 184px;
+    padding: 6px;
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+  .yactions.open .ovr-items,
+  .mactions.open .ovr-items,
+  .rbtns.open .ovr-items {
+    display: flex;
+  }
+  /* Make every entry a full-width left-aligned row. */
+  .ovr-items > button,
+  .ovr-items > .split {
+    width: 100%;
+  }
+  .ovr-items button {
+    width: 100%;
+    justify-content: flex-start;
+    text-align: left;
+  }
+  /* Flatten the nested Check / GPX split buttons: hide their caret and reveal
+     both the primary and the secondary action as plain stacked entries. */
+  .ovr-items .split {
+    display: block;
+  }
+  .ovr-items .split > button {
+    display: block;
+    width: 100%;
+    border-radius: 7px;
+    margin-bottom: 4px;
+  }
+  .ovr-items .split > button.caret {
+    display: none;
+  }
+  .ovr-items .splitmenu {
+    display: block;
+    position: static;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .ovr-items .splitmenu button {
+    margin-bottom: 0;
+  }
+
+  /* -- map view: stack the side list under the map instead of beside it --- */
+  .map-wrap {
+    grid-template-columns: 1fr;
+    grid-template-rows: 60vh minmax(0, 30vh);
+    height: auto;
+    min-height: 0;
+  }
+  body.map-expanded .map-wrap {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr minmax(0, 38vh);
+  }
 }

@@ -1605,10 +1605,13 @@ function render(): void {
         <span class="ytitle">${year}</span>
         ${bars(yup, ype, yRides.length)}
         <span class="ymeta">${yRides.length} rides · ${fmtKm(ykm)} · ${yup} up · ${ype} upload pending</span>
-        <span class="yactions">
-          ${checkSplit(`check-y:${year}`, "status-year-new", "status-year", ` data-y="${year}"`)}
-          <button class="small ghost" data-act="gpx-year-missing" data-y="${year}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>
-          <button class="small" data-act="upload-year" data-y="${year}">Upload pending to Strava</button>
+        <span class="yactions${openMenu === `ovr-y:${year}` ? " open" : ""}">
+          <button class="small ghost ovr" data-splitmenu="ovr-y:${year}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-y:${year}`}" title="Actions for ${year}">⋯</button>
+          <span class="ovr-items">
+            ${checkSplit(`check-y:${year}`, "status-year-new", "status-year", ` data-y="${year}"`)}
+            <button class="small ghost" data-act="gpx-year-missing" data-y="${year}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>
+            <button class="small" data-act="upload-year" data-y="${year}">Upload pending to Strava</button>
+          </span>
         </span>
       </div>
       <div class="ybody" ${yOpen ? "" : 'style="display:none"'}></div>`;
@@ -1634,10 +1637,13 @@ function render(): void {
           <span class="mtitle">${m.label}</span>
           ${bars(mup, mpe, m.rides.length)}
           <span class="mmeta">${m.rides.length} rides · ${fmtKm(mkm)} · ${mup} up · ${mpe} upload pending</span>
-          <span class="mactions">
-            ${checkSplit(`check-m:${mkey}`, "status-month-new", "status-month", ` data-m="${mkey}"`)}
-            <button class="small ghost" data-act="gpx-month-missing" data-m="${mkey}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>
-            <button class="small" data-act="upload-month" data-m="${mkey}">Upload pending to Strava</button>
+          <span class="mactions${openMenu === `ovr-m:${mkey}` ? " open" : ""}">
+            <button class="small ghost ovr" data-splitmenu="ovr-m:${mkey}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-m:${mkey}`}" title="Actions for ${m.label}">⋯</button>
+            <span class="ovr-items">
+              ${checkSplit(`check-m:${mkey}`, "status-month-new", "status-month", ` data-m="${mkey}"`)}
+              <button class="small ghost" data-act="gpx-month-missing" data-m="${mkey}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>
+              <button class="small" data-act="upload-month" data-m="${mkey}">Upload pending to Strava</button>
+            </span>
           </span>
         </div>
         <div class="rows ${isOpen ? "open" : ""}"></div>`;
@@ -1665,10 +1671,13 @@ function render(): void {
               <a href="#" data-stats="${r.key}">${so ? "hide" : "details"}</a></div>
             ${so ? detailsBlock(r) : ""}
           </div>
-          <div class="rbtns">
-            <button class="small ghost" data-act="status-one" data-key="${r.key}">Check</button>
-            ${gpxSplit(r.key, r.key)}
-            <button class="small accent" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ""}>Upload to Strava</button>
+          <div class="rbtns${openMenu === `ovr-r:${r.key}` ? " open" : ""}">
+            <button class="small ghost ovr" data-splitmenu="ovr-r:${r.key}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-r:${r.key}`}" title="Ride actions">⋯</button>
+            <span class="ovr-items">
+              <button class="small ghost" data-act="status-one" data-key="${r.key}">Check</button>
+              ${gpxSplit(r.key, r.key)}
+              <button class="small accent" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ""}>Upload to Strava</button>
+            </span>
           </div>`;
         rowsEl.appendChild(el);
       }
@@ -1998,7 +2007,14 @@ document.addEventListener("click", (e) => {
     render();
     return;
   }
-  if (openMenu !== null && !target.closest(".split")) {
+  // Picking any real action from an open mobile "⋯" overflow menu dismisses it
+  // (the subsequent dispatch re-renders with the menu closed). The nested Check/
+  // GPX split buttons live inside `.split`, so the generic guard below would skip
+  // them — close here so every entry behaves the same.
+  if (openMenu?.startsWith("ovr-") && t.dataset?.act) {
+    openMenu = null;
+  }
+  if (openMenu !== null && !target.closest(".split, .yactions.open, .mactions.open, .rbtns.open")) {
     openMenu = null;
     render();
     // fall through so this same click can still trigger whatever it landed on
