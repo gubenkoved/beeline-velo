@@ -1390,8 +1390,19 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
   text-align: right;
 }
 .freq-wrap {
+  position: relative;
   height: calc(100vh - 430px);
   min-height: 360px;
+}
+/* The Stats view has no Expand button above the area-select toggle, so it sits at
+   the top-right corner (the heatmap's zoom control is top-left, out of the way). */
+.freq-wrap .map-select {
+  top: 10px;
+}
+/* Matching rides for the heatmap's area-select, full-width below the map. Reuses
+   the Map view's `.ms-matched` card styling; collapses when nothing is selected. */
+.heat-matched:not(:empty) {
+  margin-top: 12px;
 }
 #freqHeatMap {
   height: 100%;
@@ -1409,6 +1420,12 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
 /* Keep the dark, desaturated basemap treatment in sync with the Map view. */
 #freqHeatMap .leaflet-tile-pane {
   filter: grayscale(85%) brightness(0.6) contrast(1.1);
+}
+/* Crosshair while area-selecting on the heatmap; mirrors the Map view. */
+#freqHeatMap.selecting,
+#freqHeatMap.selecting .leaflet-grab,
+#freqHeatMap.selecting .leaflet-interactive {
+  cursor: crosshair;
 }
 
 /* -- all-rides heatmap (Map view) ----------------------------------------- */

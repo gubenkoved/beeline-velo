@@ -17,6 +17,10 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Bring the Map's area-select to the Stats heatmap, with a matching ride list
+- **What:** Extracted the Map view's rubber-band "Select area" gesture into a reusable, rendering-agnostic `createAreaSelect` controller (`src/areaselect.ts`) and mounted a second instance on the route-frequency heatmap. Drag a box (or click near a route) on the heatmap to select every ride crossing it; the matches render full-width below the map (`#heatMatched`), reusing the Map side panel's `.ms-matched` card styling. Refactored the Map view onto the same controller and extracted the shared `renderMatchedCards()` so both views render identical "Selected" cards; added `tests/areaselect.test.ts`.
+- **Why:** The heatmap could only be filtered by date, so there was no way to ask "which rides go through *here*" — the question the heatmap most invites. Sharing one gesture controller and one card renderer keeps the two views' interaction identical and avoids duplicating ~120 lines of brittle drag/projection logic, honouring the repo's one-implementation rule. Heatmap selection is intentionally independent of the Map view's (separate state) and prunes keys whose track is no longer drawn after a rescan.
+
 ## Widen the Map and Stats views beyond main's 940px column
 - **What:** Added a `@media (min-width: 1000px)` breakout so `#mapView` and `#statsView` grow to `min(96vw, 1200px)` (centred via `margin-left` math), while `main` and the view tabs stay at 940px. Full-screen Expand is explicitly reset back to normal flow.
 - **Why:** Inside main's 940px column the all-rides map column shrank to ~648px and even basemap labels were cropped; the Explore list is fine at 940px so only the two map-heavy views break out. Centring uses margin (not `transform: translateX`) so no transformed ancestor hijacks the containing block of the full-screen map's `position: fixed` `.map-wrap`.

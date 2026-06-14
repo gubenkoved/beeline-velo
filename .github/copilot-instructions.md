@@ -17,6 +17,30 @@ suboptimal or self-contradictory decisions instead of silently complying.
 - **Be direct, not contrarian**: only challenge real problems; once aligned, commit fully. The
   goal is the best outcome, not deferring to whatever was asked first.
 
+## Core values
+
+These are the defaults every change is judged against — prefer them over cleverness, and call
+out when a request pushes against them (see *Review & challenge the request*).
+
+- **Simplicity first.** The smallest change that fully solves the problem wins. Don't add
+  features, layers, options, or abstractions that weren't asked for and aren't needed yet. No
+  speculative generality — solve the case in front of you, not an imagined future one. A short,
+  obvious implementation beats a flexible-but-intricate one; if a helper or config knob earns
+  its keep only once, inline it.
+- **Reuse before you write.** Before adding code, look for an existing function, type, CSS class,
+  or pattern that already does the job and use (or lift) it. One canonical implementation per
+  concern — when the same logic would live in two places, extract a shared, rendering-agnostic
+  helper and have both call it (e.g. the `parseLocaleNumber` parser, the `AreaSelect` gesture
+  controller shared by the Map and heatmap, `renderMatchedCards()` shared by both ride lists).
+  Two copies means two behaviours means a bug; duplication is a smell, not a shortcut.
+- **One unified design language.** The app should look and behave like one product, not a pile of
+  screens. Reuse the established visual vocabulary — the dark desaturated basemap treatment,
+  the `.ms-matched`/`.ms-item` ride cards, the segmented `.seg` toggles, the shared range slider,
+  accent colours and spacing — rather than inventing a one-off style. The same interaction
+  (selecting, filtering, listing rides) should work the same way everywhere it appears. When you
+  add a surface, first ask which existing component or class already expresses it; introduce new
+  styling only when nothing fits, and then make it reusable.
+
 ## Data ingestion integrity (read this first)
 
 **This is the foundation — if numbers come in wrong, nothing else matters.** Every total,

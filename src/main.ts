@@ -15,6 +15,7 @@ import L from "leaflet";
 import { DemoAdb } from "./adb/demo";
 import { type AdbDevice, AdbError } from "./adb/types";
 import { WebUsbAdb } from "./adb/webusb";
+import { type AreaSelect, createAreaSelect } from "./areaselect";
 import { type AppState, Controller, type RideView } from "./controller";
 import {
   emptyFilters,
@@ -28,12 +29,7 @@ import {
   type DateRange,
   dateRange,
   filterRidesByRange,
-  type LatLngBox,
-  nearestRides,
-  type PixelPoint,
-  type ProjectedTrack,
   type RideTrack,
-  ridesInLatLngBox,
   ridesWithTracks,
 } from "./mapview";
 import {
@@ -392,11 +388,6 @@ let hotKeys: string[] = []; // ride highlighted by hovering its side-panel row (
 let selectedKeys: string[] = []; // rides selected by a click or area-drag (persist until next selection)
 let lastTrackSig = "";
 
-// Area-select (rubber-band) gesture state.
-let selectMode = false; // true while the "Select area" toggle is armed
-let dragStart: PixelPoint | null = null; // container-pixel origin of the current drag
-let rubberBand: HTMLDivElement | null = null; // the dashed selection rectangle being drawn
-
 const sameKeys = (a: string[], b: string[]): boolean =>
   a.length === b.length && a.every((k, i) => k === b[i]);
 
@@ -611,19 +602,6 @@ function resetRange(which: RangeView): void {
   }
 }
 
-/** Project the current tracks into container pixels for a one-off click hit-test. */
-function projectTracksNow(): ProjectedTrack[] {
-  if (!allRidesMap) return [];
-  const map = allRidesMap;
-  return currentTracks.map((t) => ({
-    key: t.key,
-    pts: t.points.map(([lat, lon]) => {
-      const p = map.latLngToContainerPoint([lat, lon]);
-      return { x: p.x, y: p.y };
-    }),
-  }));
-}
-
 /**
  * Repaint track + side-panel emphasis from the current selection and hover sets.
  * Selected rides (from a click or area-drag) stay highlighted; the ride whose
@@ -667,104 +645,15 @@ function refreshMapSide(): void {
   paintEmphasis();
 }
 
-function onMapClick(e: L.LeafletMouseEvent): void {
-  if (selectMode) return; // the area-drag gesture owns clicks while armed
-  // Project tracks on the fly for this one click (no per-frame cost), then select
-  // the single nearest ride under the cursor. A miss clears the selection.
-  const keys = nearestRides(
-    projectTracksNow(),
-    { x: e.containerPoint.x, y: e.containerPoint.y },
-    CLICK_PX,
-  );
-  setSelected(keys.length ? [keys[0]] : []);
-}
-
-// -- Area-select (rubber-band) gesture ------------------------------------- //
-
-/** Arm or disarm area-select: toggles the button, cursor, and map panning. */
-function setSelectMode(on: boolean): void {
-  selectMode = on;
-  const btn = document.getElementById("btnMapSelect");
-  if (btn) {
-    btn.classList.toggle("active", on);
-    btn.textContent = on ? "✕ Cancel" : "▢ Select area";
-  }
-  const c = allRidesMap?.getContainer();
-  if (c) c.classList.toggle("selecting", on);
-  // While selecting, panning/box-zoom would fight the rubber-band drag.
-  if (allRidesMap) {
-    if (on) {
-      allRidesMap.dragging.disable();
-      allRidesMap.boxZoom.disable();
-    } else {
-      allRidesMap.dragging.enable();
-      allRidesMap.boxZoom.enable();
-    }
-  }
-  if (!on && rubberBand) {
-    rubberBand.remove();
-    rubberBand = null;
-    dragStart = null;
-  }
-}
-
-/** Resize the rubber-band rectangle to span from the drag origin to (x, y). */
-function updateRubber(x: number, y: number): void {
-  if (!rubberBand || !dragStart) return;
-  rubberBand.style.left = `${Math.min(dragStart.x, x)}px`;
-  rubberBand.style.top = `${Math.min(dragStart.y, y)}px`;
-  rubberBand.style.width = `${Math.abs(x - dragStart.x)}px`;
-  rubberBand.style.height = `${Math.abs(y - dragStart.y)}px`;
-}
-
-function onSelectDown(e: MouseEvent): void {
-  if (!selectMode || !allRidesMap || e.button !== 0) return;
-  const p = allRidesMap.mouseEventToContainerPoint(e);
-  dragStart = { x: p.x, y: p.y };
-  rubberBand = document.createElement("div");
-  rubberBand.className = "map-rubber";
-  allRidesMap.getContainer().appendChild(rubberBand);
-  updateRubber(p.x, p.y);
-  e.preventDefault(); // suppress text selection while dragging
-}
-
-function onSelectMove(e: MouseEvent): void {
-  if (!selectMode || !dragStart || !allRidesMap) return;
-  const p = allRidesMap.mouseEventToContainerPoint(e);
-  updateRubber(p.x, p.y);
-}
-
-function onSelectUp(e: MouseEvent): void {
-  if (!selectMode || !dragStart || !allRidesMap) return;
-  const start = dragStart;
-  const end = allRidesMap.mouseEventToContainerPoint(e);
-  dragStart = null;
-  if (rubberBand) {
-    rubberBand.remove();
-    rubberBand = null;
-  }
-  // A real drag selects every ride crossing the box; a stray click selects nothing
-  // (and just disarms). Run the box filter once on release.
-  if (Math.abs(end.x - start.x) >= 4 || Math.abs(end.y - start.y) >= 4) {
-    setSelected(
-      ridesInLatLngBox(currentTracks, boxFromCorners(start, { x: end.x, y: end.y })),
-    );
-  }
-  // Defer disarming so the trailing Leaflet 'click' is still suppressed by selectMode.
-  setTimeout(() => setSelectMode(false), 0);
-}
-
-/** Convert two container-pixel corners into a lat/lng selection box. */
-function boxFromCorners(a: PixelPoint, b: PixelPoint): LatLngBox {
-  const c1 = allRidesMap!.containerPointToLatLng([a.x, a.y]);
-  const c2 = allRidesMap!.containerPointToLatLng([b.x, b.y]);
-  return {
-    minLat: Math.min(c1.lat, c2.lat),
-    maxLat: Math.max(c1.lat, c2.lat),
-    minLon: Math.min(c1.lng, c2.lng),
-    maxLon: Math.max(c1.lng, c2.lng),
-  };
-}
+// The Map view's area-select gesture: a box-drag selects every ride crossing it,
+// a click selects the nearest one. Selection drives the side panel + track emphasis.
+const mapAreaSelect: AreaSelect = createAreaSelect({
+  getMap: () => allRidesMap,
+  getTracks: () => currentTracks,
+  button: document.getElementById("btnMapSelect"),
+  onSelect: (keys) => setSelected(keys),
+  clickPx: CLICK_PX,
+});
 
 /** Switch to the Explore view and reveal a specific ride's details. */
 function openRideInExplore(key: string): void {
@@ -840,11 +729,11 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
 
 /**
  * The "Selected" block: rides chosen by a click or an area-drag, each with quick
- * stats (date · distance · avg speed). Clicking an entry opens it in the Explore view.
+ * stats (date · distance · avg speed). Shared by the Map view's side panel and the
+ * Stats view's heatmap; clicking an entry opens it in the Explore view.
  */
-function renderMatched(): string {
-  if (!selectedKeys.length) return "";
-  const matched = selectedKeys
+function renderMatchedCards(keys: string[]): string {
+  const matched = keys
     .map((k) => STATE.rides.find((r) => r.key === k && !r.deleted))
     .filter((r): r is RideView => !!r);
   if (!matched.length) return "";
@@ -866,10 +755,15 @@ function renderMatched(): string {
   return (
     `<div class="ms-matched">` +
     `<div class="ms-mhead"><h3>Selected · ${matched.length} ${noun}</h3>` +
-    `<button class="ms-clear" id="msClear" title="Clear the selection">Clear</button></div>` +
+    `<button class="ms-clear" title="Clear the selection">Clear</button></div>` +
     `<div class="ms-mhint">Click a ride below to open it in Explore.</div>` +
     `<div class="ms-list">${cards}</div></div>`
   );
+}
+
+/** The Map side panel's "Selected" block for the current click/area selection. */
+function renderMatched(): string {
+  return renderMatchedCards(selectedKeys);
 }
 
 /** (Re)draw the all-rides map for the current state; lazily creates the map. */
@@ -895,11 +789,7 @@ function mountAllRidesMap(opts: { fit?: boolean } = {}): void {
     }).addTo(allRidesMap);
     allRidesLayer = L.layerGroup().addTo(allRidesMap);
     allRidesMap.setView([20, 0], 2); // sane default until the first track is drawn
-    allRidesMap.on("click", onMapClick);
-    const cont = allRidesMap.getContainer();
-    cont.addEventListener("mousedown", onSelectDown);
-    cont.addEventListener("mousemove", onSelectMove);
-    window.addEventListener("mouseup", onSelectUp);
+    mapAreaSelect.attach();
   }
 
   const sig = tracks.map((t) => t.key).join("|");
@@ -940,7 +830,8 @@ function applyView(): void {
   document.getElementById("statsView")?.classList.toggle("hidden", !isStats);
   document.getElementById("scanbar")?.classList.toggle("hidden", isMap || isStats);
   if (!isMap && document.body.classList.contains("map-expanded")) setMapExpanded(false);
-  if (!isMap && selectMode) setSelectMode(false);
+  if (!isMap && mapAreaSelect.isArmed()) mapAreaSelect.setMode(false);
+  if (!isStats && heatAreaSelect.isArmed()) heatAreaSelect.setMode(false);
   document.querySelectorAll<HTMLButtonElement>("#viewTabs .vtab").forEach((b) => {
     b.classList.toggle("active", b.dataset.view === activeView);
   });
@@ -983,6 +874,29 @@ let lastHeatSig = "";
 let lastHeatDataSig = "";
 /** Tracks behind the current heat layer, kept so a pan/zoom can rebuild without a re-scan. */
 let lastHeatTracks: RideTrack[] = [];
+/** Rides selected on the heatmap by a click or area-drag (independent of the Map view's). */
+let heatSelectedKeys: string[] = [];
+
+/** Render the heatmap's "Selected" list, dropping any keys whose track is no longer drawn. */
+function renderHeatMatched(): void {
+  const box = document.getElementById("heatMatched");
+  if (!box) return;
+  const drawn = new Set(lastHeatTracks.map((t) => t.key));
+  heatSelectedKeys = heatSelectedKeys.filter((k) => drawn.has(k));
+  box.innerHTML = renderMatchedCards(heatSelectedKeys);
+}
+
+// The Stats heatmap's area-select gesture: a box-drag selects every ride crossing
+// it, a click the nearest. Selection drives the matching list below the heatmap.
+const heatAreaSelect: AreaSelect = createAreaSelect({
+  getMap: () => freqHeatMap,
+  getTracks: () => lastHeatTracks,
+  button: document.getElementById("btnHeatSelect"),
+  onSelect: (keys) => {
+    heatSelectedKeys = keys;
+    renderHeatMatched();
+  },
+});
 
 /** On-screen pixel gap we aim to keep between heat points; half the glow radius keeps them merged. */
 function freqHeatSpacing(radius: number): number {
@@ -1168,6 +1082,7 @@ function mountFreqHeatmap(rides: RideView[], hidden: number, fit: boolean): void
     // in spreads the points until they bead. Rebuild after each pan/zoom so spacing
     // re-adapts and only the visible slice is densified (moveend covers both).
     freqHeatMap.on("moveend", () => redrawFreqHeatmap());
+    heatAreaSelect.attach();
   }
 
   const radius = STATE.settings.heatRadius;
@@ -1189,6 +1104,8 @@ function mountFreqHeatmap(rides: RideView[], hidden: number, fit: boolean): void
   }
   // The container is only correctly sized once its view becomes visible.
   setTimeout(() => freqHeatMap!.invalidateSize(), 0);
+  // Re-render the selection list, pruning any rides whose track is no longer drawn.
+  renderHeatMatched();
 }
 
 // --------------------------------------------------------------------------- //
@@ -2096,7 +2013,11 @@ document.addEventListener("click", (e) => {
     return;
   }
   if (t.id === "btnMapSelect") {
-    setSelectMode(!selectMode);
+    mapAreaSelect.setMode(!mapAreaSelect.isArmed());
+    return;
+  }
+  if (t.id === "btnHeatSelect") {
+    heatAreaSelect.setMode(!heatAreaSelect.isArmed());
     return;
   }
   if (t.dataset?.rangereset) {
@@ -2410,6 +2331,22 @@ if (mapSideEl) {
     const target = e.target as HTMLElement;
     if (target.closest(".ms-clear")) {
       setSelected([]);
+      return;
+    }
+    const item = target.closest(".ms-item") as HTMLElement | null;
+    if (item?.dataset.key) openRideInExplore(item.dataset.key);
+  });
+}
+
+// The heatmap's "Selected" list: click a ride to open it in Explore, or Clear to
+// drop the selection. (No hover emphasis — the heat layer draws no per-ride lines.)
+const heatMatchedEl = document.getElementById("heatMatched");
+if (heatMatchedEl) {
+  heatMatchedEl.addEventListener("click", (e) => {
+    const target = e.target as HTMLElement;
+    if (target.closest(".ms-clear")) {
+      heatSelectedKeys = [];
+      renderHeatMatched();
       return;
     }
     const item = target.closest(".ms-item") as HTMLElement | null;
