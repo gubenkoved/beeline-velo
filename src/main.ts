@@ -990,6 +990,15 @@ function fmtElevation(m: number): string {
   return m >= 1000 ? `${(m / 1000).toFixed(1)}k m` : `${Math.round(m)} m`;
 }
 
+/** Human-readable size for the locally stored state (MB, with a KB step for tiny payloads). */
+function fmtBytes(bytes: number): string {
+  const kb = bytes / 1024;
+  if (kb < 1) return `${bytes} B`;
+  const mb = kb / 1024;
+  if (mb < 0.1) return `${Math.round(kb)} KB`;
+  return `${mb.toFixed(mb < 10 ? 2 : 1)} MB`;
+}
+
 /** One totals/record card: a big value, a label, and an optional sub-line. */
 function statCard(value: string, label: string, sub = ""): string {
   const subHtml = sub ? `<span class="sc-sub">${escHtml(sub)}</span>` : "";
@@ -1158,7 +1167,7 @@ function gpxSplit(scope: string, key: string): string {
   const dataKey = key ? ` data-key="${key}"` : "";
   return (
     `<span class="split${open ? " open" : ""}">` +
-    `<button class="small ghost" data-act="gpx-one"${dataKey} title="Download a rough route preview (no file saved)">Preview</button>` +
+    `<button class="small ghost" data-act="gpx-one"${dataKey} title="Download a rough GPS route preview (shown on the map; no file saved)">Preview route</button>` +
     `<button class="small ghost caret" data-splitmenu="${scope}" aria-haspopup="true" aria-expanded="${open}" title="More GPX options">▾</button>` +
     `<span class="splitmenu"><button class="small ghost" data-act="gpx-save-one"${dataKey} title="Download the full GPX and save it to disk">Save .gpx file</button></span>` +
     `</span>`
@@ -1583,6 +1592,9 @@ function render(): void {
     (del ? ` · ${del} deleted` : "") +
     (selected.size ? ` · ${selected.size} selected` : "");
 
+  const sizeEl = $("#stateSize");
+  if (sizeEl) sizeEl.textContent = fmtBytes(controller.stateBytes());
+
   if (STATE.speed) {
     document.querySelectorAll<HTMLButtonElement>("#speeds button").forEach((b) => {
       b.classList.toggle("active", b.dataset.speed === STATE.speed);
@@ -1699,10 +1711,12 @@ function render(): void {
   if (activeView === "map") mountAllRidesMap();
   else if (activeView === "stats") mountStatsView();
   else mountMaps();
-  // The selection toolbar's GPX split button lives in static markup (not rebuilt
+  // The selection toolbar's split button lives in static markup (not rebuilt
   // here), so sync its open state from the shared `openMenu` flag.
-  const selSplit = document.getElementById("gpxSelMenu")?.closest(".split");
+  const selSplit = document.getElementById("selMenu")?.closest(".split");
   selSplit?.classList.toggle("open", openMenu === "sel");
+  const stateSplit = document.getElementById("stateMenu")?.closest(".split");
+  stateSplit?.classList.toggle("open", openMenu === "state");
   lastSig = stateSig();
 }
 
@@ -2117,6 +2131,13 @@ document.addEventListener("click", (e) => {
   // them — close here so every entry behaves the same.
   if (openMenu?.startsWith("ovr-") && t.dataset?.act) {
     openMenu = null;
+  }
+  // The Data and Selected menus' entries live inside `.split`, so the outside-click
+  // guard below skips them — dismiss the open menu here once one of its items is picked.
+  if ((openMenu === "state" || openMenu === "sel") && target.closest("#stateMenu, #selMenu")) {
+    openMenu = null;
+    render();
+    // fall through so the click still triggers the chosen action
   }
   if (openMenu !== null && !target.closest(".split, .yactions.open, .mactions.open, .rbtns.open")) {
     openMenu = null;

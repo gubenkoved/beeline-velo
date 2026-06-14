@@ -16,6 +16,11 @@ import { looksLikeStat, rideMonth, type StravaStatus } from "./parsing";
 /** Key under which the single serialized cache blob is stored in the backend. */
 export const STORAGE_KEY = "beeline-toolkit-state";
 
+/** UTF-8 byte length of a string (so multi-byte ride titles count their real size). */
+function byteLength(s: string): number {
+  return new TextEncoder().encode(s).length;
+}
+
 /** Default rough-track density: points kept per kilometre of route. */
 export const DEFAULT_TRACK_POINTS_PER_KM = 20;
 const TRACK_MIN_POINTS_PER_KM = 1;
@@ -174,6 +179,11 @@ export class Store {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
 
+  /** Byte size of the last serialized payload, surfaced to the UI as a size hint.
+   * Cached so reads (byteSize()) stay O(1) on every render — never re-serialized
+   * per frame. Refreshed only on the rare, costly events: load, write, import, clear. */
+  private cachedBytes = 0;
+
   /**
    * @param backend durable key/value store (IndexedDB in production).
    * @param onError surfaced when a background write fails (e.g. quota exceeded).
@@ -181,7 +191,11 @@ export class Store {
   constructor(
     private readonly backend: KeyValueStore,
     private readonly onError?: (message: string) => void,
-  ) {}
+  ) {
+    // Seed the size hint for stores built directly (e.g. demo mode); Store.load()
+    // refreshes again after ingesting any persisted payload.
+    this.refreshSize();
+  }
 
   static async load(
     backend: KeyValueStore,
@@ -201,6 +215,7 @@ export class Store {
         /* corrupt cache — start fresh */
       }
     }
+    store.refreshSize();
     return store;
   }
 
@@ -287,6 +302,7 @@ export class Store {
     if (!this.dirty) return Promise.resolve();
     this.dirty = false;
     const payload = JSON.stringify(this.serialize());
+    this.cachedBytes = byteLength(payload);
     return this.backend.set(STORAGE_KEY, payload).catch((err: unknown) => {
       const full = err instanceof DOMException && err.name === "QuotaExceededError";
       this.onError?.(
@@ -390,6 +406,17 @@ export class Store {
     void this.backend.del(STORAGE_KEY).catch(() => {
       /* storage unavailable — non-fatal, the in-memory state is already cleared */
     });
+    this.refreshSize();
+  }
+
+  /** Recompute the cached payload size from the current in-memory state. */
+  private refreshSize(): void {
+    this.cachedBytes = byteLength(JSON.stringify(this.serialize()));
+  }
+
+  /** Byte size of the persisted payload (UTF-8), for a human-readable size hint. */
+  byteSize(): number {
+    return this.cachedBytes;
   }
 
   // -- import / export ---------------------------------------------------
@@ -404,6 +431,7 @@ export class Store {
     const before = this.rides.size;
     this.ingest(JSON.parse(text));
     this.save();
+    this.refreshSize();
     return this.rides.size - before;
   }
 }

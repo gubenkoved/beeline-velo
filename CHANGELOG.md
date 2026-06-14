@@ -17,6 +17,37 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Selection actions folded into one "Check selected" split + clearer route wording
+- **What:** Collapsed the four selection-scoped header buttons (Check selected / Preview
+  selected / Save .gpx files / Upload selected to Strava) into one `.split`: "Check
+  selected" is the default action, the caret reveals Preview routes / Save .gpx files /
+  Upload selected to Strava. "Upload all pending to Strava" stays a separate primary
+  button (it's not selection-scoped). Renamed the ambiguous "Preview" actions to name what
+  they produce — "Preview routes" in the selection menu and "Preview route" per ride — and
+  the tooltips now say a rough **GPS route** preview shown on the map (no file saved). The
+  stale `data-gpxmenu` caret was rewired to the standard `data-splitmenu="sel"` toggle, and
+  menu dismissal generalized to both static header menus (`#stateMenu`, `#selMenu`).
+- **Why:** A row of five loose buttons crowded the header and buried the everyday action.
+  Grouping the selection actions under their most-common entry ("Check selected") mirrors
+  the new Data menu and reads as one tidy control, while leaving the headline "Upload all
+  pending" prominent. "Preview" alone read as a generic UI preview; tying the word to the
+  GPS route it downloads removes the ambiguity.
+
+## Compact "Data" menu for state actions + local-size hint
+- **What:** Folded the three header buttons (Import / Export / Reset) into one compact
+  "Data" dropdown (reusing the `.split`/`.splitmenu` pattern), and added an
+  always-visible pill next to the ride totals showing the local state size (e.g. "6 KB",
+  "1.3 MB"). `Store` now tracks the serialized payload's byte size, refreshed only on the
+  rare costly events (load, write, import, clear) and on construction, so `byteSize()` /
+  `Controller.stateBytes()` stay O(1) per render. The trigger's chevron is drawn from CSS
+  borders (matching `.caret`), not a `▾` font glyph — the glyph renders off-baseline/blurry
+  across fonts, the exact "ugly arrow" the codebase already avoids for `.job-toggle`.
+- **Why:** Three loose buttons cluttered the header; grouping them under one labelled
+  trigger reads as one tidy control while keeping every existing handler/ID intact. The
+  size hint gives the user honest feedback on how much they've accumulated locally
+  (export to back up, reset to reclaim) without re-serializing on every frame — important
+  at the thousands-of-rides scale this app targets.
+
 ## Denser default track preview + clearer inline number fields
 - **What:** Default rough-track density bumped 10 → 20 pts/km; inline `.custom` number
   inputs (`last [n] days`, `Distance [min]–[max] km`, `pts/km`) now carry a subtle

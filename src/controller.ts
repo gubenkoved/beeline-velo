@@ -541,6 +541,11 @@ export class Controller {
     this.notify();
     return n;
   }
+
+  /** Byte size of the locally persisted state, for a human-readable size hint. */
+  stateBytes(): number {
+    return this.store.byteSize();
+  }
 }
 
 // `submit` returns a task snapshot; alias keeps the surface readable.

@@ -205,4 +205,25 @@ describe("Store", () => {
     // A fresh load now starts empty.
     expect((await Store.load(backend)).rides.size).toBe(0);
   });
+
+  it("byteSize tracks the persisted payload: grows with rides, shrinks on clear", async () => {
+    const s = await Store.load(backend);
+    const empty = s.byteSize();
+    expect(empty).toBeGreaterThan(0); // the serialized envelope is never zero bytes
+
+    s.upsert("Sat Jun 13 2026 at 14:22", { title: "Afternoon ride", distance: "22.6km" });
+    s.save();
+    await s.flush();
+    const withRide = s.byteSize();
+    expect(withRide).toBeGreaterThan(empty);
+
+    // Importing more rides keeps the size in step without an explicit save/flush.
+    s.importJson(
+      JSON.stringify({ updated_at: "x", rides: { k2: { key: "k2", title: "Another" } } }),
+    );
+    expect(s.byteSize()).toBeGreaterThan(withRide);
+
+    s.clear();
+    expect(s.byteSize()).toBe(empty);
+  });
 });

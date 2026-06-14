@@ -1167,6 +1167,34 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
   border-top-left-radius: 7px;
   border-bottom-left-radius: 7px;
 }
+/* A standalone dropdown trigger (no fused primary action) keeps full rounding and
+   carries its own chevron. Drawn from two borders (like .caret) rather than a "▾"
+   font glyph, which renders as an ugly off-baseline blob across fonts. */
+.split > button.menubtn {
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.split > button.menubtn::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  color: var(--muted);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.15s ease;
+}
+.split.open > button.menubtn::after {
+  /* flip the chevron to point up while the menu is open */
+  transform: translateY(1px) rotate(-135deg);
+}
+.split.open > button.menubtn {
+  color: var(--text);
+  background: #222732;
+  border-color: #333b48;
+}
 /* The caret hides its `▾` glyph (kept for the accessible name) and draws a crisp chevron
    from two borders instead — consistent across fonts and pixel-snapped at any size. */
 .split > button.caret {
@@ -1216,10 +1244,30 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
 .split.open .splitmenu {
   display: block;
 }
+/* Menu rows, not buttons: drop the per-item border/fill the base `button` rule gives
+   them (which read as gross stacked outlined pills) and render flat, full-width rows
+   with a single hover highlight — the standard dropdown-item look. */
 .splitmenu button {
   display: block;
   width: 100%;
   text-align: left;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 7px 11px;
+}
+.splitmenu button:not(:last-child) {
+  margin-bottom: 1px;
+}
+.splitmenu button:hover:not(:disabled) {
+  background: #222732;
+  border-color: transparent;
+}
+.splitmenu button.danger {
+  color: #f8736a;
+}
+.splitmenu button.danger:hover:not(:disabled) {
+  background: #2a1413;
 }
 
 .rmap {
