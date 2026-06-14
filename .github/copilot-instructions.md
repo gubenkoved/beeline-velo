@@ -13,6 +13,27 @@ buttons, and persists ride status in `LocalStorage`. There is no server and no A
 - `npm run build` — `tsc --noEmit` type-check **then** `vite build`. Always type-check before considering a change done.
 - `npm test` / `npm run test:watch` — Vitest.
 
+## Changelog
+
+Maintain [CHANGELOG.md](../CHANGELOG.md) — an **internal** intent log (not public release notes).
+Whenever you finish a logical change and its acceptance checks pass (`npm run build` + `npm test`
+green), add an entry. This file is read by humans **and** the assistant as a compressed history of
+decisions and values, so the "why" matters more than the "what".
+
+- **One entry per logical change**, newest at the top. Squash `fixup!`-style follow-ups into the
+  entry they belong to rather than adding a new one.
+- **Reference the commit hash(es)** the change lands in (add the hash once committed; if you don't
+  have it yet, leave a `TODO: hash` and fill it in after committing).
+- **Capture intent**, not just the diff: the motivation, the decision, the trade-off — the context
+  the terse commit message omits. Ground it in what the change actually did.
+- **Format:**
+  ```
+  ## <short title>
+  - **What:** one line — what changed.
+  - **Why:** 1–2 lines — the motivation / decision / value behind it.
+  - **Commits:** `hash`(, `hash` …)
+  ```
+
 ## Architecture / module map
 
 UI → Controller → (JobQueue · Store · BeelineApp) → Parsing → AdbDevice (real or demo).
@@ -43,6 +64,7 @@ UI → Controller → (JobQueue · Store · BeelineApp) → Parsing → AdbDevic
 - **Immutable-ish state**: mutate the `Store` only via `store.upsert(key, partial)`; let the Controller emit a change event to re-render.
 - **No hardcoded screen coordinates**: derive every tap/swipe from `Geometry` (computed from `screenSize()`), so it works on any device resolution.
 - **Transport abstraction**: code against the `AdbDevice` interface, never `WebUsbAdb`/`DemoAdb` directly — this is what keeps demo mode and tests working.
+- **Minimal device round-trips**: every `uiDump`/tap/swipe is a real over-the-wire ADB call and the slowest thing we do (~10 s/ride already), so keep phone interaction quick — never add reads/gestures to the per-gesture happy path. Verify device state (foreground app via `currentFocus()`, current screen via `parseJourneysList`/`isRideDetail`) only at rare, high-stakes decision points — above all before marking a ride **deleted**, since one stray tap can drift us to another app/screen and an empty parse would otherwise look like "all rides gone". The guard `BeelineApp.onJourneysList()` is the canonical gate; `enumerateCatalog` returns a `complete` flag and `sweepTargets` pauses without deleting when that gate fails.
 - **Unified map look & feel**: both Leaflet basemaps — the Explore per-ride mini-maps (`.rmap`) and the all-rides Map view (`#allRidesMap`) — share one dark, desaturated tile treatment (`.leaflet-tile-pane { filter: grayscale(85%) brightness(.6) contrast(1.1) }` over a `#05070a` container) so colored tracks pop consistently. Keep the two filter rules in sync; mini-maps draw a single ride with a white casing + solid orange line for legibility, while the Map view uses translucent overlapping lines as a heatmap.
 - **Status/progress messages**: say exactly WHAT is happening and WHY, verbosely if needed — never vague counts. When acting on a specific ride, name it with the params we know (e.g. `rideShortLabel(key)` → "Jun 13 14:22"), not "1 ride". Prefer "scrolling down to find Jun 13 14:22…" over "scrolling down — looking for 1 ride…". When several rides are involved, name the first couple and append "(+N more)".
 - **Error handling**: throw/catch `AdbError` for device issues; wrap `localStorage` access in `try/catch` (private mode can throw — non-fatal); surface failures to the user via `toast(message, isError)` and fall back to demo mode rather than crashing.

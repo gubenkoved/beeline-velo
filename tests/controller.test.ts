@@ -229,6 +229,26 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     expect(pendingKeys).not.toContain(key);
   });
 
+  it("never marks rides deleted from a scan when the phone drifted to another app", async () => {
+    const demo = new DemoAdb();
+    const c = makeController(demo);
+    await c.connect();
+    c.scan("all", null); // a good first scan populates the store
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    const before = c.state().rides.map((r) => r.key);
+    expect(before.length).toBeGreaterThan(0);
+
+    demo.leaveApp(); // user touches the phone → it drifts off Beeline mid-session
+    c.scan("all", null); // this scan sees nothing because we're not on the list
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    // The scan was incomplete (we couldn't confirm we were on the Journeys list), so
+    // NOT A SINGLE ride may be flagged deleted despite none being seen this pass.
+    const deleted = c.state().rides.filter((r) => r.deleted).map((r) => r.key);
+    expect(deleted).toEqual([]);
+  });
+
   it("downloads a GPX, emits the file, and stores a rough track", async () => {
     const c = makeController(new DemoAdb());
     await c.connect();

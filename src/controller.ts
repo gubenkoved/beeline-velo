@@ -208,7 +208,7 @@ export class Controller {
     };
     rep(`scanning (${label})…`);
     const seen = new Set<string>();
-    const cards = await app.enumerateCatalog(
+    const { cards, complete } = await app.enumerateCatalog(
       rep,
       since,
       (fresh) => {
@@ -223,9 +223,12 @@ export class Controller {
     );
     // A scan reads the COMPLETE list for its window, so any ride we knew about
     // within that window but did not see has been deleted on the phone. Only
-    // reconcile when the scan ran to completion (a cancelled scan is partial).
+    // reconcile when the scan both ran to completion AND was verified to have read
+    // the real Journeys list end-to-end (`complete`). A cancelled scan is partial,
+    // and an incomplete scan means the phone may have drifted to another app/screen
+    // mid-pass — in either case treating unseen rides as deleted would be wrong.
     let removed = 0;
-    if (!cancelled) {
+    if (!cancelled && complete) {
       for (const r of this.store.rides.values()) {
         if (r.deleted || seen.has(r.key)) continue;
         const dt = rideDatetime(r.key);

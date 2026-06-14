@@ -88,6 +88,17 @@ export type GpxExport =
   | { ok: true; file: GpxFile }
   | { ok: false; reason: string };
 
+/** Result of a catalogue scan. `complete` is true only when the Journeys list was
+ *  read end-to-end while we were verifiably on it — the precondition for trusting
+ *  that an in-window ride we knew about but didn't see has been deleted. A scan cut
+ *  short by the user, scroll jitter, or the phone drifting to another app/screen
+ *  reports `complete: false`, so callers must NOT reconcile deletions from it. */
+export interface CatalogResult {
+  cards: RideCard[];
+  complete: boolean;
+}
+
+
 // A callback the long-running passes call to report progress and check for cancel.
 // It receives a short status message; returning true asks the operation to stop.
 export type Progress = (msg: string) => boolean | Promise<boolean>;
@@ -293,6 +304,23 @@ export class BeelineApp {
   }
 
   /**
+   * Confirm we're genuinely looking at the Beeline Journeys list right now —
+   * Beeline is the foreground app AND the current screen parses as the list. This
+   * is the safety gate used only at rare, high-stakes moments (before concluding a
+   * ride was deleted): if the user touched the phone mid-sweep and drifted to
+   * another app/screen, the parse would yield no cards and we'd otherwise mistake
+   * present rides for deleted ones. It costs one focus read + one dump, so it must
+   * stay off the per-gesture happy path. Pass an `xml` already in hand to reuse it
+   * and avoid a redundant dump.
+   */
+  async onJourneysList(xml?: string): Promise<boolean> {
+    const focus = await this.adb.currentFocus();
+    if (!focus.includes(PACKAGE)) return false; // some other app is in front
+    const dump = xml ?? (await this.adb.uiDump());
+    return parseJourneysList(dump).length >= 2;
+  }
+
+  /**
    * Move the Journeys list one step in the chosen direction. `fling` selects a
    * fast momentum fling (large travel, short duration, longer settle) over the
    * normal controlled drag; the fling path is only taken when the active profile
@@ -421,25 +449,32 @@ export class BeelineApp {
    * `onCards` is called with each page's newly-discovered cards so callers can
    * persist/display rides AS THEY ARE FOUND rather than waiting for the whole pass.
    * A hard page cap guards against any scroll jitter that never settles.
+   *
+   * Returns the collected cards plus a `complete` flag: it is true only when the
+   * list was read all the way to its end (or past the `since` cutoff) while we were
+   * verifiably still on the Journeys screen. Callers must gate any deletion
+   * reconciliation on `complete` so a scan interrupted by the phone drifting to
+   * another app never makes still-present rides look deleted.
    */
   async enumerateCatalog(
     progress: Progress = noop,
     since: Date | null = null,
     onCards: (cards: RideCard[]) => void = () => {},
-  ): Promise<RideCard[]> {
+  ): Promise<CatalogResult> {
     const passesSince = (key: string): boolean => {
       if (since === null) return true;
       const dt = rideDatetime(key);
       return dt !== null && dt >= since;
     };
 
-    if (await progress("opening Journeys…")) return [];
+    if (await progress("opening Journeys…")) return { cards: [], complete: false };
     await this.openJourneys();
-    if (await progress("scrolling to your newest ride…")) return [];
+    if (await progress("scrolling to your newest ride…")) return { cards: [], complete: false };
     await this.scrollListToTop();
     const seen = new Map<string, RideCard>();
     let stale = 0;
     let reachedCutoff = false;
+    let complete = false; // set true only on a verified end-of-list / cutoff read
     let lastSig: string[] | null = null;
     const MAX_PAGES = 1000; // safety: never scroll forever
     for (let page = 0; page < MAX_PAGES; page++) {
@@ -458,10 +493,21 @@ export class BeelineApp {
       const emit = fresh.filter((c) => passesSince(c.key));
       if (emit.length) onCards(emit); // hand rides to the caller as they appear
       if (await progress(`scrolling Journeys — ${seen.size} ride${seen.size === 1 ? "" : "s"} found`)) break;
-      if (reachedCutoff) break;
+      if (reachedCutoff) {
+        complete = true; // saw a real ride past the cutoff → the window is fully covered
+        break;
+      }
       const sig = cards.map((c) => c.key);
       stale = fresh.length === 0 && lastSig !== null && sameKeys(sig, lastSig) ? stale + 1 : 0;
-      if (stale >= 2) break; // list stopped changing => reached the end
+      if (stale >= 2) {
+        // The list stopped changing — normally the real end of the catalogue. But a
+        // user touching the phone mid-scan switches apps/screens, which makes
+        // listCards return nothing and fakes the very same "stall". Only trust this
+        // as a complete read when we can confirm we're still on the Journeys list;
+        // otherwise the caller must not reconcile deletions from a half-seen scan.
+        complete = await this.onJourneysList();
+        break;
+      }
       lastSig = sig;
       const [x1, y1, x2, y2] = this.geo.listScrollDown();
       await this.adb.swipe(x1, y1, x2, y2, 300);
@@ -469,7 +515,7 @@ export class BeelineApp {
     }
     let cards = [...seen.values()];
     if (since !== null) cards = cards.filter((c) => passesSince(c.key));
-    return cards;
+    return { cards, complete };
   }
 
   /**
@@ -572,7 +618,26 @@ export class BeelineApp {
         continue;
       }
 
-      if (cards.length === 0) break; // nothing on screen to navigate by
+      if (cards.length === 0) {
+        // Nothing parsed off the screen. This is the danger zone for false
+        // deletions: a sudden tap by the user can switch apps or open another
+        // screen, and an empty parse would otherwise make us treat still-present
+        // rides as gone. Re-dump once to shrug off a transient uiautomator hiccup;
+        // if the screen is STILL empty we refuse to draw any conclusion — mark the
+        // sweep cancelled (so the final block can't flag anything deleted) and pause
+        // with a clear "don't touch the phone" note. A genuinely empty list lands
+        // here too and is intentionally left untouched rather than risk a wrong call.
+        await this.sleep(this.timing.scroll_settle);
+        cards = await this.listCards();
+        if (cards.length === 0) {
+          cancelled = true;
+          await progress(
+            "lost the Beeline rides screen — pausing so nothing is wrongly marked deleted (don't touch the phone)",
+          );
+          break;
+        }
+        continue;
+      }
 
       // No target visible. The list is sorted newest→oldest and is contiguous, so
       // any *existing* ride whose date is within the visible page's span would be
@@ -716,8 +781,20 @@ export class BeelineApp {
     if (!cancelled) {
       for (const key of remaining) missing.add(key); // swept everything → also gone
       if (missing.size) {
-        await progress(`${missing.size} ride${missing.size === 1 ? "" : "s"} no longer on the phone — marked deleted`);
-        onMissing([...missing]);
+        // Final safety gate before any ride is declared deleted: positively confirm
+        // we're still on the Beeline Journeys list (right app + a real list on
+        // screen). If the user drifted us elsewhere late in the sweep, refuse to mark
+        // anything deleted and pause instead — the rides will be re-checked next run.
+        // This costs one focus read + one dump, but only when there's something to
+        // delete (missing.size > 0), so the all-found happy path pays nothing.
+        if (await this.onJourneysList()) {
+          await progress(`${missing.size} ride${missing.size === 1 ? "" : "s"} no longer on the phone — marked deleted`);
+          onMissing([...missing]);
+        } else {
+          await progress(
+            "paused before marking rides deleted — not on the Beeline rides screen (don't touch the phone)",
+          );
+        }
       }
     }
   }

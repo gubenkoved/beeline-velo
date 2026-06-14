@@ -292,3 +292,73 @@ describe("sequential batch order (one monotonic pass)", () => {
     expect(demo.listScrolls - afterPark).toBeLessThanOrEqual(12);
   });
 });
+
+describe("drift safety (a stray touch never wrongly marks rides deleted)", () => {
+  it("onJourneysList is true on the real list and false once the phone drifts away", async () => {
+    const demo = new DemoAdb();
+    const app = await BeelineApp.create(demo, PROFILES.normal, instant);
+
+    expect(await app.onJourneysList()).toBe(true); // genuinely on the Journeys list
+
+    demo.leaveApp(); // user touches the phone → another app comes to the front
+    expect(await app.onJourneysList()).toBe(false); // no longer verifiably on the list
+  });
+
+  it("does NOT flag a present ride deleted when the phone has drifted to another app", async () => {
+    const demo = new DemoAdb({ rides: makeDemoRides(40) });
+    const app = await BeelineApp.create(demo, PROFILES.normal, instant);
+    const target = makeDemoRides(40)[20].key; // a ride that very much still exists
+
+    demo.leaveApp(); // drifted off Beeline before we could find it
+
+    const missing: string[] = [];
+    const details = await app.processTargets(
+      new Set([target]),
+      false,
+      async () => false,
+      () => {},
+      (keys) => missing.push(...keys),
+    );
+
+    expect(details).toHaveLength(0); // couldn't read it — but that's fine
+    expect(missing).toEqual([]); // crucially, it was NOT declared deleted
+  });
+
+  it("refuses to mark a truly-gone ride deleted if we drifted away by the final check", async () => {
+    // currentFocus is consulted exactly twice per sweep that reaches the deletion
+    // gate: once at the start (ensureRunning) and once at the very end (the safety
+    // gate before marking anything deleted). This device reports Beeline first, then
+    // a different app on the second call — i.e. the user drifted away right as the
+    // sweep finished. The genuinely-removed ride must therefore NOT be flagged.
+    class DriftAtEndDemo extends DemoAdb {
+      private focusCalls = 0;
+      async currentFocus(): Promise<string> {
+        this.focusCalls++;
+        if (this.focusCalls >= 2) {
+          return "mCurrentFocus=Window{0 u0 com.android.launcher3/com.android.launcher3.Launcher}";
+        }
+        return super.currentFocus();
+      }
+    }
+
+    const rides = makeDemoRides(120);
+    const gone = rides[80].key;
+    const demo = new DriftAtEndDemo({ rides: makeDemoRides(120) });
+    demo.removeRide(gone); // really deleted on the phone…
+
+    const app = await BeelineApp.create(demo, PROFILES.fast, instant);
+    const missing: string[] = [];
+    await app.processTargets(
+      new Set([gone]),
+      false,
+      async () => false,
+      () => {},
+      (keys) => missing.push(...keys),
+    );
+
+    // …but because we could no longer confirm we were on the Journeys list at the
+    // moment of decision, we hold off rather than risk a wrong call. It'll be
+    // re-checked (and correctly flagged) on a later run that ends on the list.
+    expect(missing).toEqual([]);
+  });
+});

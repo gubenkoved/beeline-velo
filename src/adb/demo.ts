@@ -43,6 +43,19 @@ function escapeXml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/**
+ * A uiautomator dump from OUTSIDE Beeline (e.g. the Android home screen) — what we
+ * see if the user touches the phone mid-automation. It contains no ride datetimes,
+ * so `parseJourneysList` yields nothing and `isRideDetail` is false; the drift
+ * guards must recognise this and refuse to mark any ride deleted.
+ */
+const DRIFTED_XML =
+  `<?xml version="1.0" encoding="UTF-8"?><hierarchy rotation="0">` +
+  `<node text="Phone" bounds="[60,2200][180,2280]" />` +
+  `<node text="Messages" bounds="[300,2200][520,2280]" />` +
+  `<node text="Chrome" bounds="[600,2200][820,2280]" />` +
+  `</hierarchy>`;
+
 /** Build a believable set of demo rides, newest first. */
 function makeRides(): DemoRide[] {
   const seeds: Array<[string, string, string, string]> = [
@@ -143,6 +156,8 @@ export class DemoAdb implements AdbDevice {
   private missSwipes = 0;
   /** When set, momentum flings (short-duration swipes) are ignored — only slow drags move. */
   private flingDeaf = false;
+  /** When set, the phone has drifted to another app/screen (simulates the user touching it). */
+  private away = false;
 
   constructor(opts: { rides?: DemoRide[]; size?: Size; latencyMs?: number } = {}) {
     this.size = opts.size ?? { width: 1080, height: 2400 };
@@ -181,6 +196,22 @@ export class DemoAdb implements AdbDevice {
     this.flingDeaf = on;
   }
 
+  /**
+   * Test hook: simulate the user touching the phone mid-automation so it drifts off
+   * Beeline — the foreground app changes and the screen no longer parses as the
+   * Journeys list. This is exactly what must NOT make present rides look deleted:
+   * `currentFocus()` reports another package and `uiDump()` returns a non-Beeline
+   * screen (no ride cards). Call `returnToApp()` to come back.
+   */
+  leaveApp(): void {
+    this.away = true;
+  }
+
+  /** Test hook: undo `leaveApp()` — the phone is back on the Beeline Journeys list. */
+  returnToApp(): void {
+    this.away = false;
+  }
+
   private async tick(): Promise<void> {
     if (this.latencyMs > 0) await new Promise((r) => setTimeout(r, this.latencyMs));
   }
@@ -197,6 +228,10 @@ export class DemoAdb implements AdbDevice {
 
   async currentFocus(): Promise<string> {
     await this.tick();
+    if (this.away) {
+      // Another app is in front — the foreground window is not Beeline's package.
+      return "mCurrentFocus=Window{0 u0 com.android.launcher3/com.android.launcher3.Launcher}";
+    }
     return "mCurrentFocus=Window{0 u0 co.beeline/co.beeline.MainActivity}";
   }
 
@@ -208,6 +243,7 @@ export class DemoAdb implements AdbDevice {
   async uiDump(): Promise<string> {
     await this.tick();
     this.uiDumps++;
+    if (this.away) return DRIFTED_XML; // off Beeline → nothing that parses as a ride
     if (this.view === "options") return this.renderOptions();
     if (this.view === "share") return this.renderShare();
     if (this.view === "downloading") {
