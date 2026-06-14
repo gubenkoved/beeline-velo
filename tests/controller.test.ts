@@ -146,6 +146,23 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     expect(rec.uploaded_at).not.toBe("");
   });
 
+  it("skips rides already uploaded to Strava (never re-uploads)", async () => {
+    const c = makeController(new DemoAdb());
+    await c.connect();
+    c.scan("all", null);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false));
+
+    const key = "Sat Jun 13 2026 at 14:22";
+    // Pretend it's already on Strava (as a prior upload/Check would have recorded).
+    c.store.upsert(key, { strava_status: "uploaded" });
+
+    // The upload is filtered down to nothing before it can reach the queue.
+    const snap = c.upload([key]);
+    expect(snap.count).toBe(0);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false));
+    expect(c.state().rides.find((r) => r.key === key)!.status).toBe("uploaded");
+  });
+
   it("coalesces multiple upload clicks into one pass and uploads all", async () => {
     const c = makeController(new DemoAdb());
     await c.connect();

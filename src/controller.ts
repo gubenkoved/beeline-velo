@@ -441,7 +441,11 @@ export class Controller {
   }
 
   upload(keys: string[], label = ""): TaskSnapshotResult {
-    return this.jobs.submit("upload", { label: label || `${keys.length} rides`, keys });
+    // Never re-upload a ride that's already on Strava: filter out uploaded keys at the
+    // single choke point every caller funnels through (per-ride, selection, month, year,
+    // all-pending), so no UI path can submit a duplicate upload.
+    const fresh = keys.filter((k) => this.store.rides.get(k)?.strava_status !== "uploaded");
+    return this.jobs.submit("upload", { label: label || `${fresh.length} rides`, keys: fresh });
   }
 
   /**

@@ -17,6 +17,20 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Disable per-ride "Upload to Strava" when already uploaded
+
+- **What:** The per-ride Upload to Strava button is now rendered `disabled` (with an
+  "Already uploaded to Strava" tooltip) when the ride's status is `uploaded`, and the
+  `upload-one` click handler short-circuits with a toast as a defensive guard.
+  `Controller.upload()` now also filters out already-uploaded keys at the single choke
+  point every caller funnels through, so no path (per-ride, selection, month, year,
+  all-pending) can submit a duplicate upload; the "Upload selected" button toasts when the
+  whole selection is already on Strava.
+- **Why:** Re-uploading a ride that's already on Strava is a no-op at best and a
+  duplicate-risk at worst; greying out the button makes "nothing to do here" obvious and
+  removes a foot-gun, while the controller-level skip guarantees correctness regardless of
+  which UI entry point is used. Reuses the existing `button:disabled` styling.
+
 ## Aligned year/month group-header indicators
 
 - **What:** Gave the year/month header title columns (`.ytitle`/`.mtitle`) a

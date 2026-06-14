@@ -1638,7 +1638,7 @@ function render(): void {
           <div class="rbtns">
             <button class="small ghost" data-act="status-one" data-key="${r.key}">Check</button>
             ${gpxSplit(r.key, r.key)}
-            <button class="small accent" data-act="upload-one" data-key="${r.key}">Upload to Strava</button>
+            <button class="small accent" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ""}>Upload to Strava</button>
           </div>`;
         rowsEl.appendChild(el);
       }
@@ -2065,7 +2065,11 @@ document.addEventListener("click", (e) => {
   }
   if (t.id === "btnUploadSel") {
     if (!selected.size) return toast("Select some rides first.");
-    return run(() => controller.upload([...selected]));
+    const keys = [...selected].filter(
+      (k) => STATE.rides.find((r) => r.key === k)?.status !== "uploaded",
+    );
+    if (!keys.length) return toast("All selected rides are already uploaded to Strava.");
+    return run(() => controller.upload(keys));
   }
   if (t.id === "btnUploadPending") {
     const keys = STATE.rides.filter((r) => r.status === "pending" && !r.deleted).map((r) => r.key);
@@ -2080,7 +2084,11 @@ document.addEventListener("click", (e) => {
     openMenu = null;
     return run(() => controller.downloadGpx([t.dataset.key!], true));
   }
-  if (act === "upload-one") return run(() => controller.upload([t.dataset.key!]));
+  if (act === "upload-one") {
+    const ride = STATE.rides.find((r) => r.key === t.dataset.key);
+    if (ride && ride.status === "uploaded") return toast("Already uploaded to Strava.");
+    return run(() => controller.upload([t.dataset.key!]));
+  }
   if (act === "status-month") {
     openMenu = null;
     return run(() => controller.status(keysOfMonth(t.dataset.m!)));
