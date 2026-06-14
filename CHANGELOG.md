@@ -17,6 +17,15 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Draw the "Up next" disclosure arrow with CSS instead of a font glyph
+- **What:** Replaced the `.job-toggle::before` content from the Unicode `▸` (`\25B8`,
+  "small right-pointing triangle") glyph with a CSS border-drawn triangle (0×0 box +
+  solid borders); kept the rotate-90°-on-expand behavior driven by `aria-expanded`.
+- **Why:** The `\25B8` "small triangle" variant renders inconsistently across fonts and
+  collapsed into a tiny blue dot/blob rather than a clear chevron. Drawing it with borders
+  removes the font dependency entirely, so the arrow is always crisp and points right when
+  collapsed, down when expanded.
+
 ## Move the ride cache from LocalStorage to IndexedDB
 - **What:** added a small async `KeyValueStore` backend (`src/kv.ts`: hand-written
   `idbBackend()` for production, `memoryBackend()` for demo/tests) and reworked `Store`
