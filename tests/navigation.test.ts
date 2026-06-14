@@ -246,3 +246,49 @@ describe("resilient navigation (recovers from missed swipes)", () => {
     expect(missing).toEqual([]); // never wrongly declared deleted
   });
 });
+
+describe("sequential batch order (one monotonic pass)", () => {
+  it("processes a same-side batch in list order regardless of how it was submitted", async () => {
+    const rides = makeDemoRides(60);
+    const demo = new DemoAdb({ rides: makeDemoRides(60) });
+    const app = await BeelineApp.create(demo, PROFILES.normal, instant);
+
+    // Three targets, all BELOW the freshly-opened top, handed in DELIBERATELY
+    // SCRAMBLED order. A sequential sweep must still visit them top→down (newest→
+    // oldest) — i.e. by list position, not by the order they were submitted.
+    const submitted = [rides[30].key, rides[10].key, rides[20].key];
+    const details = await app.processTargets(new Set(submitted), false);
+
+    expect(details.map((d) => d.key)).toEqual([
+      rides[10].key, // nearest the top is processed first…
+      rides[20].key, // …then the next…
+      rides[30].key, // …then the deepest — one straight downward pass
+    ]);
+  });
+
+  it("commits to the nearer end first, then sweeps across (a single reversal)", async () => {
+    const rides = makeDemoRides(60);
+    const demo = new DemoAdb({ rides: makeDemoRides(60) });
+    const app = await BeelineApp.create(demo, PROFILES.normal, instant);
+
+    // Park the view in the middle of the list by checking a mid ride first.
+    await app.processTargets(new Set([rides[30].key]), false);
+    const afterPark = demo.listScrolls;
+
+    // Targets straddle the parked view: one just BELOW (near), one far ABOVE.
+    // A minimal-movement sweep heads to the nearer (below) target first, then makes
+    // one reversal upward to the far target — never the far end first.
+    const details = await app.processTargets(
+      new Set([rides[4].key, rides[34].key]),
+      false,
+    );
+
+    expect(details.map((d) => d.key)).toEqual([
+      rides[34].key, // nearer (just below the parked view) — visited first
+      rides[4].key, // farther (well above) — reached after the single reversal
+    ]);
+    // And the whole straddle costs only a modest amount of scrolling, nowhere near
+    // a full-list round trip (which heading to the far end first would incur).
+    expect(demo.listScrolls - afterPark).toBeLessThanOrEqual(12);
+  });
+});

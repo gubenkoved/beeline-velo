@@ -517,6 +517,13 @@ export class BeelineApp {
     let cards = await this.listCards(); // start from the CURRENT position
     let exhaustedUp = false;
     let exhaustedDown = false;
+    // The sweep COMMITS to one direction so a batch runs as a single monotonic pass
+    // (nearer end first, then straight across to the far end) instead of hopping by
+    // whichever target happens to be closest at each step — that hopping is what made
+    // the processing order feel random and caused needless back-and-forth scrolling.
+    // null until the first off-screen navigation picks a side; thereafter we keep it
+    // until that side runs out of reachable targets, then flip to the other side.
+    let committedUp: boolean | null = null;
 
     // Coarse→fine refinement level for the far-scroll phase (fast/turbo only):
     //   0 = chain several momentum flings between dumps (covers the most ground),
@@ -587,13 +594,14 @@ export class BeelineApp {
       }
 
       // Direction is decided by the list's newest→oldest ordering and the dates of
-      // the rides we still want — and it is AUTHORITATIVE: a target newer than
-      // everything on screen is strictly ABOVE us, so we go up and never down (and
-      // vice-versa). We only fall back to a blind both-ends sweep when a remaining
-      // key has no parseable date to reason about. Crucially, when a target lies past
-      // an end we've already CONFIRMED we cannot scroll toward, the ride is gone — we
-      // stop instead of reversing into the opposite direction (the old bug that made
-      // one missed up-swipe send us scrolling down forever).
+      // the rides we still want. A target newer than everything on screen is strictly
+      // ABOVE us; one older is strictly BELOW. To keep a batch moving as ONE pass we
+      // commit to a side (the nearer end first) and hold it until that side is spent,
+      // rather than re-deciding per target. We only fall back to a blind both-ends
+      // sweep when a remaining key has no parseable date to reason about. Crucially,
+      // when a target lies past an end we've already CONFIRMED we cannot scroll
+      // toward, the ride is gone — we stop instead of reversing into the opposite
+      // direction (the old bug that made one missed up-swipe scroll down forever).
       const remDates = [...remaining]
         .map(rideDatetime)
         .filter((d): d is Date => d !== null);
@@ -601,12 +609,41 @@ export class BeelineApp {
       const needUp = remDates.some((d) => newestVisible !== null && d > newestVisible);
       const needDown = remDates.some((d) => oldestVisible !== null && d < oldestVisible);
 
+      // A side is reachable only if a remaining target lies that way AND we haven't
+      // already confirmed that end of the list. The committed direction sticks until
+      // its side is no longer reachable, at which point it flips to the other side
+      // (or clears, so an undated fallback / termination can take over below).
+      const canUp = needUp && !exhaustedUp;
+      const canDown = needDown && !exhaustedDown;
+      if (committedUp === true && !canUp) committedUp = canDown ? false : null;
+      else if (committedUp === false && !canDown) committedUp = canUp ? true : null;
+
       let goUp: boolean;
-      if (needUp && !exhaustedUp) goUp = true; // target is above and we can still go up
-      else if (needDown && !exhaustedDown) goUp = false; // …or below and we can go down
-      else if (hasUndated && !exhaustedDown) goUp = false; // no date — sweep down first…
-      else if (hasUndated && !exhaustedUp) goUp = true; // …then up…
-      else break; // every remaining ride is past a confirmed end → they're gone
+      if (committedUp !== null) {
+        goUp = committedUp; // stay the course — one monotonic pass
+      } else if (canUp && canDown) {
+        // Both ends still hold targets: commit toward the NEARER one (smallest date
+        // gap to the visible window) so the only leg we later re-cross is the short
+        // one. newestVisible/oldestVisible are non-null here (canUp/canDown imply it).
+        const upGap = Math.min(
+          ...remDates.filter((d) => d > newestVisible!).map((d) => d.getTime() - newestVisible!.getTime()),
+        );
+        const downGap = Math.min(
+          ...remDates.filter((d) => d < oldestVisible!).map((d) => oldestVisible!.getTime() - d.getTime()),
+        );
+        committedUp = upGap <= downGap;
+        goUp = committedUp;
+      } else if (canUp) {
+        committedUp = true;
+        goUp = true; // only above is reachable
+      } else if (canDown) {
+        committedUp = false;
+        goUp = false; // only below is reachable
+      } else if (hasUndated && !exhaustedDown) {
+        goUp = false; // no date — sweep down first…
+      } else if (hasUndated && !exhaustedUp) {
+        goUp = true; // …then up…
+      } else break; // every remaining ride is past a confirmed end → they're gone
 
       // The closest remaining target on the side we're heading toward — its date
       // lets us tell when a fling has coasted PAST it (overshoot) so we can refine.
