@@ -26,6 +26,8 @@ export interface Size {
 export interface AdbDevice {
   /** Human-friendly device model (e.g. "Pixel 10 Pro"). */
   model(): Promise<string>;
+  /** Stable device serial (USB serial), unique per phone. */
+  serial(): Promise<string>;
   /** Physical screen size, used to derive tap/scroll geometry. */
   screenSize(): Promise<Size>;
   /** The current foreground window descriptor (for app-focus checks). */

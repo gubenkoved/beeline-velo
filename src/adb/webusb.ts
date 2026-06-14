@@ -38,7 +38,7 @@ function concatChunks(chunks: Uint8Array[]): Uint8Array {
 export class WebUsbAdb implements AdbDevice {
   private constructor(
     private readonly adb: Adb,
-    private readonly serial: string,
+    private readonly serialNumber: string,
   ) {}
 
   /** Run the WebUSB permission + authentication flow and return a connected device. */
@@ -141,6 +141,10 @@ export class WebUsbAdb implements AdbDevice {
     return (await this.runText("getprop ro.product.model")).trim();
   }
 
+  async serial(): Promise<string> {
+    return this.serialNumber;
+  }
+
   async screenSize(): Promise<Size> {
     const out = (await this.runText("wm size")).trim();
     const m = out.match(/(\d+)x(\d+)/);
@@ -203,6 +207,6 @@ export class WebUsbAdb implements AdbDevice {
   }
 
   get deviceSerial(): string {
-    return this.serial;
+    return this.serialNumber;
   }
 }

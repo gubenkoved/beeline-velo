@@ -25,6 +25,26 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     expect(first.distance).toBe("22.6km");
   });
 
+  it("stamps the source phone (model + serial) onto rides it reads", async () => {
+    const c = makeController(new DemoAdb());
+    await c.connect();
+    c.scan("all", null);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    const key = "Sat Jun 13 2026 at 14:22";
+    // The scan stamps the connected phone's identity onto each ride it writes.
+    const scanned = c.store.rides.get(key)!;
+    expect(scanned.device_model).toBe("Demo Pixel (no phone)");
+    expect(scanned.device_serial).toBe("demo-serial");
+
+    // A detail Check re-stamps the same identity alongside the read stats.
+    c.status([key]);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false));
+    const checked = c.store.rides.get(key)!;
+    expect(checked.device_model).toBe("Demo Pixel (no phone)");
+    expect(checked.device_serial).toBe("demo-serial");
+  });
+
   it("checks a ride's status (reads detail without uploading)", async () => {
     const c = makeController(new DemoAdb());
     await c.connect();

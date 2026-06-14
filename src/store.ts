@@ -84,6 +84,10 @@ export interface RideRecord {
   track_km: number;
   /** Size of the downloaded GPX file in bytes (0 when unknown). */
   track_bytes: number;
+  /** Model of the phone this ride was last read from (e.g. "Pixel 10 Pro"). Empty when unknown. */
+  device_model: string;
+  /** USB serial of the phone this ride was last read from. Empty when unknown. */
+  device_serial: string;
   last_seen: string;
   uploaded_at: string;
   /** True when the ride was known locally but has since vanished from the phone. */
@@ -105,6 +109,8 @@ function blankRecord(key: string): RideRecord {
     track_points: 0,
     track_km: 0,
     track_bytes: 0,
+    device_model: "",
+    device_serial: "",
     last_seen: "",
     uploaded_at: "",
     deleted: false,
@@ -138,6 +144,8 @@ export interface UpsertFields {
   track_points?: number;
   track_km?: number;
   track_bytes?: number;
+  device_model?: string;
+  device_serial?: string;
 }
 
 export class Store {
@@ -204,6 +212,8 @@ export class Store {
       rec.track_points = Number(rec.track_points) || 0;
       rec.track_km = Number(rec.track_km) || 0;
       rec.track_bytes = Number(rec.track_bytes) || 0;
+      if (typeof rec.device_model !== "string") rec.device_model = "";
+      if (typeof rec.device_serial !== "string") rec.device_serial = "";
       rec.deleted = rec.deleted === true; // coerce missing/odd values to a real boolean
       this.rides.set(key, rec);
     }
@@ -280,6 +290,8 @@ export class Store {
     if (fields.track_points != null) rec.track_points = fields.track_points;
     if (fields.track_km != null) rec.track_km = fields.track_km;
     if (fields.track_bytes != null) rec.track_bytes = fields.track_bytes;
+    if (fields.device_model) rec.device_model = fields.device_model;
+    if (fields.device_serial) rec.device_serial = fields.device_serial;
     if (fields.strava_status && fields.strava_status !== "unknown") {
       if (fields.strava_status === "uploaded" && rec.strava_status !== "uploaded") {
         rec.uploaded_at = nowIso();

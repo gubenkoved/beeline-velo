@@ -221,6 +221,11 @@ export class DemoAdb implements AdbDevice {
     return "Demo Pixel (no phone)";
   }
 
+  async serial(): Promise<string> {
+    await this.tick();
+    return "demo-serial";
+  }
+
   async screenSize(): Promise<Size> {
     await this.tick();
     return this.size;

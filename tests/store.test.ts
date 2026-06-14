@@ -47,6 +47,28 @@ describe("Store", () => {
     expect((await Store.load(backend)).rides.get("k")!.title).toBe("");
   });
 
+  it("round-trips the source-phone identity (model + serial)", async () => {
+    const s = await Store.load(backend);
+    s.upsert("k", { device_model: "Pixel 10 Pro", device_serial: "ABC123" });
+    s.save();
+    await s.flush();
+
+    const reloaded = await Store.load(backend);
+    const rec = reloaded.rides.get("k")!;
+    expect(rec.device_model).toBe("Pixel 10 Pro");
+    expect(rec.device_serial).toBe("ABC123");
+  });
+
+  it("defaults the device fields to empty for legacy records without them", async () => {
+    map.set(
+      STORAGE_KEY,
+      JSON.stringify({ updated_at: "x", rides: { k: { key: "k", title: "Ride" } } }),
+    );
+    const rec = (await Store.load(backend)).rides.get("k")!;
+    expect(rec.device_model).toBe("");
+    expect(rec.device_serial).toBe("");
+  });
+
   it("seeds the display title from the scan name, then keeps the fuller checked title", async () => {
     const s = await Store.load(backend);
     // Scan writes only the short list name.

@@ -62,6 +62,7 @@ export class Controller {
   private app: BeelineApp | null = null;
   private device: AdbDevice | null = null;
   private deviceName = "";
+  private deviceSerial = "";
   private appLock: Promise<BeelineApp> | null = null;
   private readonly listeners = new Set<() => void>();
   private readonly gpxListeners = new Set<GpxListener>();
@@ -111,6 +112,11 @@ export class Controller {
     } catch {
       this.deviceName = "device";
     }
+    try {
+      this.deviceSerial = await device.serial();
+    } catch {
+      this.deviceSerial = "";
+    }
     this.notify();
   }
 
@@ -122,6 +128,7 @@ export class Controller {
     this.app = null;
     this.appLock = null;
     this.deviceName = "";
+    this.deviceSerial = "";
     this.notify();
   }
 
@@ -144,6 +151,18 @@ export class Controller {
       return this.app;
     })();
     return this.appLock;
+  }
+
+  /**
+   * Identity of the phone we are currently reading from, stamped onto every ride
+   * record we write while connected so the cache records which device the info
+   * came from. Empty fields are omitted so they never overwrite a known value.
+   */
+  private deviceFields(): UpsertFields {
+    const fields: UpsertFields = {};
+    if (this.deviceName && this.deviceName !== "device") fields.device_model = this.deviceName;
+    if (this.deviceSerial) fields.device_serial = this.deviceSerial;
+    return fields;
   }
 
   // -- state for the UI --------------------------------------------------
@@ -215,7 +234,12 @@ export class Controller {
         // Persist and surface each page of rides the moment they are found.
         for (const c of fresh) {
           seen.add(c.key);
-          this.store.upsert(c.key, { title_base: c.title, distance: c.distance, duration: c.duration });
+          this.store.upsert(c.key, {
+            ...this.deviceFields(),
+            title_base: c.title,
+            distance: c.distance,
+            duration: c.duration,
+          });
         }
         this.store.save();
         this.notify();
@@ -284,7 +308,12 @@ export class Controller {
    */
   private persistDetail(d: RideDetail): void {
     const cur = this.store.rides.get(d.key);
-    const fields: UpsertFields = { title: d.title, strava_status: d.stravaStatus, stats: d.stats };
+    const fields: UpsertFields = {
+      ...this.deviceFields(),
+      title: d.title,
+      strava_status: d.stravaStatus,
+      stats: d.stats,
+    };
     if (!cur?.distance && d.stats["Distance"]) fields.distance = d.stats["Distance"];
     if (!cur?.duration) {
       const dur = d.stats["Elapsed time"] || d.stats["Moving time"];
@@ -312,6 +341,7 @@ export class Controller {
         const rough = gpxToRoughTrack(file.bytes, this.store.settings.trackPointsPerKm);
         if (rough.polyline) {
           this.store.upsert(file.key, {
+            ...this.deviceFields(),
             track: rough.polyline,
             track_src_points: rough.srcPoints,
             track_points: rough.keptPoints,

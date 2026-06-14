@@ -19,6 +19,9 @@ class NoOptionsAdb implements AdbDevice {
   model(): Promise<string> {
     return this.inner.model();
   }
+  serial(): Promise<string> {
+    return this.inner.serial();
+  }
   screenSize(): Promise<Size> {
     return this.inner.screenSize();
   }
