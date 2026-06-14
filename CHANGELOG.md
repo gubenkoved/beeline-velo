@@ -17,6 +17,18 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Mobile-friendly header + job pill
+- **What:** Make the chrome reflow on narrow screens (wrap the connection cluster,
+  guard against sideways scroll, drop the storage-size pill, tighten buttons) and
+  keep the floating job pill within the viewport and clear of Chrome Android's
+  bottom toolbar. Also: hide the selected-ride actions when nothing is selected,
+  shorten "Upload all pending to Strava" → "Upload all to Strava" behind a styled
+  confirm modal, drop the redundant "Exit demo" button (use Change source), and
+  tag the source picker "(the forgotten Beeline Velo UI)".
+- **Why:** On a phone the header was a tall stack of mostly-dead controls and the
+  pill hid behind the address bar / ran off-screen. Bulk upload to Strava also
+  deserves an on-brand "are you sure" rather than the browser's native confirm.
+
 ## Condense the ride-detail stats grid
 - **What:** Reworked the expanded ride-detail stats (Distance / speeds / times /
   elevation) into a tighter grid — semantic `.stat`/`.k`/`.v` markup replacing the

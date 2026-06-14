@@ -285,7 +285,7 @@ async function goDemoAdb(): Promise<void> {
   activate(c, true, "demo");
   try {
     await c.connect();
-    toast("Demo (phone) — a simulated Android phone over ADB. Click Exit demo to leave.");
+    toast("Demo (phone) — a simulated Android phone over ADB. Click Change source to leave.");
   } catch {
     /* demo connect never fails */
   }
@@ -302,7 +302,7 @@ async function goDemoBeeline(): Promise<void> {
   activate(c, true, "beeline");
   try {
     await c.connect();
-    toast("Demo (Beeline) — a simulated cloud account. Click Exit demo to leave.");
+    toast("Demo (Beeline) — a simulated cloud account. Click Change source to leave.");
   } catch {
     /* demo connect never fails */
   }
@@ -2083,8 +2083,10 @@ function renderConn(): void {
   if (isDemo) {
     el.textContent = beeline ? "demo · Beeline" : "demo · phone";
     el.className = "cstate demo";
-    disconnectBtn.textContent = "Exit demo";
-    disconnectBtn.style.display = "";
+    // No dedicated "Exit demo" button: the always-visible "Change source" already
+    // leads out of the demo (picking any source replaces it), so a second exit
+    // affordance would just be header clutter.
+    disconnectBtn.style.display = "none";
   } else if (STATE.connected) {
     el.textContent = STATE.device || "connected";
     el.className = "cstate on";
@@ -2215,6 +2217,11 @@ function render(): void {
       selCaret.textContent = "More selected-ride actions";
     }
   }
+  // The whole selected-ride actions cluster only makes sense with a selection —
+  // hide it entirely when nothing is selected rather than showing disabled "Check
+  // selected"/"Selected ride actions" controls that can't do anything yet.
+  const selCluster = document.getElementById("selSplit");
+  if (selCluster) selCluster.style.display = nSel ? "" : "none";
 
   const sizeEl = $("#stateSize");
   if (sizeEl) sizeEl.textContent = fmtBytes(controller.stateBytes());
@@ -2602,6 +2609,41 @@ function dismissToast(): void {
   t.style.display = "none";
 }
 
+// Resolver for the currently-open styled confirm dialog (null when closed).
+let confirmResolve: ((ok: boolean) => void) | null = null;
+
+/**
+ * Show the styled confirmation modal (a themed replacement for window.confirm)
+ * and resolve to whether the user confirmed. Reuses the app's modal vocabulary so
+ * high-stakes actions get a clear, on-brand "are you sure" instead of the
+ * browser's native popup. Only one dialog is open at a time.
+ */
+function confirmDialog(opts: {
+  title: string;
+  body: string;
+  confirmLabel?: string;
+}): Promise<boolean> {
+  const modal = document.getElementById("confirmModal");
+  if (!modal) return Promise.resolve(true);
+  confirmResolve?.(false); // abandon any prior pending dialog
+  $("#confirmTitle").textContent = opts.title;
+  $("#confirmBody").textContent = opts.body;
+  $("#confirmOk").textContent = opts.confirmLabel ?? "Confirm";
+  modal.classList.remove("hidden");
+  $<HTMLButtonElement>("#confirmOk").focus();
+  return new Promise<boolean>((resolve) => {
+    confirmResolve = resolve;
+  });
+}
+
+/** Close the confirm modal and settle its promise with the user's choice. */
+function closeConfirm(ok: boolean): void {
+  document.getElementById("confirmModal")?.classList.add("hidden");
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  resolve?.(ok);
+}
+
 function stateSig(): string {
   return (
     JSON.stringify(STATE) +
@@ -2903,9 +2945,10 @@ document.addEventListener("click", (e) => {
   if (t.id === "btnConnect") return void goReal();
   if (t.id === "btnDemo") return void goDemoAdb();
   if (t.id === "btnSource") return showPicker();
-  // The disconnect slot doubles as "Exit demo" and (offline Beeline) "Sign in".
-  // For an offline Beeline session, the "Sign in" affordance opens the focused
-  // re-auth prompt; otherwise we drop the source and reopen the full picker.
+  // The disconnect slot is "Disconnect"/"Sign out" for a live source and "Sign in"
+  // for an offline Beeline session (the focused re-auth prompt); demo has no exit
+  // button here (use "Change source"). Otherwise drop the source and reopen the
+  // full picker.
   if (t.id === "btnDisconnect") {
     if (beelineMode() && !STATE.connected && !isDemo) return showPicker({ reauth: true });
     return void leaveSource();
@@ -2976,7 +3019,17 @@ document.addEventListener("click", (e) => {
       .filter((r) => r.status === "pending" && !r.deleted)
       .map((r) => r.key);
     if (!keys.length) return toast("No known pending rides. Check status first.");
-    return withBeelineAccess(() => run(() => controller.upload(keys)));
+    void (async () => {
+      const ok = await confirmDialog({
+        title: "Upload all to Strava?",
+        body: `This will upload ${keys.length} pending ride${
+          keys.length === 1 ? "" : "s"
+        } to Strava. Already-uploaded rides are skipped.`,
+        confirmLabel: "Upload all",
+      });
+      if (ok) withBeelineAccess(() => run(() => controller.upload(keys)));
+    })();
+    return;
   }
 
   const act = t.dataset?.act;
@@ -3074,6 +3127,11 @@ document.addEventListener("click", (e) => {
 // Escape closes an open split-button menu (GPX or Check), or the source picker.
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  const confirmM = document.getElementById("confirmModal");
+  if (confirmM && !confirmM.classList.contains("hidden")) {
+    closeConfirm(false);
+    return;
+  }
   const picker = document.getElementById("srcPick");
   if (picker && !picker.classList.contains("hidden")) {
     hidePicker();
@@ -3106,6 +3164,13 @@ document.getElementById("beelineForm")?.addEventListener("submit", (e) => {
 
 // Tap the toast to dismiss it immediately (handy for the longer-lived error toast).
 document.getElementById("toast")?.addEventListener("click", dismissToast);
+
+// Styled confirm dialog: OK / Cancel, and a backdrop click counts as cancel.
+document.getElementById("confirmOk")?.addEventListener("click", () => closeConfirm(true));
+document.getElementById("confirmCancel")?.addEventListener("click", () => closeConfirm(false));
+document.getElementById("confirmModal")?.addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) closeConfirm(false);
+});
 
 document.addEventListener("change", (e) => {
   const cb = e.target as HTMLInputElement;
@@ -3265,6 +3330,24 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") void controller?.flush();
 });
 window.addEventListener("pagehide", () => void controller?.flush());
+
+// Keep the floating job pill/handle clear of browser chrome that overlays the
+// bottom of the layout viewport — chiefly Chrome on Android's retractable
+// address bar (and the on-screen keyboard). The visual viewport shrinks from the
+// bottom when that chrome is shown; we publish that gap as `--vv-bottom` so the
+// pill's `bottom` can lift by exactly that much (see .job / .job-handle in CSS).
+function trackViewportInset(): void {
+  const vv = window.visualViewport;
+  if (!vv) return; // unsupported: CSS falls back to env(safe-area-inset-bottom)
+  const update = () => {
+    const gap = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+    document.documentElement.style.setProperty("--vv-bottom", `${Math.round(gap)}px`);
+  };
+  vv.addEventListener("resize", update);
+  vv.addEventListener("scroll", update);
+  update();
+}
+trackViewportInset();
 
 // Boot: pick the right starting mode.
 //  - A remembered phone (ADB) silently reconnects (no prompt).

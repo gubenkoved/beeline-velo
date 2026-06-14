@@ -35,6 +35,16 @@ body {
   font: 14.5px / 1.45 var(--font);
   -webkit-font-smoothing: antialiased;
 }
+/* Never let a single rigid cluster force the whole page to scroll sideways: on
+   narrow screens an un-wrapped control row would otherwise widen the document and
+   push the centred (left:50%) bottom job pill off to the right. Surfaces that need
+   horizontal scrolling (map, tables, segmented controls) own their own
+   overflow:auto containers, so clamping the page is safe. */
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
 
 /* scrollbars — slim, themed, fade-friendly */
 * {
@@ -226,6 +236,7 @@ button.small {
 .conn {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .cstate {
@@ -527,7 +538,7 @@ details.help kbd {
 .job {
   position: fixed;
   left: 50%;
-  bottom: 22px;
+  bottom: calc(22px + var(--vv-bottom, 0px) + env(safe-area-inset-bottom, 0px));
   z-index: 50;
   width: min(680px, calc(100% - 40px));
   display: flex;
@@ -558,7 +569,7 @@ details.help kbd {
    clear of the filter bar — and above it in the stack — so both stay readable.
    Scoped to when the filter is actually shown, leaving Explore/Stats untouched. */
 body:has(#mapFilter:not(.hidden)) .job {
-  bottom: 74px;
+  bottom: calc(74px + var(--vv-bottom, 0px) + env(safe-area-inset-bottom, 0px));
   z-index: 501;
 }
 /* Minimized handle: when the user hides the pill mid-run, it collapses to this
@@ -568,7 +579,7 @@ body:has(#mapFilter:not(.hidden)) .job {
 .job-handle {
   position: fixed;
   left: 50%;
-  bottom: 22px;
+  bottom: calc(22px + var(--vv-bottom, 0px) + env(safe-area-inset-bottom, 0px));
   z-index: 50;
   display: none;
   align-items: center;
@@ -602,7 +613,7 @@ body:has(#mapFilter:not(.hidden)) .job {
   border-color: #4c8dff;
 }
 body:has(#mapFilter:not(.hidden)) .job-handle {
-  bottom: 74px;
+  bottom: calc(74px + var(--vv-bottom, 0px) + env(safe-area-inset-bottom, 0px));
   z-index: 501;
 }
 @keyframes jobGlow {
@@ -2348,16 +2359,54 @@ body.job-active .toast {
   .row {
     gap: 6px;
   }
+  /* The floating job pill: give it a touch more breathing room from the screen
+     edges, and let its single control row wrap rather than overflow. On a ~320px
+     pill the trailing controls (queued count, "Up next", Clear, Stop, Hide) are
+     non-shrinking and would otherwise run past the right edge; wrapping drops them
+     onto a second line under the title/message instead. */
+  .job {
+    width: min(680px, calc(100% - 20px));
+  }
+  .job-head {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  /* Keep the spinner + live title/message together on the first line (the basis
+     leaves room for the 17px spinner + its gap), so every trailing control wraps
+     as a clean second row beneath them rather than orphaning the spinner. */
+  .job-now {
+    flex: 1 1 calc(100% - 28px);
+  }
   /* The header carries a lot of buttons; at full padding they wrap into a
      tall stack. Compact every button (and the segmented controls) so the
      same actions pack into far fewer, shorter rows. */
   header button {
-    padding: 5px 9px;
-    font-size: 12.5px;
+    padding: 4px 8px;
+    font-size: 12px;
     border-radius: 7px;
   }
   header button.small {
-    padding: 4px 8px;
+    padding: 3px 7px;
+  }
+  /* Reclaim horizontal space so the action clusters pack onto fewer rows:
+     - drop the local-storage size pill (a nice-to-have stat, not an action);
+     - tighten the cluster gaps the base sheet leaves at a roomy 12px/8px, which
+       the mobile block otherwise never overrides, so buttons sit closer. */
+  #stateSize {
+    display: none;
+  }
+  .hdr-info,
+  .hdr-actions {
+    gap: 6px;
+  }
+  /* Flatten the connection cluster into the header's own wrapping flow: with
+     `display: contents` its buttons (Re-sync / Change source / …) become direct
+     flex items of `.hdr-actions`, so they wrap continuously with Data / Upload
+     instead of forming a rigid block that forces the next button onto a fresh
+     row. This lets "Data" tuck up beside the connection buttons when there's room
+     rather than always starting its own line. */
+  .conn {
+    display: contents;
   }
   .brand h1 {
     font-size: 14.5px;
@@ -2663,6 +2712,49 @@ body.job-active .toast {
 .srcpick.reauth #srcBeeline .srcopt-tag,
 .srcpick.reauth .srcpick-dismiss {
   display: none;
+}
+
+/* --- Confirm dialog -------------------------------------------------------
+   A styled replacement for the browser's native confirm() for high-stakes
+   actions (e.g. "Upload all to Strava"). Reuses the source-picker's overlay +
+   dark-card vocabulary so it reads as the same product, not a system popup. */
+.confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(5, 7, 10, 0.78);
+  backdrop-filter: blur(3px);
+  overflow: auto;
+}
+.confirm.hidden {
+  display: none;
+}
+.confirm-card {
+  width: min(420px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+}
+.confirm-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.confirm-body {
+  color: var(--muted);
+  font-size: 13.5px;
+  margin: 10px 0 20px;
+  line-height: 1.45;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 /* --- Beeline (account) mode chrome ----------------------------------------

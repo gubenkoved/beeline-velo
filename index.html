@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Beeline Toolkit</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -33,7 +33,7 @@
           <button class="ghost small danger" id="btnReset" title="Erase all locally stored rides, settings, and the remembered phone, then return to offline mode (no phone; shows your stored rides). Does not delete anything on the phone.">Reset</button>
         </span>
       </span>
-      <span class="split">
+      <span class="split" id="selSplit">
         <button class="ghost small" id="btnStatusSel" title="Read the Strava upload status of the selected rides from the phone">Check selected</button>
         <button class="ghost small caret" data-splitmenu="sel" aria-haspopup="true" aria-expanded="false" title="More actions for the selected rides">More selected-ride actions</button>
         <span class="splitmenu" id="selMenu">
@@ -42,7 +42,7 @@
           <button class="ghost small" id="btnUploadSel" title="Upload the selected pending rides to Strava">Upload selected to Strava</button>
         </span>
       </span>
-      <button class="primary small" id="btnUploadPending">Upload all pending to Strava</button>
+      <button class="primary small" id="btnUploadPending" title="Upload all known pending rides to Strava">Upload all to Strava</button>
       <input type="file" id="importFile" accept="application/json,.json" style="display:none" />
     </span>
   </div>
@@ -263,7 +263,7 @@
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
     </button>
     <div class="srcpick-head">
-      <div class="brand"><span class="dot"></span><h1>Beeline Toolkit</h1></div>
+      <div class="brand"><span class="dot"></span><h1>Beeline Toolkit</h1><span class="ver" title="A loving tribute to the Beeline Velo route history the app forgot it had.">(the forgotten Beeline Velo UI)</span></div>
       <p class="srcpick-sub">Choose where your rides come from.</p>
     </div>
     <div class="srcpick-options">
@@ -292,6 +292,17 @@
       </div>
     </div>
     <button class="srcpick-dismiss ghost small" id="btnPickDismiss" type="button" title="Browse your saved rides without picking a source">Skip — view saved rides</button>
+  </div>
+</div>
+
+<div class="confirm hidden" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+  <div class="confirm-card">
+    <h2 class="confirm-title" id="confirmTitle"></h2>
+    <p class="confirm-body" id="confirmBody"></p>
+    <div class="confirm-actions">
+      <button class="ghost small" id="confirmCancel" type="button">Cancel</button>
+      <button class="primary small" id="confirmOk" type="button">Confirm</button>
+    </div>
   </div>
 </div>
 
