@@ -40,16 +40,14 @@ export function emptyFilters(): Filters {
   };
 }
 
-/** Parse a leading "<n> km" distance string to a number (0 when absent/unparseable). */
-export function parseKm(s: string): number {
-  const m = (s || "").match(/([\d.,]+)\s*km/i);
-  if (!m) return 0;
-  return parseFloat(m[1].replace(/,/g, "")) || 0;
-}
-
-/** Best-effort distance in km for a ride, mirroring the list's summary fallback. */
+/**
+ * Best-effort distance in km for a ride. Reads the normalized `distance_km`
+ * computed once at the boundary (controller.state()) via the canonical
+ * locale-aware parser — never re-parses the raw string here, so a comma-decimal
+ * "13,5km" filters as 13.5, not 135.
+ */
 export function rideKm(r: RideView): number {
-  return parseKm(r.distance || (r.stats && r.stats["Distance"]) || "");
+  return r.distance_km;
 }
 
 /** True when at least one dimension narrows the list (drives Clear + totals hint). */

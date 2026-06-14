@@ -11,7 +11,12 @@
  *   - the best single day / week / month by total distance ridden.
  */
 
-import { bucketRide, parseDurationSec } from "./parsing";
+import { bucketRide, parseDurationSec, parseKm, parseMeters } from "./parsing";
+
+// Re-export the canonical locale-aware parsers (defined once in ./parsing) so
+// existing stats-focused tests and callers can keep importing them from here.
+export { parseKm, parseLocaleNumber, parseMeters } from "./parsing";
+
 
 /** The slice of a ride record this module needs (a structural subset of RideView). */
 export interface StatsRide {
@@ -56,69 +61,6 @@ export interface RideStats {
   bestWeek: PeriodRecord | null;
   /** Highest-distance month, or null when none. */
   bestMonth: PeriodRecord | null;
-}
-
-/**
- * Parse a number that may use either '.' or ',' as its decimal separator, with
- * the other character used for thousands grouping. Beeline localises its stats:
- * an English locale shows "20,834.6km" (comma groups, dot decimal) while many
- * European locales show "13,5km" (comma decimal). Blindly stripping commas turns
- * "13,5" into 135, so we *detect* the decimal separator instead of assuming it:
- *  - both separators present → the right-most one is the decimal, the other groups.
- *  - a single separator → it's a decimal unless it looks like a thousands group
- *    (exactly three trailing digits, e.g. "1,234"); two+ of the same separator
- *    are always grouping ("1,234,567").
- * Returns NaN when there is no number at all.
- */
-export function parseLocaleNumber(s: string): number {
-  const t = (s || "").replace(/[^\d.,]/g, "");
-  if (!t) return NaN;
-  const lastComma = t.lastIndexOf(",");
-  const lastDot = t.lastIndexOf(".");
-
-  let decimalSep = "";
-  if (lastComma >= 0 && lastDot >= 0) {
-    decimalSep = lastComma > lastDot ? "," : ".";
-  } else {
-    const sep = lastComma >= 0 ? "," : lastDot >= 0 ? "." : "";
-    if (sep) {
-      const count = t.split(sep).length - 1;
-      const trailing = t.length - t.lastIndexOf(sep) - 1;
-      // single separator with !=3 trailing digits → decimal; otherwise grouping.
-      if (count === 1 && trailing !== 3) decimalSep = sep;
-    }
-  }
-
-  let normalised: string;
-  if (decimalSep) {
-    const grouping = decimalSep === "," ? /\./g : /,/g;
-    normalised = t.replace(grouping, "").replace(decimalSep, ".");
-  } else {
-    normalised = t.replace(/[.,]/g, "");
-  }
-  return parseFloat(normalised);
-}
-
-/** Parse a Beeline distance string ("42.5 km") into kilometres; 0 when absent. */
-export function parseKm(s: string): number {
-  const m = (s || "").match(/([\d.,]+)\s*km/i);
-  if (!m) return 0;
-  return parseLocaleNumber(m[1]) || 0;
-}
-
-/**
- * Parse a Beeline elevation string into metres. Accepts metric ("1,234 m") and
- * imperial ("4,050 ft"/"feet", converted at 0.3048 m/ft). Returns 0 when there
- * is no recognisable number/unit so missing elevation contributes nothing.
- */
-export function parseMeters(s: string): number {
-  const m = (s || "").match(/([\d.,]+)\s*(m|metres|meters|ft|feet)?/i);
-  if (!m) return 0;
-  const value = parseLocaleNumber(m[1]);
-  if (!Number.isFinite(value)) return 0;
-  const unit = (m[2] || "m").toLowerCase();
-  const isFeet = unit === "ft" || unit === "feet";
-  return isFeet ? value * 0.3048 : value;
 }
 
 /** A ride's distance in km: prefer the detail's "Distance", fall back to the summary, then the measured track. */

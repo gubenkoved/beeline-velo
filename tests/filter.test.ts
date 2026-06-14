@@ -5,15 +5,21 @@ import {
   emptyFilters,
   filtersActive,
   matchesFilters,
-  parseKm,
   rideKm,
   visibleRides,
   type Filters,
 } from "../src/filter";
+import { parseKm, parseDurationSec, parseKmh, parseMeters } from "../src/parsing";
 
-/** Build a RideView with sensible defaults; override only what a test cares about. */
+/**
+ * Build a RideView with sensible defaults; override only what a test cares about.
+ * The normalized numeric fields are derived from the (possibly overridden) string
+ * fields via the canonical locale-aware parsers — exactly as controller.state()
+ * does — so tests stay string-based while exercising the real number path. An
+ * explicit numeric override in `over` still wins.
+ */
 function ride(over: Partial<RideView> = {}): RideView {
-  return {
+  const base: RideView = {
     key: "Sat Jun 13 2026 at 14:22",
     title: "Morning ride",
     location: "",
@@ -26,6 +32,13 @@ function ride(over: Partial<RideView> = {}): RideView {
     track_points: 0,
     track_km: 0,
     track_bytes: 0,
+    distance_km: 0,
+    avg_speed_kmh: 0,
+    max_speed_kmh: 0,
+    moving_sec: 0,
+    elapsed_sec: 0,
+    elevation_gain_m: 0,
+    elevation_loss_m: 0,
     device_model: "Pixel 10 Pro",
     month_key: "2026-06",
     month_label: "June 2026",
@@ -34,6 +47,18 @@ function ride(over: Partial<RideView> = {}): RideView {
     deleted_at: "",
     ...over,
   };
+  const st = base.stats;
+  const reportedKm = parseKm((st && st["Distance"]) || base.distance || "");
+  return {
+    ...base,
+    distance_km: over.distance_km ?? (reportedKm > 0 ? reportedKm : base.track_km > 0 ? base.track_km : 0),
+    avg_speed_kmh: over.avg_speed_kmh ?? parseKmh((st && st["Average speed"]) || ""),
+    max_speed_kmh: over.max_speed_kmh ?? parseKmh((st && st["Max speed"]) || ""),
+    moving_sec: over.moving_sec ?? parseDurationSec((st && st["Moving time"]) || ""),
+    elapsed_sec: over.elapsed_sec ?? parseDurationSec((st && st["Elapsed time"]) || ""),
+    elevation_gain_m: over.elevation_gain_m ?? parseMeters((st && st["Elevation gain"]) || ""),
+    elevation_loss_m: over.elevation_loss_m ?? parseMeters((st && st["Elevation loss"]) || ""),
+  };
 }
 
 /** Filters with a single dimension overridden from neutral. */
@@ -41,18 +66,28 @@ function f(over: Partial<Filters>): Filters {
   return { ...emptyFilters(), ...over };
 }
 
-describe("parseKm / rideKm", () => {
-  it("parses plain and comma-decimal km strings", () => {
-    expect(parseKm("42.5 km")).toBeCloseTo(42.5);
-    expect(parseKm("13,5km")).toBeCloseTo(135); // commas stripped (thousands-style)
-    expect(parseKm("no distance")).toBe(0);
-    expect(parseKm("")).toBe(0);
+describe("rideKm (normalized distance)", () => {
+  it("reads the locale-normalized distance, never a blind comma strip", () => {
+    // The whole point of the fix: a comma-decimal "13,5km" is 13.5 km, not 135.
+    expect(rideKm(ride({ distance: "13,5km" }))).toBeCloseTo(13.5);
+    expect(rideKm(ride({ distance: "42.5 km" }))).toBeCloseTo(42.5);
+    expect(rideKm(ride({ distance: "no distance", stats: {} }))).toBe(0);
   });
 
-  it("rideKm falls back to the checked Distance stat when the summary is blank", () => {
+  it("prefers the checked detail Distance, then the summary, then the measured track", () => {
+    // Detail "Distance" is the authoritative checked figure → preferred over summary.
+    expect(rideKm(ride({ distance: "12 km", stats: { Distance: "99 km" } }))).toBeCloseTo(99);
     expect(rideKm(ride({ distance: "", stats: { Distance: "31 km" } }))).toBeCloseTo(31);
-    expect(rideKm(ride({ distance: "12 km", stats: { Distance: "99 km" } }))).toBeCloseTo(12);
+    // No text distance at all → fall back to the measured track length.
+    expect(rideKm(ride({ distance: "", stats: {}, track_km: 17.2 }))).toBeCloseTo(17.2);
     expect(rideKm(ride({ distance: "", stats: {} }))).toBe(0);
+  });
+
+  it("filters comma-decimal rides by distance band correctly (no 10x inflation)", () => {
+    const r = ride({ distance: "13,5km" });
+    // 13.5 km sits inside [10,20] and outside [50,∞) — the pre-fix 135 would flip both.
+    expect(matchesFilters(f({ distMin: 10, distMax: 20 }), r)).toBe(true);
+    expect(matchesFilters(f({ distMin: 50 }), r)).toBe(false);
   });
 });
 

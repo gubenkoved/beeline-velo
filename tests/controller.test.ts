@@ -336,4 +336,53 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     expect(c.state().jobs.busy).toBe(false);
     expect(c.state().jobs.queue.length).toBe(0);
   });
+
+  it("normalizes comma-decimal stats into numeric RideView fields (no 10x inflation)", () => {
+    // A ride captured from a comma-decimal locale phone (the YAL-style device): the
+    // raw strings use ',' as the decimal separator. controller.state() must parse
+    // them ONCE, at the boundary, into the numeric fields the rest of the app uses.
+    const store = new Store(memoryBackend());
+    const c = new Controller(async () => new DemoAdb(), store, async () => {});
+    const key = "Fri May 30 2025 at 08:45";
+    store.upsert(key, {
+      title_base: "Morning ride",
+      distance: "13,5km",
+      stats: {
+        Distance: "13,5km",
+        "Average speed": "20,0km/h",
+        "Max speed": "33,4km/h",
+        "Moving time": "0:40:30",
+        "Elapsed time": "0:45:00",
+        "Elevation gain": "209m",
+        "Elevation loss": "215m",
+      },
+    });
+
+    const r = c.state().rides.find((v) => v.key === key)!;
+    // 13,5km is 13.5 km — emphatically NOT 135.
+    expect(r.distance_km).toBeCloseTo(13.5);
+    expect(r.avg_speed_kmh).toBeCloseTo(20.0);
+    expect(r.max_speed_kmh).toBeCloseTo(33.4);
+    expect(r.moving_sec).toBe(40 * 60 + 30);
+    expect(r.elapsed_sec).toBe(45 * 60);
+    expect(r.elevation_gain_m).toBeCloseTo(209);
+    expect(r.elevation_loss_m).toBeCloseTo(215);
+  });
+
+  it("parses a period-decimal phone to the same numbers as a comma-decimal one", () => {
+    // Both separators must yield identical numbers — the canonical parser is the
+    // single source of truth regardless of the source phone's locale.
+    const store = new Store(memoryBackend());
+    const c = new Controller(async () => new DemoAdb(), store, async () => {});
+    store.upsert("comma", { distance: "13,5km", stats: { Distance: "13,5km", "Average speed": "20,0km/h" } });
+    store.upsert("period", { distance: "13.5km", stats: { Distance: "13.5km", "Average speed": "20.0km/h" } });
+
+    const rides = c.state().rides;
+    const comma = rides.find((r) => r.key === "comma")!;
+    const period = rides.find((r) => r.key === "period")!;
+    expect(comma.distance_km).toBeCloseTo(period.distance_km);
+    expect(comma.distance_km).toBeCloseTo(13.5);
+    expect(comma.avg_speed_kmh).toBeCloseTo(period.avg_speed_kmh);
+    expect(comma.avg_speed_kmh).toBeCloseTo(20.0);
+  });
 });

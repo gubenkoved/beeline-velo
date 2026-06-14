@@ -16,9 +16,9 @@ import { DemoAdb } from "./adb/demo";
 import { AdbError, type AdbDevice } from "./adb/types";
 import { WebUsbAdb } from "./adb/webusb";
 import { Controller, type AppState, type RideView } from "./controller";
-import { emptyFilters, filtersActive, parseKm, visibleRides, type Filters, type TriState } from "./filter";
+import { emptyFilters, filtersActive, visibleRides, type Filters, type TriState } from "./filter";
 import { ridesWithTracks, nearestRides, ridesInLatLngBox, dateRange, filterRidesByRange, type DateRange, type LatLngBox, type PixelPoint, type ProjectedTrack, type RideTrack } from "./mapview";
-import { autoGranularity, bucketRide, compareRideKeysDesc, parseDurationSec, rideShortLabel, trimmedSpeed, type Granularity } from "./parsing";
+import { autoGranularity, bucketRide, compareRideKeysDesc, rideShortLabel, trimmedSpeed, type Granularity } from "./parsing";
 import { computeStats, type PeriodRecord } from "./stats";
 import { buildHeatPoints } from "./heatmap";
 import "leaflet.heat";
@@ -259,16 +259,17 @@ function trackBlock(key: string, track: string): string {
  * `stats` are empty, so instead of an empty bordered grid we show a clear prompt
  * telling the user to press Check.
  */
-function detailsBlock(key: string, stats: Record<string, string> | undefined, track: string): string {
+function detailsBlock(r: RideView): string {
+  const stats = r.stats;
   const hasStats = !!stats && Object.keys(stats).length > 0;
   if (!hasStats) {
-    const checking = RUNNING.has(key) || ACTIVE.has(key);
+    const checking = RUNNING.has(r.key) || ACTIVE.has(r.key);
     const msg = checking
       ? `Checking… loading this ride's stats and route.`
       : `No details yet — press <b>Check</b> to load this ride's stats and route.`;
     return `<div class="rdetailhint">${msg}</div>`;
   }
-  return `<div class="stats open" id="st-${esc(key)}">${fmtStats(stats)}</div>` + trackBlock(key, track);
+  return `<div class="stats open" id="st-${esc(r.key)}">${fmtStats(r)}</div>` + trackBlock(r.key, r.track);
 }
 
 /** (Re)create Leaflet maps for every visible track container after a render. */
@@ -713,16 +714,15 @@ function openRideInExplore(key: string): void {
   });
 }
 
-/** Compact distance label for a ride: prefer the measured route length, fall back to the summary. */
+/** Compact distance label for a ride: prefer the measured route length, fall back to the normalized summary. */
 function rideKmText(r: RideView): string {
   if (r.track_km > 0) return fmtKm(r.track_km);
-  const km = parseKm((r.stats && r.stats["Distance"]) || r.distance || "");
-  return km > 0 ? fmtKm(km) : "—";
+  return r.distance_km > 0 ? fmtKm(r.distance_km) : "—";
 }
 
-/** Average-speed label for a ride, as reported by Beeline (em dash when unknown). */
+/** Average-speed label for a ride, formatted canonically (em dash when unknown). */
 function rideSpeedText(r: RideView): string {
-  return (r.stats && r.stats["Average speed"]) || "—";
+  return r.avg_speed_kmh > 0 ? fmtSpeed(r.avg_speed_kmh) : "—";
 }
 
 /** Build the side panel: every non-deleted ride, with the ones on the map clickable. */
@@ -1090,12 +1090,24 @@ function checkSplit(scope: string, newAct: string, allAct: string, dataAttr: str
     `</span>`
   );
 }
-function fmtStats(st: Record<string, string> | undefined): string {
-  const order = ["Distance", "Average speed", "Max speed", "Moving time", "Elapsed time", "Elevation gain", "Elevation loss"];
-  return order
-    .filter((k) => st && st[k] != null)
-    .map((k) => `<div>${k}<br><b>${st![k]}</b></div>`)
-    .join("");
+function fmtStats(r: RideView): string {
+  const st = r.stats;
+  if (!st) return "";
+  // Render the detail grid from the NORMALIZED numbers so a comma-decimal phone
+  // ("20,0km/h") reads identically to a dot one ("20.0 km/h"). Durations carry no
+  // locale ambiguity (H:MM:SS) so we keep them verbatim to preserve seconds.
+  const rows: Array<[string, string]> = [];
+  const add = (label: string, present: boolean, value: string): void => {
+    if (present) rows.push([label, value]);
+  };
+  add("Distance", st["Distance"] != null, fmtKmDetail(r.distance_km));
+  add("Average speed", st["Average speed"] != null, fmtSpeed(r.avg_speed_kmh));
+  add("Max speed", st["Max speed"] != null, fmtSpeed(r.max_speed_kmh));
+  add("Moving time", st["Moving time"] != null, st["Moving time"]);
+  add("Elapsed time", st["Elapsed time"] != null, st["Elapsed time"]);
+  add("Elevation gain", st["Elevation gain"] != null, fmtElevation(r.elevation_gain_m));
+  add("Elevation loss", st["Elevation loss"] != null, fmtElevation(r.elevation_loss_m));
+  return rows.map(([k, v]) => `<div>${k}<br><b>${escHtml(v)}</b></div>`).join("");
 }
 function bars(up: number, pe: number, total: number): string {
   if (!total) return "";
@@ -1105,6 +1117,10 @@ function bars(up: number, pe: number, total: number): string {
 }
 function fmtKm(v: number): string {
   return v >= 1000 ? (v / 1000).toFixed(1) + "k km" : Math.round(v) + " km";
+}
+/** Distance with one decimal (detail grid / row meta), e.g. "13.5 km". */
+function fmtKmDetail(v: number): string {
+  return v.toFixed(1) + " km";
 }
 function fmtSpeed(v: number): string {
   return v.toFixed(1) + " km/h";
@@ -1236,16 +1252,16 @@ function renderStats(rides: AppState["rides"]): void {
     }
   >();
   for (const r of rides) {
-    const km = parseKm(r.distance);
+    const km = r.distance_km;
     const [bkey, label, short] = bucketRide(r.key, gran);
     if (!byM.has(bkey)) byM.set(bkey, { label, short, km: 0, n: 0, spKm: 0, spSec: 0, spN: 0, rides: [] });
     const e = byM.get(bkey)!;
     e.km += km;
     e.n += 1;
-    const sec = parseDurationSec((r.stats && r.stats["Moving time"]) || "");
+    const sec = r.moving_sec;
     if (sec > 0) {
-      // Prefer the detail's own distance value when present; fall back to the list one.
-      const spKm = parseKm((r.stats && r.stats["Distance"]) || r.distance);
+      // Distance for the speed calc uses the same normalized figure.
+      const spKm = r.distance_km;
       e.spKm += spKm;
       e.spSec += sec;
       e.spN += 1;
@@ -1481,7 +1497,7 @@ function render(): void {
     const yRides = ymonths.flatMap(([, m]) => m.rides);
     const yup = yRides.filter((r) => r.status === "uploaded").length;
     const ype = yRides.filter((r) => r.status === "pending" && !r.deleted).length;
-    const ykm = yRides.reduce((s, r) => s + parseKm(r.distance), 0);
+    const ykm = yRides.reduce((s, r) => s + r.distance_km, 0);
     const yOpen = !openYears.has("c" + year);
     const ySel = allSelState(yKeys);
 
@@ -1509,7 +1525,7 @@ function render(): void {
       m.rides.sort((a, b) => compareRideKeysDesc(a.key, b.key));
       const mup = m.rides.filter((r) => r.status === "uploaded").length;
       const mpe = m.rides.filter((r) => r.status === "pending" && !r.deleted).length;
-      const mkm = m.rides.reduce((s, r) => s + parseKm(r.distance), 0);
+      const mkm = m.rides.reduce((s, r) => s + r.distance_km, 0);
       const isOpen = openMonths.has(mkey);
       const mKeys = m.rides.map((r) => r.key);
       const mSel = allSelState(mKeys);
@@ -1538,7 +1554,7 @@ function render(): void {
         const so = openStats.has(r.key);
         // Fall back to checked detail stats when the list scan never captured the
         // summary figures, so a Checked ride shows real numbers instead of "?".
-        const summaryDistance = r.distance || (r.stats && r.stats["Distance"]) || "?";
+        const summaryDistance = r.distance_km > 0 ? fmtKmDetail(r.distance_km) : "?";
         const summaryDuration =
           r.duration || (r.stats && (r.stats["Elapsed time"] || r.stats["Moving time"])) || "?";
         const el = document.createElement("div");
@@ -1550,7 +1566,7 @@ function render(): void {
             <div class="rtitle"><span class="rname"><span class="rtitle-text">${r.title || "Ride"}</span>${r.location ? `<span class="rtitle-loc">${r.location}</span>` : ""}</span> ${badge(r.status)} ${r.track ? gpsBadge() : ""} ${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}</div>
             <div class="rmeta">${r.key} · ${summaryDistance} · ${summaryDuration}
               <a href="#" data-stats="${r.key}">${so ? "hide" : "details"}</a></div>
-            ${so ? detailsBlock(r.key, r.stats, r.track) : ""}
+            ${so ? detailsBlock(r) : ""}
           </div>
           <div class="rbtns">
             <button class="small ghost" data-act="status-one" data-key="${r.key}">Check</button>

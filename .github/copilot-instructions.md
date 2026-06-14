@@ -17,6 +17,33 @@ suboptimal or self-contradictory decisions instead of silently complying.
 - **Be direct, not contrarian**: only challenge real problems; once aligned, commit fully. The
   goal is the best outcome, not deferring to whatever was asked first.
 
+## Data ingestion integrity (read this first)
+
+**This is the foundation — if numbers come in wrong, nothing else matters.** Every total,
+filter, chart, record, and rollup in this app is downstream of one thing: turning the strings
+we scrape off the phone screen into correct numbers. A single mis-parsed value silently
+corrupts every aggregate that touches it, and the user has no way to tell. We already shipped
+this exact bug once: a phone in a comma-decimal locale shows `13,5km`, a blind `replace(/,/g,"")`
+turned that into `135` km, and every distance/speed stat from that device was inflated 10×.
+Treat ingestion correctness as non-negotiable, not a nicety.
+
+Hard rules:
+
+- **One canonical parser, no copies.** Locale-aware numeric parsing lives in exactly one place
+  ([src/parsing.ts](../src/parsing.ts)) — `parseLocaleNumber` and its `parseKm`/`parseMeters`/`parseKmh`
+  wrappers. Never write a second `parseFloat`/`replace`-based number parse anywhere else; import
+  the canonical one. Two parsers means two behaviours means a bug.
+- **Never blind-strip separators.** `,` and `.` are locale-dependent: one device's decimal point
+  is another's thousands group. Detect the decimal separator (`parseLocaleNumber` already does);
+  never assume, never `replace(/,/g, "")`.
+- **Normalize once, at the boundary.** Parse phone strings into numbers as they enter app state
+  (the `RideView` numeric fields), then compute and display from those numbers. Downstream code
+  must consume normalized numbers, not re-parse raw strings ad hoc.
+- **Every numeric path is tested in both locales.** Any change touching parsing/aggregation must
+  keep both comma-decimal (`13,5km`, `20,0km/h`) and period-decimal (`13.5km`, `20.0km/h`)
+  coverage green, using the real captured fixtures (e.g. `tests/fixtures/recon/2*_yal.xml`).
+  A parsing change without a both-separators test is incomplete.
+
 ## Tech stack & commands
 
 - **TypeScript 5.6** (strict), **Vite 6** (`base: "./"`, `target: "esnext"`), **Vitest 2** + **jsdom**, **leaflet** for maps.

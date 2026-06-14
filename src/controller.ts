@@ -11,7 +11,16 @@
 import { AdbError, realSleep, type AdbDevice, type Sleep } from "./adb/types";
 import { BeelineApp, DEFAULT_PROFILE, PROFILES, type GpxFile } from "./beeline";
 import { JobQueue, type JobsSnapshot, type Report, type Task } from "./jobs";
-import { rideDatetime, rideMonth, sinceFromPreset, type RideDetail } from "./parsing";
+import {
+  parseDurationSec,
+  parseKm,
+  parseKmh,
+  parseMeters,
+  rideDatetime,
+  rideMonth,
+  sinceFromPreset,
+  type RideDetail,
+} from "./parsing";
 import { monthKey, monthLabel, Store, type Settings, type UpsertFields } from "./store";
 import { gpxToRoughTrack } from "./track";
 
@@ -33,6 +42,25 @@ export interface RideView {
   track_km: number;
   /** Size of the downloaded GPX file in bytes (0 when unknown). */
   track_bytes: number;
+  // -- Normalized numeric figures (the single source of truth for all maths) --
+  // Parsed ONCE here, at the boundary, from the localized phone strings via the
+  // canonical locale-aware parsers in ./parsing — so "13,5km" (comma-decimal)
+  // and "13.5km" yield the same 13.5. Downstream code (filters, rollups, stats,
+  // display) must read these numbers and never re-parse the raw strings.
+  /** Best reported distance in km: detail "Distance" → summary → measured track. 0 when unknown. */
+  distance_km: number;
+  /** Average speed in km/h from the detail stats; 0 when unknown. */
+  avg_speed_kmh: number;
+  /** Max speed in km/h from the detail stats; 0 when unknown. */
+  max_speed_kmh: number;
+  /** Moving time in whole seconds; 0 when unknown. */
+  moving_sec: number;
+  /** Elapsed time in whole seconds; 0 when unknown. */
+  elapsed_sec: number;
+  /** Elevation gain in metres; 0 when unknown. */
+  elevation_gain_m: number;
+  /** Elevation loss in metres; 0 when unknown. */
+  elevation_loss_m: number;
   /** Phone model this ride was last scanned from ("" when never recorded). */
   device_model: string;
   month_key: string;
@@ -176,6 +204,12 @@ export class Controller {
       const base = r.title_base;
       const full = r.title;
       const hasSuffix = base !== "" && full.startsWith(base) && full.length > base.length;
+      const stats = r.stats;
+      // Normalize every numeric figure here, once, via the canonical locale-aware
+      // parsers — this is the boundary where localized phone strings become the
+      // numbers the rest of the app computes and displays from.
+      const reportedKm = parseKm((stats && stats["Distance"]) || r.distance || "");
+      const distance_km = reportedKm > 0 ? reportedKm : r.track_km > 0 ? r.track_km : 0;
       return {
         key: r.key,
         title: hasSuffix ? base : full,
@@ -183,12 +217,19 @@ export class Controller {
         distance: r.distance,
         duration: r.duration,
         status: r.strava_status,
-        stats: r.stats,
+        stats,
         track: r.track,
         track_src_points: r.track_src_points,
         track_points: r.track_points,
         track_km: r.track_km,
         track_bytes: r.track_bytes,
+        distance_km,
+        avg_speed_kmh: parseKmh((stats && stats["Average speed"]) || ""),
+        max_speed_kmh: parseKmh((stats && stats["Max speed"]) || ""),
+        moving_sec: parseDurationSec((stats && stats["Moving time"]) || ""),
+        elapsed_sec: parseDurationSec((stats && stats["Elapsed time"]) || ""),
+        elevation_gain_m: parseMeters((stats && stats["Elevation gain"]) || ""),
+        elevation_loss_m: parseMeters((stats && stats["Elevation loss"]) || ""),
         device_model: r.device_model,
         month_key: monthKey(r),
         month_label: monthLabel(r),

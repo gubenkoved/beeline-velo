@@ -17,6 +17,25 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Locale-correct number ingestion: one parser, normalized into app state
+
+- **What:** Removed the duplicate, buggy `parseKm` in [src/filter.ts](src/filter.ts) that
+  blind-stripped commas (`"13,5km"` → `135`) and routed the whole app through the single
+  locale-aware parser now living in [src/parsing.ts](src/parsing.ts) (`parseLocaleNumber` +
+  `parseKm`/`parseKmh`/`parseMeters`; `stats.ts` re-exports them). `RideView` gained
+  normalized numeric fields (`distance_km`, `avg_speed_kmh`, `max_speed_kmh`, `moving_sec`,
+  `elapsed_sec`, `elevation_gain_m`, `elevation_loss_m`) computed **once** in
+  `controller.state()`; filters, month/year rollups, speed chart, and all displays read those
+  numbers instead of re-parsing raw strings. Display now formats every locale-sensitive figure
+  canonically (`13.5 km`, `20.0 km/h`) regardless of the source phone's locale. Added a strong
+  "Data ingestion integrity" section to the Copilot instructions, fixed the test that enshrined
+  the bug, and added comma-vs-period coverage (filter band + controller boundary).
+- **Why:** Two parsers meant two behaviours: stats were correct but the Explore list, distance
+  filters and rollups inflated every comma-decimal device's distance/speed 10×, so totals were
+  silently wrong with no way for the user to tell. Ingestion correctness is the foundation —
+  if numbers come in wrong, nothing downstream matters — so the fix is one canonical parser,
+  normalized at the boundary into app state, and tested in both locales.
+
 ## Map: area-select replaces per-frame hover
 - **What:** dropped the Map view's mousemove hover hit-test (which, on every rAF frame,
   scanned all tracks × all points) in favour of a "Select area" toggle: drag a rectangle
