@@ -1096,6 +1096,13 @@ function openRideInExplore(key: string): void {
     for (const el of document.querySelectorAll<HTMLElement>(".rrow")) {
       if (el.dataset.key === key) {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
+        // Briefly pulse the row so the eye lands on the ride we jumped to.
+        el.classList.remove("flash");
+        void el.offsetWidth; // restart the animation if the row is re-targeted
+        el.classList.add("flash");
+        el.addEventListener("animationend", () => el.classList.remove("flash"), {
+          once: true,
+        });
         break;
       }
     }
@@ -1147,7 +1154,7 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
     })
     .join("");
   const sub = missing
-    ? `${tracks.length} on map · ${missing} without a route — press <b>GPX</b> to add them`
+    ? `${tracks.length} on map · ${missing} without a route`
     : `${tracks.length} on map`;
   const hiddenNote = hidden
     ? `<div class="ms-hidden">${hidden} hidden by the date filter</div>`
@@ -1166,7 +1173,8 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
 function renderMatchedCards(keys: string[]): string {
   const matched = keys
     .map((k) => STATE.rides.find((r) => r.key === k && !r.deleted))
-    .filter((r): r is RideView => !!r);
+    .filter((r): r is RideView => !!r)
+    .sort((a, b) => compareRideKeysDesc(a.key, b.key));
   if (!matched.length) return "";
   const cards = matched
     .map((r) => {
@@ -1175,9 +1183,10 @@ function renderMatchedCards(keys: string[]): string {
       const km = escHtml(rideKmText(r));
       const spd = escHtml(rideSpeedText(r));
       return (
-        `<div class="ms-item matched" data-key="${escHtml(r.key)}">` +
-        `<div class="ms-line"><span class="ms-when">${when}</span><span class="ms-name">${name}</span></div>` +
-        `<div class="ms-stats"><span>${km}</span><span>${spd}</span></div>` +
+        `<div class="ms-item matched" data-key="${escHtml(r.key)}" title="${name}">` +
+        `<div class="ms-name">${name}</div>` +
+        `<div class="ms-meta"><span class="ms-when">${when}</span>` +
+        `<span class="ms-figs"><span class="ms-km">${km}</span><span class="ms-spd">${spd}</span></span></div>` +
         `</div>`
       );
     })
@@ -1330,6 +1339,29 @@ let lastHeatDataSig = "";
 let lastHeatTracks: RideTrack[] = [];
 /** Rides selected on the heatmap by a click or area-drag (independent of the Map view's). */
 let heatSelectedKeys: string[] = [];
+/** Transient bright overlay drawn while hovering a heatmap "Selected" card (the heat
+ *  layer draws no per-ride lines, so we add one to echo the Map view's hover emphasis). */
+let heatHoverLine: L.Polyline | null = null;
+
+/** Remove the heatmap's hover overlay line, if any. */
+function clearHeatHover(): void {
+  if (heatHoverLine) {
+    heatHoverLine.remove();
+    heatHoverLine = null;
+  }
+}
+
+/** Draw (or move) the hover overlay to the given ride's track on the heatmap. */
+function showHeatHover(key: string): void {
+  clearHeatHover();
+  if (!freqHeatMap) return;
+  const track = lastHeatTracks.find((t) => t.key === key);
+  if (!track) return;
+  heatHoverLine = L.polyline(track.points as L.LatLngExpression[], {
+    ...HOT_TRACK,
+    interactive: false,
+  }).addTo(freqHeatMap);
+}
 
 /** Render the heatmap's "Selected" list, dropping any keys whose track is no longer drawn. */
 function renderHeatMatched(): void {
@@ -1337,7 +1369,12 @@ function renderHeatMatched(): void {
   if (!box) return;
   const drawn = new Set(lastHeatTracks.map((t) => t.key));
   heatSelectedKeys = heatSelectedKeys.filter((k) => drawn.has(k));
-  box.innerHTML = renderMatchedCards(heatSelectedKeys);
+  clearHeatHover();
+  const cards = renderMatchedCards(heatSelectedKeys);
+  box.innerHTML =
+    cards ||
+    `<div class="ms-empty">Drag a rectangle on the heatmap with the <b>Select area</b> ` +
+      `tool — or click near a route — to list the rides passing through it here.</div>`;
 }
 
 // The Stats heatmap's area-select gesture: a box-drag selects every ride crossing
@@ -3175,10 +3212,15 @@ if (mapSideEl) {
   });
 }
 
-// The heatmap's "Selected" list: click a ride to open it in Explore, or Clear to
-// drop the selection. (No hover emphasis — the heat layer draws no per-ride lines.)
+// The heatmap's "Selected" list: hover a ride to trace its route on the heatmap,
+// click to open it in Explore, or Clear to drop the selection.
 const heatMatchedEl = document.getElementById("heatMatched");
 if (heatMatchedEl) {
+  heatMatchedEl.addEventListener("mouseover", (e) => {
+    const item = (e.target as HTMLElement).closest(".ms-item") as HTMLElement | null;
+    if (item?.dataset.key) showHeatHover(item.dataset.key);
+  });
+  heatMatchedEl.addEventListener("mouseleave", () => clearHeatHover());
   heatMatchedEl.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
     if (target.closest(".ms-clear")) {

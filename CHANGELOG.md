@@ -17,6 +17,21 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Unify the heatmap's selection UX with the Map view
+- **What:** Moved the Stats route-frequency heatmap's "Selected" matches out of the
+  full-width strip below the map into a side panel beside it (`.freq-wrap` is now a
+  `1fr 280px` grid with a `.freq-main` + `.map-side#heatMatched`, mirroring the Map
+  view), with an empty-state hint when nothing is selected. Matched cards now sort
+  newest-first in both maps (`renderMatchedCards`), hovering a heatmap card traces that
+  ride's route as a bright overlay on the heatmap (`showHeatHover`, reusing `HOT_TRACK`),
+  and opening a ride from either list now briefly pulses its Explore row (`.rrow.flash`).
+  Also dropped the inaccurate "press GPX to add them" tail from the Map side panel's
+  count line.
+- **Why:** The two maps' selection flows had drifted apart (side list vs. below-map
+  strip, unsorted, no hover feedback on the heatmap); aligning them gives one consistent
+  "select → list → hover → open" experience, and the flash makes the jump-to-Explore land
+  where the eye expects.
+
 ## Declutter OSM map attribution
 - **What:** Replaced the repeated per-map "© OpenStreetMap" badge with one canonical
   `OSM_ATTRIBUTION` string: the three big interactive maps (full-screen ride map, all-rides
