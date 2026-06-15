@@ -92,7 +92,7 @@ describe("Controller + BeelineRideSource (no network)", () => {
     expect(uploaded.source_id).toBe(UPLOADED);
     expect(uploaded.device_model).toBe("Beeline (rider@example.com)");
     expect(uploaded.strava_status).toBe("uploaded");
-    expect(uploaded.distance).toBe("42.00 km");
+    expect(uploaded.distance_km).toBeCloseTo(42.0, 2);
     expect(uploaded.track).toBeTruthy();
     expect(uploaded.track_points).toBeGreaterThanOrEqual(2);
 
@@ -162,9 +162,8 @@ describe("Controller + BeelineRideSource (no network)", () => {
 
     const rec = c.store.rides.get(key)!;
     expect(rec.strava_status).toBe("uploaded");
-    expect(rec.distance).toBe("5.00 km");
-    expect(rec.stats.Distance).toBe("5.00 km");
-    expect(rec.stats["Average speed"]).toBe("18.0 km/h");
+    expect(rec.distance_km).toBeCloseTo(5.0, 2);
+    expect(rec.avg_speed_kmh).toBeCloseTo(18.0, 1);
     expect(rec.deleted).toBe(false);
   });
 
@@ -179,7 +178,7 @@ describe("Controller + BeelineRideSource (no network)", () => {
     const before = c.store.rides.get(key)!;
     expect(before.deleted).toBe(false);
     const keptTrack = before.track;
-    const keptDistance = before.distance;
+    const keptDistance = before.distance_km;
     expect(keptTrack).toBeTruthy();
 
     // The ride is removed from the account.
@@ -194,7 +193,7 @@ describe("Controller + BeelineRideSource (no network)", () => {
     expect(after?.deleted).toBe(true);
     expect(after?.deleted_at).toBeTruthy();
     expect(after?.track).toBe(keptTrack);
-    expect(after?.distance).toBe(keptDistance);
+    expect(after?.distance_km).toBe(keptDistance);
     expect(after?.source_id).toBe(UPLOADED);
   });
 

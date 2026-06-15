@@ -15,8 +15,8 @@ describe("Store", () => {
     const s = await Store.load(backend);
     s.upsert("Sat Jun 13 2026 at 14:22", {
       title: "Afternoon ride",
-      distance: "22.6km",
-      duration: "1:37:52",
+      distance_km: 22.6,
+      elapsed_sec: 5872,
     });
     s.save();
     await s.flush();
@@ -24,7 +24,8 @@ describe("Store", () => {
     const reloaded = await Store.load(backend);
     const rec = reloaded.rides.get("Sat Jun 13 2026 at 14:22")!;
     expect(rec.title).toBe("Afternoon ride");
-    expect(rec.distance).toBe("22.6km");
+    expect(rec.distance_km).toBeCloseTo(22.6);
+    expect(rec.elapsed_sec).toBe(5872);
     expect(rec.strava_status).toBe("unknown");
   });
 
@@ -129,10 +130,12 @@ describe("Store", () => {
     expect(rec).toHaveProperty("last_seen");
   });
 
-  it("imports a Python-produced rides.json and merges", async () => {
+  it("migrates a legacy string-schema rides.json on import (and drops the strings)", async () => {
     const s = await Store.load(backend);
     s.upsert("existing", { title: "Old" });
-    const python = JSON.stringify({
+    // The pre-normalization shape (also produced by the old Python tool): localized
+    // distance/duration strings plus a `stats` label→string map.
+    const legacy = JSON.stringify({
       updated_at: "2026-06-13T20:30:45+00:00",
       rides: {
         "Sat Jun 13 2026 at 14:22": {
@@ -141,15 +144,33 @@ describe("Store", () => {
           distance: "22.6km",
           duration: "1:37:52",
           strava_status: "uploaded",
-          stats: { Distance: "22.6km" },
+          stats: {
+            Distance: "22.6km",
+            "Average speed": "20,0km/h",
+            "Moving time": "1:07:42",
+            "Elapsed time": "1:37:52",
+            "Elevation gain": "25m",
+          },
           last_seen: "2026-06-13T20:30:45+00:00",
           uploaded_at: "2026-06-13T19:15:22+00:00",
         },
       },
     });
-    const n = s.importJson(python);
+    const n = s.importJson(legacy);
     expect(n).toBe(1);
-    expect(s.rides.get("Sat Jun 13 2026 at 14:22")!.strava_status).toBe("uploaded");
+    const rec = s.rides.get("Sat Jun 13 2026 at 14:22")!;
+    expect(rec.strava_status).toBe("uploaded");
+    // Migrated to numbers (comma-decimal "20,0km/h" → 20.0, not 200).
+    expect(rec.distance_km).toBeCloseTo(22.6);
+    expect(rec.avg_speed_kmh).toBeCloseTo(20.0);
+    expect(rec.moving_sec).toBe(1 * 3600 + 7 * 60 + 42);
+    expect(rec.elapsed_sec).toBe(1 * 3600 + 37 * 60 + 52);
+    expect(rec.elevation_gain_m).toBeCloseTo(25);
+    // …and the legacy string fields are gone from the record.
+    const raw = rec as unknown as Record<string, unknown>;
+    expect(raw.distance).toBeUndefined();
+    expect(raw.duration).toBeUndefined();
+    expect(raw.stats).toBeUndefined();
     expect(s.rides.get("existing")).toBeDefined();
   });
 
@@ -211,7 +232,7 @@ describe("Store", () => {
     const empty = s.byteSize();
     expect(empty).toBeGreaterThan(0); // the serialized envelope is never zero bytes
 
-    s.upsert("Sat Jun 13 2026 at 14:22", { title: "Afternoon ride", distance: "22.6km" });
+    s.upsert("Sat Jun 13 2026 at 14:22", { title: "Afternoon ride", distance_km: 22.6 });
     s.save();
     await s.flush();
     const withRide = s.byteSize();

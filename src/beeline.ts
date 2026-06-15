@@ -19,6 +19,7 @@ import {
   hasActionButtons,
   isDownloadingGpx,
   isRideDetail,
+  mergeMetrics,
   parseJourneysList,
   parseRideDetail,
   type RideCard,
@@ -387,7 +388,7 @@ export class BeelineApp {
     return {
       key: resting.key || revealed.key,
       title: resting.title || revealed.title,
-      stats: Object.keys(resting.stats).length ? resting.stats : revealed.stats,
+      metrics: mergeMetrics(resting.metrics, revealed.metrics),
       stravaStatus: revealed.stravaStatus,
       stravaTap: revealed.stravaTap,
     };

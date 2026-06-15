@@ -27,7 +27,7 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     expect(rides.length).toBeGreaterThanOrEqual(14);
     const first = rides.find((r) => r.key === "Sat Jun 13 2026 at 14:22")!;
     expect(first.title).toBe("Afternoon ride");
-    expect(first.distance).toBe("22.6km");
+    expect(first.distance_km).toBeCloseTo(22.6);
   });
 
   it("stamps the source phone (model + serial) onto rides it reads", async () => {
@@ -60,7 +60,7 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false));
     const rec = c.state().rides.find((r) => r.key === "Sat Jun 13 2026 at 14:22")!;
     expect(rec.status).toBe("pending");
-    expect(rec.stats["Average speed"]).toBe("20.0km/h");
+    expect(rec.avg_speed_kmh).toBeCloseTo(20.0);
   });
 
   it("backfills the summary distance/duration from detail stats on Check", async () => {
@@ -77,16 +77,16 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     const key = "Sat Jun 13 2026 at 14:22";
     store.upsert(key, { title_base: "Afternoon ride" });
     let r = c.state().rides.find((v) => v.key === key)!;
-    expect(r.distance).toBe("");
-    expect(r.duration).toBe("");
+    expect(r.distance_km).toBeNull();
+    expect(r.elapsed_sec).toBeNull();
 
     c.status([key]);
     await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false));
 
     r = c.state().rides.find((v) => v.key === key)!;
-    // Check reads the detail and backfills the empty summary fields from its stats.
-    expect(r.distance).toBe("22.6km");
-    expect(r.duration).toBe(r.stats["Elapsed time"]);
+    // Check reads the detail and fills the empty summary figures from its stats.
+    expect(r.distance_km).toBeCloseTo(22.6);
+    expect(r.elapsed_sec).toBe(5872);
   });
 
   it("captures the ride detail while downloading GPX for a never-opened ride", async () => {
@@ -103,10 +103,10 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     const key = "Sat Jun 13 2026 at 14:22";
     store.upsert(key, { title_base: "Afternoon ride" });
     let r = c.state().rides.find((v) => v.key === key)!;
-    expect(r.distance).toBe("");
-    expect(r.duration).toBe("");
+    expect(r.distance_km).toBeNull();
+    expect(r.elapsed_sec).toBeNull();
     expect(r.status).toBe("unknown");
-    expect(Object.keys(r.stats)).toHaveLength(0);
+    expect(r.avg_speed_kmh).toBeNull();
 
     c.downloadGpx([key]);
     await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
@@ -116,10 +116,10 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
     expect(r.track).not.toBe("");
     expect(r.track_points).toBeGreaterThan(0);
     // …AND the detail was read on the way: stats, status and summary fields too.
-    expect(r.stats["Average speed"]).toBe("20.0km/h");
+    expect(r.avg_speed_kmh).toBeCloseTo(20.0);
     expect(r.status).toBe("pending");
-    expect(r.distance).toBe("22.6km");
-    expect(r.duration).toBe(r.stats["Elapsed time"]);
+    expect(r.distance_km).toBeCloseTo(22.6);
+    expect(r.elapsed_sec).toBe(5872);
   });
 
   it("keeps the scan name and splits the check-time location suffix", async () => {
@@ -373,27 +373,35 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
 
   it("normalizes comma-decimal stats into numeric RideView fields (no 10x inflation)", () => {
     // A ride captured from a comma-decimal locale phone (the YAL-style device): the
-    // raw strings use ',' as the decimal separator. controller.state() must parse
-    // them ONCE, at the boundary, into the numeric fields the rest of the app uses.
+    // raw strings use ',' as the decimal separator. Loading such a LEGACY blob must
+    // migrate it ONCE, at the boundary, into the numeric fields the rest of the app
+    // uses — emphatically not 10x inflated (",5" must not become a thousands group).
     const store = new Store(memoryBackend());
     const c = new Controller(
       () => AdbRideSource.create(new DemoAdb(), PROFILES.normal, async () => {}),
       store,
     );
     const key = "Fri May 30 2025 at 08:45";
-    store.upsert(key, {
-      title_base: "Morning ride",
-      distance: "13,5km",
-      stats: {
-        Distance: "13,5km",
-        "Average speed": "20,0km/h",
-        "Max speed": "33,4km/h",
-        "Moving time": "0:40:30",
-        "Elapsed time": "0:45:00",
-        "Elevation gain": "209m",
-        "Elevation loss": "215m",
-      },
-    });
+    store.importJson(
+      JSON.stringify({
+        rides: {
+          [key]: {
+            key,
+            title_base: "Morning ride",
+            distance: "13,5km",
+            stats: {
+              Distance: "13,5km",
+              "Average speed": "20,0km/h",
+              "Max speed": "33,4km/h",
+              "Moving time": "0:40:30",
+              "Elapsed time": "0:45:00",
+              "Elevation gain": "209m",
+              "Elevation loss": "215m",
+            },
+          },
+        },
+      }),
+    );
 
     const r = c.state().rides.find((v) => v.key === key)!;
     // 13,5km is 13.5 km — emphatically NOT 135.
@@ -414,21 +422,29 @@ describe("Controller + DemoAdb (real orchestration, no phone)", () => {
       () => AdbRideSource.create(new DemoAdb(), PROFILES.normal, async () => {}),
       store,
     );
-    store.upsert("comma", {
-      distance: "13,5km",
-      stats: { Distance: "13,5km", "Average speed": "20,0km/h" },
-    });
-    store.upsert("period", {
-      distance: "13.5km",
-      stats: { Distance: "13.5km", "Average speed": "20.0km/h" },
-    });
+    store.importJson(
+      JSON.stringify({
+        rides: {
+          comma: {
+            key: "comma",
+            distance: "13,5km",
+            stats: { Distance: "13,5km", "Average speed": "20,0km/h" },
+          },
+          period: {
+            key: "period",
+            distance: "13.5km",
+            stats: { Distance: "13.5km", "Average speed": "20.0km/h" },
+          },
+        },
+      }),
+    );
 
     const rides = c.state().rides;
     const comma = rides.find((r) => r.key === "comma")!;
     const period = rides.find((r) => r.key === "period")!;
-    expect(comma.distance_km).toBeCloseTo(period.distance_km);
+    expect(comma.distance_km).toBeCloseTo(period.distance_km!);
     expect(comma.distance_km).toBeCloseTo(13.5);
-    expect(comma.avg_speed_kmh).toBeCloseTo(period.avg_speed_kmh);
+    expect(comma.avg_speed_kmh).toBeCloseTo(period.avg_speed_kmh!);
     expect(comma.avg_speed_kmh).toBeCloseTo(20.0);
   });
 });

@@ -8,7 +8,7 @@ import {
   type RawBeelineRide,
   stravaStatusOf,
 } from "../src/beeline-api";
-import { beelineRideKey, parseKm, parseKmh, rideDatetime } from "../src/parsing";
+import { beelineRideKey, rideDatetime } from "../src/parsing";
 import { decodePolyline } from "../src/track";
 
 const FIXTURE = JSON.parse(
@@ -57,20 +57,15 @@ describe("mapBeelineRide", () => {
     expect(f.device_model).toBe(LABEL);
     expect(f.strava_status).toBe("uploaded");
 
-    // Canonical strings (period-decimal) that the RideView parsers round-trip.
-    expect(f.distance).toBe("42.00 km");
-    expect(f.stats?.Distance).toBe("42.00 km");
-    expect(f.stats?.["Average speed"]).toBe("25.2 km/h");
-    expect(f.stats?.["Max speed"]).toBe("41.4 km/h");
-    expect(f.stats?.["Moving time"]).toBe("1:40:00");
-    expect(f.stats?.["Elapsed time"]).toBe("1:50:00");
-    expect(f.duration).toBe("1:50:00");
-    expect(f.stats?.["Elevation gain"]).toBe("320 m");
-    expect(f.stats?.["Elevation loss"]).toBe("305 m");
-
-    // The strings parse back to the numbers RideView will compute from.
-    expect(parseKm(f.distance ?? "")).toBeCloseTo(42.0, 2);
-    expect(parseKmh(f.stats?.["Average speed"] ?? "")).toBeCloseTo(25.2, 1);
+    // Metrics: Beeline's SI units converted straight into the app's normalized
+    // numbers (metres→km, m/s→km/h, ms→seconds), no localized strings.
+    expect(f.distance_km).toBeCloseTo(42.0, 2);
+    expect(f.avg_speed_kmh).toBeCloseTo(25.2, 1);
+    expect(f.max_speed_kmh).toBeCloseTo(41.4, 1);
+    expect(f.moving_sec).toBe(6000);
+    expect(f.elapsed_sec).toBe(6600);
+    expect(f.elevation_gain_m).toBeCloseTo(320);
+    expect(f.elevation_loss_m).toBeCloseTo(305);
 
     // Title: a time-of-day base name plus the routed destination as a location
     // suffix (Beeline stores no title, so we synthesize one). TZ-robust: the base
@@ -109,10 +104,10 @@ describe("mapBeelineRide", () => {
   it("treats a never-uploaded ride as pending and omits zero metrics", () => {
     const m = mapBeelineRide(PENDING, FIXTURE[PENDING], LABEL);
     expect(m?.fields.strava_status).toBe("pending");
-    // Zero distance/speed must not produce bogus "0.00 km" stats.
-    expect(m?.fields.distance).toBeUndefined();
-    expect(m?.fields.stats?.Distance).toBeUndefined();
-    expect(m?.fields.stats?.["Average speed"]).toBeUndefined();
+    // Zero distance/speed must not produce bogus 0-valued metrics.
+    expect(m?.fields.distance_km).toBeUndefined();
+    expect(m?.fields.avg_speed_kmh).toBeUndefined();
+    expect(m?.fields.max_speed_kmh).toBeUndefined();
     // It still has a usable track.
     expect(m?.fields.track).toBeTruthy();
     // No routed destination → just the time-of-day name, no location suffix.
@@ -139,7 +134,7 @@ describe("mapBeelineRide", () => {
   it("reports an in-flight upload as processing", () => {
     const m = mapBeelineRide(PROCESSING, FIXTURE[PROCESSING], LABEL);
     expect(m?.fields.strava_status).toBe("processing");
-    expect(m?.fields.distance).toBe("11.00 km");
+    expect(m?.fields.distance_km).toBeCloseTo(11.0);
   });
 
   it("handles an uploaded ride with no polyline (no track, still uploaded)", () => {

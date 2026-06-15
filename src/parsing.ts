@@ -106,8 +106,10 @@ function textNodes(xml: string): TextNode[] {
 export interface RideCard {
   key: string; // the datetime string, unique per ride
   title: string;
-  distance: string;
-  duration: string;
+  /** Distance in km parsed from the list card ("13,5km" → 13.5); null when absent. */
+  distance_km: number | null;
+  /** Elapsed time in whole seconds parsed from the list card; null when absent. */
+  elapsed_sec: number | null;
   tapY: number; // vertical centre to tap to open this ride
   /**
    * Optional richer fields a source already knows at scan time (the Beeline source
@@ -159,8 +161,8 @@ export function parseJourneysList(xml: string): RideCard[] {
     cards.push({
       key: dt,
       title,
-      distance,
-      duration,
+      distance_km: posOrNull(parseKm(distance)),
+      elapsed_sec: posOrNull(parseDurationSec(duration)),
       tapY: boundsCy(node.bounds),
     });
   }
@@ -171,10 +173,82 @@ export function parseJourneysList(xml: string): RideCard[] {
 
 export type StravaStatus = "pending" | "processing" | "uploaded" | "unknown";
 
+/**
+ * Normalized numeric ride metrics — the single source of truth for every figure
+ * the app computes or displays. Parsed ONCE on the ingestion path (parseRideDetail,
+ * parseJourneysList, the Beeline mapper) via the canonical locale-aware parsers, so
+ * "13,5km" (comma-decimal) and "13.5km" both yield 13.5. `null` means the figure was
+ * never read for this ride — distinct from a real zero.
+ */
+export interface RideMetrics {
+  /** Distance in kilometres. */
+  distance_km: number | null;
+  /** Moving time in whole seconds. */
+  moving_sec: number | null;
+  /** Elapsed (total) time in whole seconds. */
+  elapsed_sec: number | null;
+  /** Average speed in km/h. */
+  avg_speed_kmh: number | null;
+  /** Max speed in km/h. */
+  max_speed_kmh: number | null;
+  /** Elevation gain in metres. */
+  elevation_gain_m: number | null;
+  /** Elevation loss in metres. */
+  elevation_loss_m: number | null;
+}
+
+/** A fresh RideMetrics with every figure unknown (null). */
+export function blankMetrics(): RideMetrics {
+  return {
+    distance_km: null,
+    moving_sec: null,
+    elapsed_sec: null,
+    avg_speed_kmh: null,
+    max_speed_kmh: null,
+    elevation_gain_m: null,
+    elevation_loss_m: null,
+  };
+}
+
+/** Positive finite number, else null — collapses the parsers' 0-for-absent to null. */
+export function posOrNull(n: number): number | null {
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * Convert a raw label→string stat map (as scraped from the detail sheet, or held
+ * by a legacy persisted record) into normalized numeric metrics. The canonical
+ * place localized stat strings become numbers; callers consume the numbers.
+ */
+export function metricsFromStatStrings(raw: Record<string, string>): RideMetrics {
+  return {
+    distance_km: posOrNull(parseKm(raw.Distance || "")),
+    moving_sec: posOrNull(parseDurationSec(raw["Moving time"] || "")),
+    elapsed_sec: posOrNull(parseDurationSec(raw["Elapsed time"] || "")),
+    avg_speed_kmh: posOrNull(parseKmh(raw["Average speed"] || "")),
+    max_speed_kmh: posOrNull(parseKmh(raw["Max speed"] || "")),
+    elevation_gain_m: posOrNull(parseMeters(raw["Elevation gain"] || "")),
+    elevation_loss_m: posOrNull(parseMeters(raw["Elevation loss"] || "")),
+  };
+}
+
+/** Per-field merge: keep `primary`'s value where known, else fall back to `fallback`. */
+export function mergeMetrics(primary: RideMetrics, fallback: RideMetrics): RideMetrics {
+  return {
+    distance_km: primary.distance_km ?? fallback.distance_km,
+    moving_sec: primary.moving_sec ?? fallback.moving_sec,
+    elapsed_sec: primary.elapsed_sec ?? fallback.elapsed_sec,
+    avg_speed_kmh: primary.avg_speed_kmh ?? fallback.avg_speed_kmh,
+    max_speed_kmh: primary.max_speed_kmh ?? fallback.max_speed_kmh,
+    elevation_gain_m: primary.elevation_gain_m ?? fallback.elevation_gain_m,
+    elevation_loss_m: primary.elevation_loss_m ?? fallback.elevation_loss_m,
+  };
+}
+
 export interface RideDetail {
   key: string; // datetime string
   title: string;
-  stats: Record<string, string>;
+  metrics: RideMetrics;
   stravaStatus: StravaStatus;
   stravaTap: Bounds | null;
 }
@@ -184,7 +258,7 @@ export function parseRideDetail(xml: string): RideDetail {
   const detail: RideDetail = {
     key: "",
     title: "",
-    stats: {},
+    metrics: blankMetrics(),
     stravaStatus: "unknown",
     stravaTap: null,
   };
@@ -235,8 +309,9 @@ export function parseRideDetail(xml: string): RideDetail {
     }
   }
 
-  // Stats: each value node sits directly above its label node.
-  detail.stats = pairStats(nodes);
+  // Stats: each value node sits directly above its label node. Normalize to
+  // numbers right here so the localized strings never leave the parsing layer.
+  detail.metrics = metricsFromStatStrings(pairStats(nodes));
 
   // Action buttons: the topmost of the action labels is Strava.
   const actionNodes = nodes.filter((n) => ACTION_LABELS.has(n.text));

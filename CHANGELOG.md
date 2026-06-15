@@ -17,6 +17,32 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Normalize ride metrics to numbers (drop string duplication)
+- **What:** Replaced the persisted localized stat strings (`distance: "5.50 km"`,
+  `duration`, and the `stats` label→string map) with a single set of normalized
+  numeric fields on `RideRecord`/`RideView` (`distance_km`, `moving_sec`,
+  `elapsed_sec`, `avg_speed_kmh`, `max_speed_kmh`, `elevation_gain_m`,
+  `elevation_loss_m`; `number | null`, null = unknown). Parsing now converts to
+  numbers at the ingestion boundary (`parseRideDetail`/`parseJourneysList` carry a
+  `RideMetrics`; the Beeline mapper emits SI→numbers directly), the store migrates
+  legacy string blobs on load (one-way, idempotent, strings dropped), and every
+  consumer (controller/state, stats, filters, main render) reads the numbers. Added
+  `fmtDurationExact` for the detail grid. Python `rides.json` interop is dropped.
+- **Why:** The old schema stored the same figure twice (top-level summary *and* the
+  `stats` map) as gross locale-dependent strings that every reader had to re-parse —
+  fighting the "normalize once, at the boundary" value and inviting the comma-decimal
+  10× bug. One numeric field per metric removes the duplication, kills the
+  number→string→number round-trip on the Beeline path, and makes every aggregate read
+  a clean number.
+
+## Stamp app version/build into exported state
+- **What:** `exportRides` now prepends an `app: { version, commit, build_date }` block
+  (the existing Vite build globals) to the downloaded state file; `store.exportJson`
+  takes an optional `meta` merged ahead of the cache. The persisted IndexedDB blob is
+  unchanged — the stamp lives only in the download, and `ingest` ignores it on import.
+- **Why:** An exported state should record which build produced it, so a future import
+  (or a bug report) can tell the schema/app version at a glance.
+
 ## Reset returns to the source picker
 - **What:** After erasing local data, Reset now forgets the chosen source and shows
   the source-selection screen (mirroring Change source) instead of dropping into

@@ -49,12 +49,11 @@ export function emptyFilters(): Filters {
 
 /**
  * Best-effort distance in km for a ride. Reads the normalized `distance_km`
- * computed once at the boundary (controller.state()) via the canonical
- * locale-aware parser — never re-parses the raw string here, so a comma-decimal
- * "13,5km" filters as 13.5, not 135.
+ * computed once on the ingestion path (so a comma-decimal "13,5km" filters as
+ * 13.5, not 135); a ride with no captured distance counts as 0.
  */
 export function rideKm(r: RideView): number {
-  return r.distance_km;
+  return r.distance_km ?? 0;
 }
 
 /** True when at least one dimension narrows the list (drives Clear + totals hint). */
@@ -86,8 +85,15 @@ export function matchesFilters(f: Filters, r: RideView): boolean {
   if (f.gps === "yes" && !hasGps) return false;
   if (f.gps === "no" && hasGps) return false;
 
-  // Checked-details presence.
-  const hasDetails = !!r.stats && Object.keys(r.stats).length > 0;
+  // Checked-details presence. The detail sheet adds speeds / moving time /
+  // elevation that the list card never shows, so any of those being known means
+  // the ride has been Checked (or came from a source that fetches full records).
+  const hasDetails =
+    r.avg_speed_kmh != null ||
+    r.max_speed_kmh != null ||
+    r.moving_sec != null ||
+    r.elevation_gain_m != null ||
+    r.elevation_loss_m != null;
   if (f.details === "yes" && !hasDetails) return false;
   if (f.details === "no" && hasDetails) return false;
 

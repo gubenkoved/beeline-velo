@@ -618,12 +618,17 @@ function trackBlock(key: string, track: string): string {
 
 /**
  * Expanded-details body for an open ride. When a ride has never been Checked its
- * `stats` are empty, so instead of an empty bordered grid we show a clear prompt
- * telling the user to press Check.
+ * detail stats (speeds / moving time / elevation) are unknown, so instead of an
+ * empty bordered grid we show a clear prompt telling the user to press Check.
  */
 function detailsBlock(r: RideView): string {
-  const stats = r.stats;
-  const hasStats = !!stats && Object.keys(stats).length > 0;
+  const hasStats =
+    r.avg_speed_kmh != null ||
+    r.max_speed_kmh != null ||
+    r.moving_sec != null ||
+    r.elevation_gain_m != null ||
+    r.elevation_loss_m != null ||
+    r.distance_km != null;
   if (!hasStats) {
     const checking = RUNNING.has(r.key) || ACTIVE.has(r.key);
     const msg = checking
@@ -1197,12 +1202,14 @@ function openRideInExplore(key: string): void {
 /** Compact distance label for a ride: prefer the measured route length, fall back to the normalized summary. */
 function rideKmText(r: RideView): string {
   if (r.track_km > 0) return fmtKm(r.track_km);
-  return r.distance_km > 0 ? fmtKm(r.distance_km) : "—";
+  const d = r.distance_km ?? 0;
+  return d > 0 ? fmtKm(d) : "—";
 }
 
 /** Average-speed label for a ride, formatted canonically (em dash when unknown). */
 function rideSpeedText(r: RideView): string {
-  return r.avg_speed_kmh > 0 ? fmtSpeed(r.avg_speed_kmh) : "—";
+  const v = r.avg_speed_kmh ?? 0;
+  return v > 0 ? fmtSpeed(v) : "—";
 }
 
 /** Build the side panel: every non-deleted ride, with the ones on the map clickable. */
@@ -1516,6 +1523,16 @@ function fmtDuration(totalSec: number): string {
   return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
 }
 
+/** Exact "H:MM:SS" / "M:SS" for the per-ride detail grid (preserves seconds). */
+function fmtDurationExact(totalSec: number): string {
+  const s = Math.max(0, Math.round(totalSec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+  return `${h > 0 ? `${h}:` : ""}${mm}:${String(sec).padStart(2, "0")}`;
+}
+
 /** Compact metres/kilometres label for an elevation total. */
 function fmtElevation(m: number): string {
   return m >= 1000 ? `${(m / 1000).toFixed(1)}k m` : `${Math.round(m)} m`;
@@ -1747,22 +1764,20 @@ function checkSplit(scope: string, newAct: string, allAct: string, dataAttr: str
   );
 }
 function fmtStats(r: RideView): string {
-  const st = r.stats;
-  if (!st) return "";
   // Render the detail grid from the NORMALIZED numbers so a comma-decimal phone
-  // ("20,0km/h") reads identically to a dot one ("20.0 km/h"). Durations carry no
-  // locale ambiguity (H:MM:SS) so we keep them verbatim to preserve seconds.
+  // ("20,0km/h") reads identically to a dot one ("20.0 km/h"). Each row appears
+  // only when its figure is known (non-null).
   const rows: Array<[string, string]> = [];
-  const add = (label: string, present: boolean, value: string): void => {
-    if (present) rows.push([label, value]);
+  const add = (label: string, value: number | null, fmt: (n: number) => string): void => {
+    if (value != null) rows.push([label, fmt(value)]);
   };
-  add("Distance", st.Distance != null, fmtKmDetail(r.distance_km));
-  add("Average speed", st["Average speed"] != null, fmtSpeed(r.avg_speed_kmh));
-  add("Max speed", st["Max speed"] != null, fmtSpeed(r.max_speed_kmh));
-  add("Moving time", st["Moving time"] != null, st["Moving time"]);
-  add("Elapsed time", st["Elapsed time"] != null, st["Elapsed time"]);
-  add("Elevation gain", st["Elevation gain"] != null, fmtElevation(r.elevation_gain_m));
-  add("Elevation loss", st["Elevation loss"] != null, fmtElevation(r.elevation_loss_m));
+  add("Distance", r.distance_km, fmtKmDetail);
+  add("Average speed", r.avg_speed_kmh, fmtSpeed);
+  add("Max speed", r.max_speed_kmh, fmtSpeed);
+  add("Moving time", r.moving_sec, fmtDurationExact);
+  add("Elapsed time", r.elapsed_sec, fmtDurationExact);
+  add("Elevation gain", r.elevation_gain_m, fmtElevation);
+  add("Elevation loss", r.elevation_loss_m, fmtElevation);
   return rows
     .map(([k, v]) => `<div class="stat"><span class="k">${k}</span><span class="v">${escHtml(v)}</span></div>`)
     .join("");
@@ -1923,17 +1938,17 @@ function renderStats(rides: AppState["rides"]): void {
     }
   >();
   for (const r of rides) {
-    const km = r.distance_km;
+    const km = r.distance_km ?? 0;
     const [bkey, label, short] = bucketRide(r.key, gran);
     if (!byM.has(bkey))
       byM.set(bkey, { label, short, km: 0, n: 0, spKm: 0, spSec: 0, spN: 0, rides: [] });
     const e = byM.get(bkey)!;
     e.km += km;
     e.n += 1;
-    const sec = r.moving_sec;
+    const sec = r.moving_sec ?? 0;
     if (sec > 0) {
       // Distance for the speed calc uses the same normalized figure.
-      const spKm = r.distance_km;
+      const spKm = r.distance_km ?? 0;
       e.spKm += spKm;
       e.spSec += sec;
       e.spN += 1;
@@ -2247,7 +2262,7 @@ function render(): void {
     const yRides = ymonths.flatMap(([, m]) => m.rides);
     const yup = yRides.filter((r) => r.status === "uploaded").length;
     const ype = yRides.filter((r) => r.status === "pending" && !r.deleted).length;
-    const ykm = yRides.reduce((s, r) => s + r.distance_km, 0);
+    const ykm = yRides.reduce((s, r) => s + (r.distance_km ?? 0), 0);
     const yOpen = !openYears.has(`c${year}`);
     const ySel = allSelState(yKeys);
 
@@ -2278,7 +2293,7 @@ function render(): void {
       m.rides.sort((a, b) => compareRideKeysDesc(a.key, b.key));
       const mup = m.rides.filter((r) => r.status === "uploaded").length;
       const mpe = m.rides.filter((r) => r.status === "pending" && !r.deleted).length;
-      const mkm = m.rides.reduce((s, r) => s + r.distance_km, 0);
+      const mkm = m.rides.reduce((s, r) => s + (r.distance_km ?? 0), 0);
       const isOpen = openMonths.has(mkey);
       const mKeys = m.rides.map((r) => r.key);
       const mSel = allSelState(mKeys);
@@ -2310,11 +2325,14 @@ function render(): void {
         const so = openStats.has(r.key);
         // Fall back to checked detail stats when the list scan never captured the
         // summary figures, so a Checked ride shows real numbers instead of "?".
-        const summaryDistance = r.distance_km > 0 ? fmtKmDetail(r.distance_km) : "?";
+        const summaryDistance =
+          r.distance_km != null && r.distance_km > 0 ? fmtKmDetail(r.distance_km) : "?";
         const summaryDuration =
-          r.duration ||
-          (r.stats && (r.stats["Elapsed time"] || r.stats["Moving time"])) ||
-          "?";
+          r.elapsed_sec != null
+            ? fmtDurationExact(r.elapsed_sec)
+            : r.moving_sec != null
+              ? fmtDurationExact(r.moving_sec)
+              : "?";
         const el = document.createElement("div");
         el.className = `rrow${r.deleted ? " deleted" : ""}${selected.has(r.key) ? " sel" : ""}`;
         el.dataset.key = r.key;
@@ -2565,9 +2583,15 @@ const pendingOfYear = (y: string): string[] =>
     .map((r) => r.key);
 
 // A ride is "never checked" until its detail sheet has been opened, which is the
-// only thing that fills `stats` (a scan sets just title/distance/duration).
+// only thing that fills the detail-only metrics (speeds / moving time / elevation);
+// a plain scan sets just title + the summary distance/elapsed.
 const isUnchecked = (r: AppState["rides"][number]): boolean =>
-  !r.deleted && Object.keys(r.stats).length === 0;
+  !r.deleted &&
+  r.avg_speed_kmh == null &&
+  r.max_speed_kmh == null &&
+  r.moving_sec == null &&
+  r.elevation_gain_m == null &&
+  r.elevation_loss_m == null;
 const uncheckedOfMonth = (m: string): string[] =>
   STATE.rides.filter((r) => r.month_key === m && isUnchecked(r)).map((r) => r.key);
 const uncheckedOfYear = (y: string): string[] =>
@@ -2696,7 +2720,16 @@ function doScan(): void {
 // Import / export
 // --------------------------------------------------------------------------- //
 function exportRides(): void {
-  const blob = new Blob([controller.exportJson()], { type: "application/json" });
+  // Stamp the producing build into the downloaded file (the persisted cache never
+  // carries this) so an exported state records which app version wrote it.
+  const meta = {
+    app: {
+      version: __APP_VERSION__,
+      commit: __APP_COMMIT__,
+      build_date: __APP_BUILD_DATE__,
+    },
+  };
+  const blob = new Blob([controller.exportJson(meta)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

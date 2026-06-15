@@ -11,8 +11,9 @@ import {
 /** Build a StatsRide with sane defaults so each test only sets what it cares about. */
 function ride(partial: Partial<StatsRide> & { key: string }): StatsRide {
   return {
-    distance: "",
-    stats: {},
+    distance_km: null,
+    moving_sec: null,
+    elevation_gain_m: null,
     track_km: 0,
     deleted: false,
     ...partial,
@@ -76,13 +77,15 @@ describe("computeStats totals", () => {
     const rides = [
       ride({
         key: "Mon Jun 1 2026 at 08:00",
-        distance: "10 km",
-        stats: { "Moving time": "0:30:00", "Elevation gain": "100 m" },
+        distance_km: 10,
+        moving_sec: 1800,
+        elevation_gain_m: 100,
       }),
       ride({
         key: "Tue Jun 2 2026 at 08:00",
-        distance: "20 km",
-        stats: { "Moving time": "1:00:00", "Elevation gain": "200 m" },
+        distance_km: 20,
+        moving_sec: 3600,
+        elevation_gain_m: 200,
       }),
     ];
     const s = computeStats(rides);
@@ -92,32 +95,19 @@ describe("computeStats totals", () => {
     expect(s.totalElevationM).toBeCloseTo(300);
   });
 
-  it("prefers the detail 'Distance' stat, falls back to summary then track_km", () => {
+  it("falls back to the measured track_km when no reported distance", () => {
     const rides = [
-      ride({ key: "Mon Jun 1 2026 at 08:00", distance: "9 km", stats: { Distance: "10 km" } }),
-      ride({ key: "Tue Jun 2 2026 at 08:00", distance: "5 km" }),
+      ride({ key: "Mon Jun 1 2026 at 08:00", distance_km: 10 }),
+      ride({ key: "Tue Jun 2 2026 at 08:00", distance_km: 5 }),
       ride({ key: "Wed Jun 3 2026 at 08:00", track_km: 7 }),
     ];
     expect(computeStats(rides).totalKm).toBeCloseTo(22);
   });
 
-  it("does not inflate a comma-decimal detail 'Distance' (Check-job path)", () => {
-    // The Check job backfills the detail's "Distance" string into the store.
-    // On a comma-decimal device that's "13,5km" — it must total 13.5, not 135.
-    const rides = [
-      ride({
-        key: "Fri May 30 2025 at 08:45",
-        distance: "13,5km",
-        stats: { Distance: "13,5km" },
-      }),
-    ];
-    expect(computeStats(rides).totalKm).toBeCloseTo(13.5);
-  });
-
   it("ignores deleted rides entirely", () => {
     const rides = [
-      ride({ key: "Mon Jun 1 2026 at 08:00", distance: "10 km" }),
-      ride({ key: "Tue Jun 2 2026 at 08:00", distance: "99 km", deleted: true }),
+      ride({ key: "Mon Jun 1 2026 at 08:00", distance_km: 10 }),
+      ride({ key: "Tue Jun 2 2026 at 08:00", distance_km: 99, deleted: true }),
     ];
     const s = computeStats(rides);
     expect(s.rideCount).toBe(1);
@@ -142,9 +132,9 @@ describe("computeStats totals", () => {
 describe("computeStats records", () => {
   it("picks the single biggest ride by distance", () => {
     const rides = [
-      ride({ key: "Mon Jun 1 2026 at 08:00", distance: "10 km" }),
-      ride({ key: "Tue Jun 2 2026 at 08:00", distance: "42 km" }),
-      ride({ key: "Wed Jun 3 2026 at 08:00", distance: "30 km" }),
+      ride({ key: "Mon Jun 1 2026 at 08:00", distance_km: 10 }),
+      ride({ key: "Tue Jun 2 2026 at 08:00", distance_km: 42 }),
+      ride({ key: "Wed Jun 3 2026 at 08:00", distance_km: 30 }),
     ];
     const s = computeStats(rides);
     expect(s.biggestRide).toEqual({ key: "Tue Jun 2 2026 at 08:00", km: 42 });
@@ -152,9 +142,9 @@ describe("computeStats records", () => {
 
   it("sums distance per day and reports the best day", () => {
     const rides = [
-      ride({ key: "Mon Jun 1 2026 at 08:00", distance: "10 km" }),
-      ride({ key: "Mon Jun 1 2026 at 18:00", distance: "15 km" }), // same day → 25 km
-      ride({ key: "Tue Jun 2 2026 at 08:00", distance: "20 km" }),
+      ride({ key: "Mon Jun 1 2026 at 08:00", distance_km: 10 }),
+      ride({ key: "Mon Jun 1 2026 at 18:00", distance_km: 15 }), // same day → 25 km
+      ride({ key: "Tue Jun 2 2026 at 08:00", distance_km: 20 }),
     ];
     const s = computeStats(rides);
     expect(s.bestDay?.km).toBeCloseTo(25);
@@ -164,9 +154,9 @@ describe("computeStats records", () => {
   it("aggregates a Monday-anchored week and a calendar month", () => {
     // Jun 8 2026 is a Monday; Jun 8 and Jun 14 fall in the same week.
     const rides = [
-      ride({ key: "Mon Jun 8 2026 at 08:00", distance: "10 km" }),
-      ride({ key: "Sun Jun 14 2026 at 08:00", distance: "12 km" }),
-      ride({ key: "Mon Jun 22 2026 at 08:00", distance: "5 km" }),
+      ride({ key: "Mon Jun 8 2026 at 08:00", distance_km: 10 }),
+      ride({ key: "Sun Jun 14 2026 at 08:00", distance_km: 12 }),
+      ride({ key: "Mon Jun 22 2026 at 08:00", distance_km: 5 }),
     ];
     const s = computeStats(rides);
     expect(s.bestWeek?.km).toBeCloseTo(22); // the Jun 8–14 week

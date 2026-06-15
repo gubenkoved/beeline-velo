@@ -1,17 +1,25 @@
 /**
  * Local persistent state: which rides we know about and their Strava status.
  *
- * Port of `beeline_uploader.store` (Python). The phone is authoritative, but
- * caching lets us list rides quickly and avoid re-opening every ride on each run.
+ * Originally a port of `beeline_uploader.store` (Python). The phone is
+ * authoritative, but caching lets us list rides quickly and avoid re-opening every
+ * ride on each run.
  *
  * Storage: a single serialized blob under one key in a KeyValueStore (IndexedDB
- * in production, an in-memory Map in demo/tests). The serialized shape is
- * IDENTICAL to the Python tool's `rides.json` ({ updated_at, rides: { key: {...} } }),
- * so files exported here import into the Python tool and vice-versa.
+ * in production, an in-memory Map in demo/tests). Ride metrics are stored as
+ * NORMALIZED numbers (distance_km, moving_sec, …; null = unknown) rather than the
+ * localized phone strings the old schema (and the Python `rides.json`) kept; legacy
+ * string blobs are migrated on load. The Python tool is no longer interop-compatible.
  */
 
 import type { KeyValueStore } from "./kv";
-import { looksLikeStat, rideMonth, type StravaStatus } from "./parsing";
+import {
+  looksLikeStat,
+  metricsFromStatStrings,
+  type RideMetrics,
+  rideMonth,
+  type StravaStatus,
+} from "./parsing";
 
 /** Key under which the single serialized cache blob is stored in the backend. */
 export const STORAGE_KEY = "beeline-toolkit-state";
@@ -104,16 +112,13 @@ function nowIso(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "+00:00");
 }
 
-export interface RideRecord {
+export interface RideRecord extends RideMetrics {
   key: string;
   /** Richest title seen (the detail-sheet heading, e.g. "Morning ride, Amstelveen"). */
   title: string;
   /** Short list-card name (e.g. "Morning ride"); the prefix of the fuller `title`. */
   title_base: string;
-  distance: string;
-  duration: string;
   strava_status: StravaStatus;
-  stats: Record<string, string>;
   /** Rough encoded-polyline sketch of the route (see track.ts). Empty when unknown. */
   track: string;
   /** Lat/lon points read from the downloaded GPX (0 when unknown). */
@@ -144,10 +149,14 @@ function blankRecord(key: string): RideRecord {
     key,
     title: "",
     title_base: "",
-    distance: "",
-    duration: "",
     strava_status: "unknown",
-    stats: {},
+    distance_km: null,
+    moving_sec: null,
+    elapsed_sec: null,
+    avg_speed_kmh: null,
+    max_speed_kmh: null,
+    elevation_gain_m: null,
+    elevation_loss_m: null,
     track: "",
     track_src_points: 0,
     track_points: 0,
@@ -164,6 +173,54 @@ function blankRecord(key: string): RideRecord {
   };
 }
 
+/** The numeric metric fields, used to detect already-normalized persisted records. */
+const METRIC_KEYS: ReadonlyArray<keyof RideMetrics> = [
+  "distance_km",
+  "moving_sec",
+  "elapsed_sec",
+  "avg_speed_kmh",
+  "max_speed_kmh",
+  "elevation_gain_m",
+  "elevation_loss_m",
+];
+
+/**
+ * Derive normalized numeric metrics for a persisted ride, accepting BOTH the
+ * current numeric shape and the legacy string shape (top-level `distance`/`duration`
+ * plus a `stats` label→string map — the pre-normalization format, also produced by
+ * the Python tool). Legacy strings are parsed once here via the canonical
+ * locale-aware parsers; already-numeric records pass through. One-way + idempotent.
+ */
+function metricsFromPersisted(raw: Record<string, unknown>): RideMetrics {
+  const isNumeric = METRIC_KEYS.some((k) => typeof raw[k] === "number");
+  if (isNumeric) {
+    const num = (k: keyof RideMetrics): number | null => {
+      const v = raw[k];
+      return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+    };
+    return {
+      distance_km: num("distance_km"),
+      moving_sec: num("moving_sec"),
+      elapsed_sec: num("elapsed_sec"),
+      avg_speed_kmh: num("avg_speed_kmh"),
+      max_speed_kmh: num("max_speed_kmh"),
+      elevation_gain_m: num("elevation_gain_m"),
+      elevation_loss_m: num("elevation_loss_m"),
+    };
+  }
+  // Legacy: parse the `stats` map, folding the top-level summary strings in as
+  // fallbacks for Distance / Elapsed time when the map lacked them.
+  const stats =
+    raw.stats && typeof raw.stats === "object" ? (raw.stats as Record<string, string>) : {};
+  const distStr = typeof raw.distance === "string" ? raw.distance : "";
+  const durStr = typeof raw.duration === "string" ? raw.duration : "";
+  return metricsFromStatStrings({
+    ...stats,
+    Distance: stats.Distance || distStr,
+    "Elapsed time": stats["Elapsed time"] || durStr,
+  });
+}
+
 export function monthKey(rec: RideRecord): string {
   return rideMonth(rec.key)[0];
 }
@@ -178,13 +235,10 @@ interface Persisted {
   rides: Record<string, RideRecord>;
 }
 
-export interface UpsertFields {
+export interface UpsertFields extends Partial<RideMetrics> {
   title?: string;
   title_base?: string;
-  distance?: string;
-  duration?: string;
   strava_status?: StravaStatus;
-  stats?: Record<string, string>;
   track?: string;
   track_src_points?: number;
   track_points?: number;
@@ -273,15 +327,24 @@ export class Store {
     }
     const rides = (data as Partial<Persisted>)?.rides;
     if (!rides || typeof rides !== "object") return;
-    for (const [key, raw] of Object.entries(rides as Record<string, Partial<RideRecord>>)) {
-      const rec: RideRecord = { ...blankRecord(key), ...raw, key };
+    for (const [key, raw] of Object.entries(
+      rides as unknown as Record<string, Record<string, unknown>>,
+    )) {
+      const rec: RideRecord = { ...blankRecord(key), ...(raw as Partial<RideRecord>), key };
+      // Normalize numeric metrics from EITHER the current numeric shape or the
+      // legacy string shape, then drop any legacy string fields the spread carried
+      // over so they never linger in the re-serialized blob.
+      Object.assign(rec, metricsFromPersisted(raw));
+      const legacy = rec as unknown as Record<string, unknown>;
+      delete legacy.distance;
+      delete legacy.duration;
+      delete legacy.stats;
       // Scrub stale mis-parsed titles: UI chrome (Heatmap/Journeys/…) and stat
       // values/labels (e.g. "20,0km/h" captured when the detail heading scrolled
       // off-screen during a Check). Clearing lets the next scan/check reseed a
       // correct title instead of persisting the bad one forever.
       if (BAD_TITLES.has(rec.title) || looksLikeStat(rec.title)) rec.title = "";
       if (BAD_TITLES.has(rec.title_base) || looksLikeStat(rec.title_base)) rec.title_base = "";
-      if (!rec.stats || typeof rec.stats !== "object") rec.stats = {};
       if (typeof rec.track !== "string") rec.track = "";
       rec.track_src_points = Number(rec.track_src_points) || 0;
       rec.track_points = Number(rec.track_points) || 0;
@@ -358,11 +421,16 @@ export class Store {
       // Seed the display title from the scan name until a fuller one is checked.
       if (!rec.title) rec.title = fields.title_base;
     }
-    if (fields.distance) rec.distance = fields.distance;
-    if (fields.duration) rec.duration = fields.duration;
-    if (fields.stats && Object.keys(fields.stats).length) {
-      rec.stats = { ...rec.stats, ...fields.stats };
-    }
+    // Numeric metrics: only overwrite when the incoming figure is known (non-null),
+    // so a later partial update (e.g. a list scan that only knows distance) never
+    // clears a richer value an earlier Check already captured.
+    if (fields.distance_km != null) rec.distance_km = fields.distance_km;
+    if (fields.moving_sec != null) rec.moving_sec = fields.moving_sec;
+    if (fields.elapsed_sec != null) rec.elapsed_sec = fields.elapsed_sec;
+    if (fields.avg_speed_kmh != null) rec.avg_speed_kmh = fields.avg_speed_kmh;
+    if (fields.max_speed_kmh != null) rec.max_speed_kmh = fields.max_speed_kmh;
+    if (fields.elevation_gain_m != null) rec.elevation_gain_m = fields.elevation_gain_m;
+    if (fields.elevation_loss_m != null) rec.elevation_loss_m = fields.elevation_loss_m;
     if (fields.track) rec.track = fields.track;
     if (fields.track_src_points != null) rec.track_src_points = fields.track_src_points;
     if (fields.track_points != null) rec.track_points = fields.track_points;
@@ -467,12 +535,17 @@ export class Store {
 
   // -- import / export ---------------------------------------------------
 
-  /** Serialized JSON identical to the Python tool's rides.json (for download). */
-  exportJson(): string {
-    return JSON.stringify(this.serialize(), null, 2);
+  /**
+   * Serialized JSON of the whole cache (settings + rides) for download. An optional
+   * `meta` object is merged at the top of the file — the UI passes the app
+   * version/commit/build so an exported state records which build produced it. The
+   * persisted IndexedDB blob never carries `meta`; it lives only in the download.
+   */
+  exportJson(meta?: Record<string, unknown>): string {
+    return JSON.stringify({ ...meta, ...this.serialize() }, null, 2);
   }
 
-  /** Merge an exported/Python rides.json into the store and persist. Returns count merged. */
+  /** Merge an exported state JSON into the store and persist. Returns count merged. */
   importJson(text: string): number {
     const before = this.rides.size;
     this.ingest(JSON.parse(text));

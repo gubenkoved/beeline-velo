@@ -26,8 +26,8 @@ describe("parseJourneysList", () => {
     const first = cards[0];
     expect(first.key).toBe("Sat Jun 13 2026 at 14:22");
     expect(first.title).toBe("Afternoon ride");
-    expect(first.distance).toBe("22.6km");
-    expect(first.duration).toBe("1:37:52");
+    expect(first.distance_km).toBeCloseTo(22.6);
+    expect(first.elapsed_sec).toBe(5872);
     expect(first.tapY).toBeGreaterThan(0);
     const keys = cards.map((c) => c.key);
     expect(new Set(keys).size).toBe(keys.length);
@@ -46,7 +46,7 @@ describe("parseJourneysList", () => {
     expect(cards).toHaveLength(1);
     expect(cards[0].title).toBe("");
     expect(cards[0].key).toBe("Sun May 17 2026 at 12:29");
-    expect(cards[0].distance).toBe("22.2km");
+    expect(cards[0].distance_km).toBeCloseTo(22.2);
   });
 
   it("uses a column-aligned title when present", () => {
@@ -69,11 +69,11 @@ describe("parseJourneysList", () => {
     const ride = byKey.get("Fri May 30 2025 at 08:45");
     expect(ride).toBeDefined();
     expect(ride!.title).toBe("Morning ride");
-    expect(ride!.duration).toBe("1:11:24");
-    expect(ride!.distance).toBe("13,5km");
+    expect(ride!.elapsed_sec).toBe(1 * 3600 + 11 * 60 + 24);
+    expect(ride!.distance_km).toBeCloseTo(13.5);
     const next = byKey.get("Fri May 30 2025 at 08:24");
-    expect(next!.duration).toBe("14:16");
-    expect(next!.distance).toBe("3,9km");
+    expect(next!.elapsed_sec).toBe(14 * 60 + 16);
+    expect(next!.distance_km).toBeCloseTo(3.9);
   });
 });
 
@@ -95,29 +95,30 @@ describe("parseRideDetail", () => {
     expect(detail.key).toBe("Sat Jun 13 2026 at 14:22");
   });
 
-  it("parses the stats grid", () => {
-    const s = parseRideDetail(read("14_ride_scrolled.xml")).stats;
-    expect(s.Distance).toBe("22.6km");
-    expect(s["Average speed"]).toBe("20.0km/h");
-    expect(s["Max speed"]).toBe("57.0km/h");
-    expect(s["Moving time"]).toBe("1:07:42");
-    expect(s["Elapsed time"]).toBe("1:37:52");
-    expect(s["Elevation gain"]).toBe("25m");
-    expect(s["Elevation loss"]).toBe("34m");
+  it("parses the stats grid into normalized numbers", () => {
+    const m = parseRideDetail(read("14_ride_scrolled.xml")).metrics;
+    expect(m.distance_km).toBeCloseTo(22.6);
+    expect(m.avg_speed_kmh).toBeCloseTo(20.0);
+    expect(m.max_speed_kmh).toBeCloseTo(57.0);
+    expect(m.moving_sec).toBe(1 * 3600 + 7 * 60 + 42);
+    expect(m.elapsed_sec).toBe(1 * 3600 + 37 * 60 + 52);
+    expect(m.elevation_gain_m).toBeCloseTo(25);
+    expect(m.elevation_loss_m).toBeCloseTo(34);
   });
 
   it("pairs the stats grid on a real comma-decimal device dump (YAL-L21)", () => {
     const d = parseRideDetail(read("21_detail_yal.xml"));
     expect(d.key).toBe("Fri May 30 2025 at 08:45");
     expect(d.title).toBe("Morning ride, Kaatsheuvel");
-    // Each value must pair with its own label, not a neighbouring stat's.
-    expect(d.stats.Distance).toBe("13,5km");
-    expect(d.stats["Average speed"]).toBe("20,0km/h");
-    expect(d.stats["Max speed"]).toBe("33,4km/h");
-    expect(d.stats["Moving time"]).toBe("40:28");
-    expect(d.stats["Elapsed time"]).toBe("1:11:24");
-    expect(d.stats["Elevation gain"]).toBe("209m");
-    expect(d.stats["Elevation loss"]).toBe("215m");
+    // Each value must pair with its own label, not a neighbouring stat's, and a
+    // comma-decimal "13,5km" must normalize to 13.5 — emphatically not 135.
+    expect(d.metrics.distance_km).toBeCloseTo(13.5);
+    expect(d.metrics.avg_speed_kmh).toBeCloseTo(20.0);
+    expect(d.metrics.max_speed_kmh).toBeCloseTo(33.4);
+    expect(d.metrics.moving_sec).toBe(40 * 60 + 28);
+    expect(d.metrics.elapsed_sec).toBe(1 * 3600 + 11 * 60 + 24);
+    expect(d.metrics.elevation_gain_m).toBeCloseTo(209);
+    expect(d.metrics.elevation_loss_m).toBeCloseTo(215);
   });
 
   it("never adopts a stat value as the title when the heading scrolls off (Check flow)", () => {
@@ -128,7 +129,7 @@ describe("parseRideDetail", () => {
     const d = parseRideDetail(read("22_detail_scrolled_yal.xml"));
     expect(d.title).toBe("");
     expect(d.stravaStatus).not.toBe("unknown"); // we did reach the upload button
-    expect(d.stats["Average speed"]).toBe("20,0km/h");
+    expect(d.metrics.avg_speed_kmh).toBeCloseTo(20.0);
   });
 });
 

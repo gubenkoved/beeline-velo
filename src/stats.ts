@@ -11,7 +11,7 @@
  *   - the best single day / week / month by total distance ridden.
  */
 
-import { bucketRide, parseDurationSec, parseKm, parseMeters } from "./parsing";
+import { bucketRide } from "./parsing";
 
 // Re-export the canonical locale-aware parsers (defined once in ./parsing) so
 // existing stats-focused tests and callers can keep importing them from here.
@@ -20,8 +20,13 @@ export { parseKm, parseLocaleNumber, parseMeters } from "./parsing";
 /** The slice of a ride record this module needs (a structural subset of RideView). */
 export interface StatsRide {
   key: string;
-  distance: string;
-  stats: Record<string, string>;
+  /** Reported distance in km; null when never captured. */
+  distance_km: number | null;
+  /** Moving time in whole seconds; null when never captured. */
+  moving_sec: number | null;
+  /** Elevation gain in metres; null when never captured. */
+  elevation_gain_m: number | null;
+  /** Measured track length in km (fallback distance); 0 when unknown. */
   track_km: number;
   deleted: boolean;
 }
@@ -62,10 +67,10 @@ export interface RideStats {
   bestMonth: PeriodRecord | null;
 }
 
-/** A ride's distance in km: prefer the detail's "Distance", fall back to the summary, then the measured track. */
+/** A ride's distance in km: prefer the reported distance, fall back to the measured track. */
 function rideKm(r: StatsRide): number {
-  const fromText = parseKm(r.stats?.Distance || r.distance || "");
-  return fromText > 0 ? fromText : r.track_km > 0 ? r.track_km : 0;
+  if (r.distance_km != null && r.distance_km > 0) return r.distance_km;
+  return r.track_km > 0 ? r.track_km : 0;
 }
 
 /** Best (highest-distance) bucket at one granularity, or null when nothing is datable. */
@@ -108,8 +113,8 @@ export function computeStats(rides: ReadonlyArray<StatsRide>): RideStats {
   for (const r of live) {
     const km = rideKm(r);
     totalKm += km;
-    totalMovingSec += parseDurationSec(r.stats?.["Moving time"] || "");
-    totalElevationM += parseMeters(r.stats?.["Elevation gain"] || "");
+    totalMovingSec += r.moving_sec ?? 0;
+    totalElevationM += r.elevation_gain_m ?? 0;
     if (km > 0 && (!biggestRide || km > biggestRide.km)) biggestRide = { key: r.key, km };
   }
 

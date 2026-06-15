@@ -9,36 +9,30 @@ import {
   rideKm,
   visibleRides,
 } from "../src/filter";
-import { parseDurationSec, parseKm, parseKmh, parseMeters } from "../src/parsing";
 
 /**
  * Build a RideView with sensible defaults; override only what a test cares about.
- * The normalized numeric fields are derived from the (possibly overridden) string
- * fields via the canonical locale-aware parsers — exactly as controller.state()
- * does — so tests stay string-based while exercising the real number path. An
- * explicit numeric override in `over` still wins.
+ * Metrics are normalized numbers (null = unknown) — the parsing/migration boundary
+ * is exercised by parsing.test and store.test, so filter tests deal in numbers.
  */
 function ride(over: Partial<RideView> = {}): RideView {
-  const base: RideView = {
+  return {
     key: "Sat Jun 13 2026 at 14:22",
     title: "Morning ride",
     location: "",
-    distance: "20 km",
-    duration: "1h 00m",
     status: "pending",
-    stats: {},
     track: "",
     track_src_points: 0,
     track_points: 0,
     track_km: 0,
     track_bytes: 0,
-    distance_km: 0,
-    avg_speed_kmh: 0,
-    max_speed_kmh: 0,
-    moving_sec: 0,
-    elapsed_sec: 0,
-    elevation_gain_m: 0,
-    elevation_loss_m: 0,
+    distance_km: null,
+    moving_sec: null,
+    elapsed_sec: null,
+    avg_speed_kmh: null,
+    max_speed_kmh: null,
+    elevation_gain_m: null,
+    elevation_loss_m: null,
     device_model: "Pixel 10 Pro",
     month_key: "2026-06",
     month_label: "June 2026",
@@ -46,20 +40,6 @@ function ride(over: Partial<RideView> = {}): RideView {
     deleted: false,
     deleted_at: "",
     ...over,
-  };
-  const st = base.stats;
-  const reportedKm = parseKm(st?.Distance || base.distance || "");
-  return {
-    ...base,
-    distance_km:
-      over.distance_km ??
-      (reportedKm > 0 ? reportedKm : base.track_km > 0 ? base.track_km : 0),
-    avg_speed_kmh: over.avg_speed_kmh ?? parseKmh(st?.["Average speed"] || ""),
-    max_speed_kmh: over.max_speed_kmh ?? parseKmh(st?.["Max speed"] || ""),
-    moving_sec: over.moving_sec ?? parseDurationSec(st?.["Moving time"] || ""),
-    elapsed_sec: over.elapsed_sec ?? parseDurationSec(st?.["Elapsed time"] || ""),
-    elevation_gain_m: over.elevation_gain_m ?? parseMeters(st?.["Elevation gain"] || ""),
-    elevation_loss_m: over.elevation_loss_m ?? parseMeters(st?.["Elevation loss"] || ""),
   };
 }
 
@@ -69,25 +49,14 @@ function f(over: Partial<Filters>): Filters {
 }
 
 describe("rideKm (normalized distance)", () => {
-  it("reads the locale-normalized distance, never a blind comma strip", () => {
-    // The whole point of the fix: a comma-decimal "13,5km" is 13.5 km, not 135.
-    expect(rideKm(ride({ distance: "13,5km" }))).toBeCloseTo(13.5);
-    expect(rideKm(ride({ distance: "42.5 km" }))).toBeCloseTo(42.5);
-    expect(rideKm(ride({ distance: "no distance", stats: {} }))).toBe(0);
+  it("reads the normalized distance_km directly", () => {
+    expect(rideKm(ride({ distance_km: 13.5 }))).toBeCloseTo(13.5);
+    expect(rideKm(ride({ distance_km: 42.5 }))).toBeCloseTo(42.5);
+    expect(rideKm(ride({ distance_km: null }))).toBe(0);
   });
 
-  it("prefers the checked detail Distance, then the summary, then the measured track", () => {
-    // Detail "Distance" is the authoritative checked figure → preferred over summary.
-    expect(rideKm(ride({ distance: "12 km", stats: { Distance: "99 km" } }))).toBeCloseTo(99);
-    expect(rideKm(ride({ distance: "", stats: { Distance: "31 km" } }))).toBeCloseTo(31);
-    // No text distance at all → fall back to the measured track length.
-    expect(rideKm(ride({ distance: "", stats: {}, track_km: 17.2 }))).toBeCloseTo(17.2);
-    expect(rideKm(ride({ distance: "", stats: {} }))).toBe(0);
-  });
-
-  it("filters comma-decimal rides by distance band correctly (no 10x inflation)", () => {
-    const r = ride({ distance: "13,5km" });
-    // 13.5 km sits inside [10,20] and outside [50,∞) — the pre-fix 135 would flip both.
+  it("filters by distance band correctly", () => {
+    const r = ride({ distance_km: 13.5 });
     expect(matchesFilters(f({ distMin: 10, distMax: 20 }), r)).toBe(true);
     expect(matchesFilters(f({ distMin: 50 }), r)).toBe(false);
   });
@@ -140,14 +109,10 @@ describe("matchesFilters — gps / details tri-states", () => {
   });
 
   it("details yes/no keys off the presence of checked stats", () => {
-    expect(matchesFilters(f({ details: "yes" }), ride({ stats: { Distance: "20 km" } }))).toBe(
-      true,
-    );
-    expect(matchesFilters(f({ details: "yes" }), ride({ stats: {} }))).toBe(false);
-    expect(matchesFilters(f({ details: "no" }), ride({ stats: {} }))).toBe(true);
-    expect(matchesFilters(f({ details: "no" }), ride({ stats: { Distance: "20 km" } }))).toBe(
-      false,
-    );
+    expect(matchesFilters(f({ details: "yes" }), ride({ avg_speed_kmh: 20 }))).toBe(true);
+    expect(matchesFilters(f({ details: "yes" }), ride({}))).toBe(false);
+    expect(matchesFilters(f({ details: "no" }), ride({}))).toBe(true);
+    expect(matchesFilters(f({ details: "no" }), ride({ avg_speed_kmh: 20 }))).toBe(false);
   });
 
   it("destination yes/no keys off the location (routed-destination) suffix", () => {
@@ -211,17 +176,17 @@ describe("matchesFilters — device", () => {
 
 describe("matchesFilters — distance band", () => {
   it("applies inclusive min/max bounds in km", () => {
-    expect(matchesFilters(f({ distMin: 10 }), ride({ distance: "20 km" }))).toBe(true);
-    expect(matchesFilters(f({ distMin: 25 }), ride({ distance: "20 km" }))).toBe(false);
-    expect(matchesFilters(f({ distMax: 25 }), ride({ distance: "20 km" }))).toBe(true);
-    expect(matchesFilters(f({ distMax: 15 }), ride({ distance: "20 km" }))).toBe(false);
-    expect(matchesFilters(f({ distMin: 10, distMax: 30 }), ride({ distance: "20 km" }))).toBe(
+    expect(matchesFilters(f({ distMin: 10 }), ride({ distance_km: 20 }))).toBe(true);
+    expect(matchesFilters(f({ distMin: 25 }), ride({ distance_km: 20 }))).toBe(false);
+    expect(matchesFilters(f({ distMax: 25 }), ride({ distance_km: 20 }))).toBe(true);
+    expect(matchesFilters(f({ distMax: 15 }), ride({ distance_km: 20 }))).toBe(false);
+    expect(matchesFilters(f({ distMin: 10, distMax: 30 }), ride({ distance_km: 20 }))).toBe(
       true,
     );
   });
 
   it("treats an unknown distance as 0 — dropped by a min bound, kept by a max-only bound", () => {
-    const unknown = ride({ distance: "", stats: {} });
+    const unknown = ride({ distance_km: null });
     expect(matchesFilters(f({ distMin: 1 }), unknown)).toBe(false);
     expect(matchesFilters(f({ distMax: 50 }), unknown)).toBe(true);
   });
@@ -233,24 +198,23 @@ describe("visibleRides", () => {
       key: "a",
       status: "uploaded",
       track: "xy",
-      stats: { Distance: "40 km" },
-      distance: "40 km",
+      avg_speed_kmh: 22,
+      distance_km: 40,
       device_model: "Pixel 10 Pro",
     }),
     ride({
       key: "b",
       status: "pending",
       track: "",
-      stats: {},
-      distance: "5 km",
+      distance_km: 5,
       device_model: "Galaxy S25",
     }),
     ride({
       key: "c",
       status: "pending",
       track: "xy",
-      stats: { Distance: "20 km" },
-      distance: "20 km",
+      avg_speed_kmh: 18,
+      distance_km: 20,
       deleted: true,
       device_model: "",
     }),

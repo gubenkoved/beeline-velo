@@ -18,11 +18,8 @@ import {
 } from "./beeline";
 import { JobQueue, type JobsSnapshot, type Report, type Task } from "./jobs";
 import {
-  parseDurationSec,
-  parseKm,
-  parseKmh,
-  parseMeters,
   type RideDetail,
+  type RideMetrics,
   rideDatetime,
   rideMonth,
   rideShortLabel,
@@ -32,15 +29,12 @@ import type { RideSource, SourceFactory } from "./source";
 import { monthKey, monthLabel, type Settings, type Store, type UpsertFields } from "./store";
 import { encodedTrackToGpx, gpxToRoughTrack } from "./track";
 
-export interface RideView {
+export interface RideView extends RideMetrics {
   key: string;
   title: string;
   /** Extra location suffix gathered at check time (e.g. ", Amstelveen"); "" when none. */
   location: string;
-  distance: string;
-  duration: string;
   status: string;
-  stats: Record<string, string>;
   track: string;
   /** Lat/lon points read from the downloaded GPX (0 when none captured). */
   track_src_points: number;
@@ -50,25 +44,11 @@ export interface RideView {
   track_km: number;
   /** Size of the downloaded GPX file in bytes (0 when unknown). */
   track_bytes: number;
-  // -- Normalized numeric figures (the single source of truth for all maths) --
-  // Parsed ONCE here, at the boundary, from the localized phone strings via the
-  // canonical locale-aware parsers in ./parsing — so "13,5km" (comma-decimal)
-  // and "13.5km" yield the same 13.5. Downstream code (filters, rollups, stats,
-  // display) must read these numbers and never re-parse the raw strings.
-  /** Best reported distance in km: detail "Distance" → summary → measured track. 0 when unknown. */
-  distance_km: number;
-  /** Average speed in km/h from the detail stats; 0 when unknown. */
-  avg_speed_kmh: number;
-  /** Max speed in km/h from the detail stats; 0 when unknown. */
-  max_speed_kmh: number;
-  /** Moving time in whole seconds; 0 when unknown. */
-  moving_sec: number;
-  /** Elapsed time in whole seconds; 0 when unknown. */
-  elapsed_sec: number;
-  /** Elevation gain in metres; 0 when unknown. */
-  elevation_gain_m: number;
-  /** Elevation loss in metres; 0 when unknown. */
-  elevation_loss_m: number;
+  // The normalized numeric metrics (distance_km, moving_sec, avg_speed_kmh, …;
+  // null = unknown) are inherited from RideMetrics. They are the single source of
+  // truth for all maths and display — parsed once on the ingestion path, never
+  // re-derived from a raw string here. `distance_km` additionally falls back to the
+  // measured track length when no reported distance was captured (see state()).
   /** Phone model this ride was last scanned from ("" when never recorded). */
   device_model: string;
   month_key: string;
@@ -192,32 +172,32 @@ export class Controller {
       const base = r.title_base;
       const full = r.title;
       const hasSuffix = base !== "" && full.startsWith(base) && full.length > base.length;
-      const stats = r.stats;
-      // Normalize every numeric figure here, once, via the canonical locale-aware
-      // parsers — this is the boundary where localized phone strings become the
-      // numbers the rest of the app computes and displays from.
-      const reportedKm = parseKm(stats?.Distance || r.distance || "");
-      const distance_km = reportedKm > 0 ? reportedKm : r.track_km > 0 ? r.track_km : 0;
+      // The metrics are already normalized numbers on the record; copy them as-is.
+      // Distance additionally falls back to the measured track length when no
+      // reported distance was ever captured, so a GPX-only ride still shows a size.
+      const distance_km =
+        r.distance_km != null && r.distance_km > 0
+          ? r.distance_km
+          : r.track_km > 0
+            ? r.track_km
+            : null;
       return {
         key: r.key,
         title: hasSuffix ? base : full,
         location: hasSuffix ? full.slice(base.length) : "",
-        distance: r.distance,
-        duration: r.duration,
         status: r.strava_status,
-        stats,
         track: r.track,
         track_src_points: r.track_src_points,
         track_points: r.track_points,
         track_km: r.track_km,
         track_bytes: r.track_bytes,
         distance_km,
-        avg_speed_kmh: parseKmh(stats?.["Average speed"] || ""),
-        max_speed_kmh: parseKmh(stats?.["Max speed"] || ""),
-        moving_sec: parseDurationSec(stats?.["Moving time"] || ""),
-        elapsed_sec: parseDurationSec(stats?.["Elapsed time"] || ""),
-        elevation_gain_m: parseMeters(stats?.["Elevation gain"] || ""),
-        elevation_loss_m: parseMeters(stats?.["Elevation loss"] || ""),
+        moving_sec: r.moving_sec,
+        elapsed_sec: r.elapsed_sec,
+        avg_speed_kmh: r.avg_speed_kmh,
+        max_speed_kmh: r.max_speed_kmh,
+        elevation_gain_m: r.elevation_gain_m,
+        elevation_loss_m: r.elevation_loss_m,
         device_model: r.device_model,
         month_key: monthKey(r),
         month_label: monthLabel(r),
@@ -266,8 +246,8 @@ export class Controller {
         this.store.upsert(c.key, {
           ...this.deviceFields(),
           title_base: c.title,
-          distance: c.distance,
-          duration: c.duration,
+          distance_km: c.distance_km,
+          elapsed_sec: c.elapsed_sec,
           // A source may already know the full record at scan time (Beeline fetches
           // track + stats + Strava status in one request); merge those when present.
           ...(c.fields ?? {}),
@@ -351,25 +331,18 @@ export class Controller {
   }
 
   /**
-   * Persist a freshly read ride detail (title, Strava status, stats) and surface it.
-   * Backfills the one-line summary fields (distance/duration) from the detail when
-   * the list scan never captured them, so the summary, distance chart and KPIs all
-   * agree with the expanded detail instead of showing "?".
+   * Persist a freshly read ride detail (title, Strava status, metrics) and surface
+   * it. The detail's normalized numbers flow straight in via upsert, which only
+   * overwrites a metric when the new figure is known — so a Check fills in the
+   * fuller stats without clobbering anything an earlier pass already captured.
    */
   private persistDetail(d: RideDetail): void {
-    const cur = this.store.rides.get(d.key);
-    const fields: UpsertFields = {
+    this.store.upsert(d.key, {
       ...this.deviceFields(),
       title: d.title,
       strava_status: d.stravaStatus,
-      stats: d.stats,
-    };
-    if (!cur?.distance && d.stats.Distance) fields.distance = d.stats.Distance;
-    if (!cur?.duration) {
-      const dur = d.stats["Elapsed time"] || d.stats["Moving time"];
-      if (dur) fields.duration = dur;
-    }
-    this.store.upsert(d.key, fields);
+      ...d.metrics,
+    });
     this.store.save();
     this.notify();
   }
@@ -564,8 +537,8 @@ export class Controller {
     return this.store.flush();
   }
 
-  exportJson(): string {
-    return this.store.exportJson();
+  exportJson(meta?: Record<string, unknown>): string {
+    return this.store.exportJson(meta);
   }
 
   importJson(text: string): number {

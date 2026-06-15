@@ -35,7 +35,14 @@ import {
   stravaStatusOf,
   uploadRideToStrava,
 } from "./beeline-api";
-import { type RideCard, type RideDetail, rideDatetime, rideShortLabel } from "./parsing";
+import {
+  blankMetrics,
+  type RideCard,
+  type RideDetail,
+  type RideMetrics,
+  rideDatetime,
+  rideShortLabel,
+} from "./parsing";
 import type { RideSource } from "./source";
 import type { UpsertFields } from "./store";
 import { encodedTrackToGpx } from "./track";
@@ -125,8 +132,8 @@ export class BeelineRideSource implements RideSource {
       cards.push({
         key: mapped.key,
         title: mapped.fields.title_base ?? "",
-        distance: mapped.fields.distance ?? "",
-        duration: mapped.fields.duration ?? "",
+        distance_km: mapped.fields.distance_km ?? null,
+        elapsed_sec: mapped.fields.elapsed_sec ?? null,
         tapY: 0,
         fields: mapped.fields,
       });
@@ -152,12 +159,23 @@ export class BeelineRideSource implements RideSource {
   /** Build a RideDetail (the Controller's per-ride persistence unit) from a record. */
   private detailFor(key: string, raw: RawBeelineRide): RideDetail {
     const mapped = mapBeelineRide(key, raw, this.label());
-    const fields = mapped?.fields;
+    const f = mapped?.fields;
+    const metrics: RideMetrics = f
+      ? {
+          distance_km: f.distance_km ?? null,
+          moving_sec: f.moving_sec ?? null,
+          elapsed_sec: f.elapsed_sec ?? null,
+          avg_speed_kmh: f.avg_speed_kmh ?? null,
+          max_speed_kmh: f.max_speed_kmh ?? null,
+          elevation_gain_m: f.elevation_gain_m ?? null,
+          elevation_loss_m: f.elevation_loss_m ?? null,
+        }
+      : blankMetrics();
     return {
       key,
-      title: fields?.title_base ?? "",
-      stats: fields?.stats ?? {},
-      stravaStatus: fields?.strava_status ?? "unknown",
+      title: f?.title_base ?? "",
+      metrics,
+      stravaStatus: f?.strava_status ?? "unknown",
       stravaTap: null,
     };
   }

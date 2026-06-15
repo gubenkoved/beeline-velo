@@ -252,28 +252,14 @@ export function isTerminalStatus(status: StravaStatus): boolean {
   return status === "uploaded" || status === "pending";
 }
 
-// -- formatting (numbers → the canonical strings RideView re-parses) --------
+// -- numeric conversion (Beeline SI units → the app's normalized metrics) ----
 //
-// RideRecord stores localized strings (distance/duration/stats) and the
-// Controller derives numbers from them via the canonical locale-aware parsers.
-// Beeline gives us real numbers, so we format them ONCE here into unambiguous
-// period-decimal strings that those parsers round-trip exactly — keeping a single
-// RideView code path for both sources.
+// The store now holds normalized numbers (distance_km, moving_sec, …), so the
+// Beeline mapper converts its raw SI values (metres, m/s, milliseconds) straight
+// into those metrics — no localized strings, and no number→string→number round
+// trip through the parsers any more.
 
 const MPS_TO_KMH = 3.6;
-
-function pad2(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
-/** Seconds → "H:MM:SS" (with hours) or "M:SS" — the shape parseDurationSec accepts. */
-function formatDuration(totalSec: number): string {
-  const s = Math.max(0, Math.round(totalSec));
-  const hh = Math.floor(s / 3600);
-  const mm = Math.floor((s % 3600) / 60);
-  const ss = s % 60;
-  return hh > 0 ? `${hh}:${pad2(mm)}:${pad2(ss)}` : `${mm}:${pad2(ss)}`;
-}
 
 /**
  * A Strava-style time-of-day ride name from a start instant (local wall-clock).
@@ -346,43 +332,29 @@ export function mapBeelineRide(
     source_id: pushId,
     device_model: sourceLabel,
     strava_status: stravaStatusOf(raw),
-    stats: {},
   };
 
-  // Distance (metres → km string).
+  // Metrics: convert Beeline's SI units straight into the app's normalized numbers.
   if (typeof raw.totalDistance === "number" && raw.totalDistance > 0) {
-    const km = raw.totalDistance / 1000;
-    fields.distance = `${km.toFixed(2)} km`;
-    (fields.stats as Record<string, string>).Distance = fields.distance;
+    fields.distance_km = raw.totalDistance / 1000;
   }
-  // Speeds (m/s → km/h string).
   if (typeof raw.averageSpeed === "number" && raw.averageSpeed > 0) {
-    (fields.stats as Record<string, string>)["Average speed"] =
-      `${(raw.averageSpeed * MPS_TO_KMH).toFixed(1)} km/h`;
+    fields.avg_speed_kmh = raw.averageSpeed * MPS_TO_KMH;
   }
   if (typeof raw.topSpeed === "number" && raw.topSpeed > 0) {
-    (fields.stats as Record<string, string>)["Max speed"] =
-      `${(raw.topSpeed * MPS_TO_KMH).toFixed(1)} km/h`;
+    fields.max_speed_kmh = raw.topSpeed * MPS_TO_KMH;
   }
-  // Times (ms → duration strings).
   if (typeof raw.movingTime === "number" && raw.movingTime > 0) {
-    (fields.stats as Record<string, string>)["Moving time"] = formatDuration(
-      raw.movingTime / 1000,
-    );
+    fields.moving_sec = Math.round(raw.movingTime / 1000);
   }
   if (typeof raw.duration === "number" && raw.duration > 0) {
-    const elapsed = formatDuration(raw.duration / 1000);
-    fields.duration = elapsed;
-    (fields.stats as Record<string, string>)["Elapsed time"] = elapsed;
+    fields.elapsed_sec = Math.round(raw.duration / 1000);
   }
-  // Elevation (metres → m string), when present.
   if (typeof raw.totalElevationGain === "number" && raw.totalElevationGain > 0) {
-    (fields.stats as Record<string, string>)["Elevation gain"] =
-      `${Math.round(raw.totalElevationGain)} m`;
+    fields.elevation_gain_m = raw.totalElevationGain;
   }
   if (typeof raw.totalElevationLoss === "number" && raw.totalElevationLoss > 0) {
-    (fields.stats as Record<string, string>)["Elevation loss"] =
-      `${Math.round(raw.totalElevationLoss)} m`;
+    fields.elevation_loss_m = raw.totalElevationLoss;
   }
 
   // Title. Prefer the user's own ride name when they set one ("Let's go sailing")
