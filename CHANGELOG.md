@@ -17,6 +17,23 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Removed the ADB (phone) ride source (v0.3.0)
+- **What:** Deleted the legacy Android/ADB ride source entirely — `src/adb/` (WebUSB +
+  demo transports), `src/beeline.ts` (uiautomator-driven app automation), `AdbRideSource`,
+  the interaction-speed/timing profiles, the phone source picker tile, the USB-debugging
+  demo notice, and all phone-only chrome. The `RideSource` seam stays (Beeline is now its
+  only implementation); shared GPX/catalog/progress types + `realSleep` moved from the
+  deleted modules into `src/source.ts`. Dropped `device_serial` and the uiautomator XML
+  parsers from `src/parsing.ts`, the three `@yume-chan/adb` deps + `@types/w3c-web-usb`,
+  and the ADB tests/recon fixtures. Bumped to 0.3.0.
+- **Why:** The Beeline cloud account supersedes ADB on every axis — it pulls the whole
+  history in one request (vs ~10 s/ride of UI automation), needs no cable, isn't tied to
+  Android/Chromium, and isn't brittle to the Beeline app's layout. Keeping a faithful-but-
+  dead phone path behind the seam was pure carrying cost; removing it leaves one fast,
+  portable source and a much smaller, simpler codebase.
+
+---
+
 ## UX & responsiveness cleanup (mobile fullscreen + source picker)
 - **What:** Three small CSS fixes. (1) Fullscreen Map/Stats use `100svh` instead of
   `100vh` (and the mobile bottom row `38svh`) so the ride-labels panel no longer hides

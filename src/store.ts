@@ -1,15 +1,13 @@
 /**
  * Local persistent state: which rides we know about and their Strava status.
  *
- * Originally a port of `beeline_uploader.store` (Python). The phone is
- * authoritative, but caching lets us list rides quickly and avoid re-opening every
- * ride on each run.
+ * The Beeline account is authoritative, but caching lets us list rides quickly
+ * without re-fetching the whole history on each visit.
  *
  * Storage: a single serialized blob under one key in a KeyValueStore (IndexedDB
  * in production, an in-memory Map in demo/tests). Ride metrics are stored as
- * NORMALIZED numbers (distance_km, moving_sec, …; null = unknown) rather than the
- * localized phone strings the old schema (and the Python `rides.json`) kept; legacy
- * string blobs are migrated on load. The Python tool is no longer interop-compatible.
+ * NORMALIZED numbers (distance_km, moving_sec, …; null = unknown) rather than
+ * localized strings; legacy string blobs are migrated on load.
  */
 
 import type { KeyValueStore } from "./kv";
@@ -24,8 +22,8 @@ import {
 /** Key under which the single serialized cache blob is stored in the backend. */
 export const STORAGE_KEY = "beeline-toolkit-state";
 
-/** Where a ride's data originated. "" is the legacy value (ADB, pre-multi-source). */
-export type RideSource = "" | "adb" | "beeline";
+/** Where a ride's data originated. Only the Beeline cloud account today. */
+export type RideSource = "beeline";
 
 /** UTF-8 byte length of a string (so multi-byte ride titles count their real size). */
 function byteLength(s: string): number {
@@ -82,7 +80,7 @@ export interface Settings {
   speedTrimFastPct: number;
   /** Heatmap glow radius (px) — how thick each track renders on the route-frequency map. */
   heatRadius: number;
-  /** How many Beeline Strava uploads run at once (ADB uploads are always serial). */
+  /** How many Beeline Strava uploads run at once. */
   beelineUploadConcurrency: number;
 }
 
@@ -129,17 +127,15 @@ export interface RideRecord extends RideMetrics {
   track_km: number;
   /** Size of the downloaded GPX file in bytes (0 when unknown). */
   track_bytes: number;
-  /** Model of the phone this ride was last read from (e.g. "Pixel 10 Pro"). Empty when unknown. */
+  /** Source label this ride was last read from (e.g. "Beeline (a@b)"). Empty when unknown. */
   device_model: string;
-  /** USB serial of the phone this ride was last read from. Empty when unknown. */
-  device_serial: string;
-  /** Where this ride came from: "" (legacy/ADB), "adb", or "beeline". */
+  /** Where this ride came from. "beeline" today. */
   source: RideSource;
-  /** Source-native id: the Beeline push-id (needed for upload/status). "" for ADB. */
+  /** Source-native id: the Beeline push-id (needed for upload/status). */
   source_id: string;
   last_seen: string;
   uploaded_at: string;
-  /** True when the ride was known locally but has since vanished from the phone. */
+  /** True when the ride was known locally but has since vanished from the source. */
   deleted: boolean;
   deleted_at: string;
 }
@@ -163,8 +159,7 @@ function blankRecord(key: string): RideRecord {
     track_km: 0,
     track_bytes: 0,
     device_model: "",
-    device_serial: "",
-    source: "",
+    source: "beeline",
     source_id: "",
     last_seen: "",
     uploaded_at: "",
@@ -245,7 +240,6 @@ export interface UpsertFields extends Partial<RideMetrics> {
   track_km?: number;
   track_bytes?: number;
   device_model?: string;
-  device_serial?: string;
   source?: RideSource;
   source_id?: string;
 }
@@ -266,9 +260,9 @@ export class Store {
   /**
    * @param backend durable key/value store (IndexedDB in production).
    * @param onError surfaced when a background write fails (e.g. quota exceeded).
-   * @param storageKey backend key for this profile's blob (lets ADB/Beeline/demo
-   *        keep separate, non-colliding caches). Defaults to the legacy key so the
-   *        existing single-profile data keeps loading unchanged.
+   * @param storageKey backend key for this profile's blob (lets the Beeline
+   *        account and demo keep separate, non-colliding caches). Defaults to the
+   *        legacy key so existing single-profile data keeps loading unchanged.
    */
   constructor(
     private readonly backend: KeyValueStore,
@@ -351,8 +345,7 @@ export class Store {
       rec.track_km = Number(rec.track_km) || 0;
       rec.track_bytes = Number(rec.track_bytes) || 0;
       if (typeof rec.device_model !== "string") rec.device_model = "";
-      if (typeof rec.device_serial !== "string") rec.device_serial = "";
-      rec.source = rec.source === "adb" || rec.source === "beeline" ? rec.source : "";
+      rec.source = "beeline";
       if (typeof rec.source_id !== "string") rec.source_id = "";
       rec.deleted = rec.deleted === true; // coerce missing/odd values to a real boolean
       this.rides.set(key, rec);
@@ -437,7 +430,6 @@ export class Store {
     if (fields.track_km != null) rec.track_km = fields.track_km;
     if (fields.track_bytes != null) rec.track_bytes = fields.track_bytes;
     if (fields.device_model) rec.device_model = fields.device_model;
-    if (fields.device_serial) rec.device_serial = fields.device_serial;
     if (fields.source) rec.source = fields.source;
     if (fields.source_id) rec.source_id = fields.source_id;
     if (fields.strava_status && fields.strava_status !== "unknown") {
@@ -455,7 +447,7 @@ export class Store {
   }
 
   /**
-   * Flag a known ride as deleted on the phone. No-op for unknown keys or rides
+   * Flag a known ride as deleted in the source. No-op for unknown keys or rides
    * already flagged (so `deleted_at` records the first time we noticed). Returns
    * true when this call newly flagged the ride.
    */
@@ -506,7 +498,7 @@ export class Store {
 
   /**
    * Wipe all cached rides and restore default settings, removing the persisted
-   * payload from storage. Local browser state only — this never touches the phone.
+   * payload from storage. Local browser state only — this never touches the source.
    */
   clear(): void {
     this.rides.clear();

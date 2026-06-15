@@ -1,8 +1,8 @@
 /**
  * Lifetime ride analytics — pure, DOM-free aggregation for the "Stats" view.
  *
- * Everything here is computed from the cheap scalar fields we already parse off
- * the phone (distance, moving time, elevation) plus the ride datetime in the key.
+ * Everything here is computed from the cheap scalar fields we already store per
+ * ride (distance, moving time, elevation) plus the ride datetime in the key.
  * There is deliberately no track/GPS work: totals and records only need the
  * per-ride summary numbers, which keeps this fast and trivially unit-testable.
  *
@@ -100,7 +100,7 @@ function bestPeriod(
 
 /**
  * Aggregate lifetime totals and distance records over a ride list. Deleted rides
- * are ignored — they no longer exist on the phone and would inflate the totals.
+ * are ignored — they no longer exist in the source and would inflate the totals.
  */
 export function computeStats(rides: ReadonlyArray<StatsRide>): RideStats {
   const live = rides.filter((r) => !r.deleted);

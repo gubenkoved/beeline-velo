@@ -1,9 +1,8 @@
 /**
- * Beeline cloud-backend client (the non-ADB ride source).
+ * Beeline cloud-backend client — the ride source.
  *
  * Reverse-engineered from a real traffic capture of the Beeline Velo 2 Android
- * app. Where the ADB path drives the phone UI one ride at a time (~10 s/ride),
- * this talks to the same Firebase backend the app uses and pulls the *entire*
+ * app. It talks to the same Firebase backend the app uses and pulls the *entire*
  * ride history — with inline route polylines and Strava status — in a single
  * request.
  *
@@ -308,13 +307,12 @@ export interface MappedBeelineRide {
 /**
  * Map one raw Beeline ride (and its push-id) into a store key + UpsertFields.
  *
- * The key is derived from `start` in the same "Wed Jun 3 2026 at 19:04" shape the
- * ADB path uses, so all month/stats/filter machinery works unchanged. The inline
- * polyline is kept in FULL as the `track` (no simplification): unlike the ADB path,
- * which keeps only a rough sketch of a heavy downloaded GPX, the Beeline polyline is
- * already compact and is the only route data we get, so there's nothing to gain by
- * thinning it. `source`/`source_id` mark the ride as Beeline-sourced and carry the
- * push-id needed to upload it later.
+ * The key is derived from `start` in the "Wed Jun 3 2026 at 19:04" shape all the
+ * month/stats/filter machinery expects. The inline polyline is kept in FULL as the
+ * `track` (no simplification): the Beeline polyline is already compact and is the
+ * only route data we get, so there's nothing to gain by thinning it. `source`/
+ * `source_id` mark the ride as Beeline-sourced and carry the push-id needed to
+ * upload it later.
  *
  * Returns null when the ride has no parseable start time (no usable key).
  */

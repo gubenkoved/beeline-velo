@@ -1,12 +1,13 @@
 /**
- * Parsing of Beeline `uiautomator` XML dumps into structured data.
+ * Ride data types and helpers: normalized metrics, ride-key/date utilities, the
+ * canonical locale-aware number parsers, and stat-shape detection.
  *
- * Faithful port of `beeline_uploader.parsing` (Python). Two screens matter:
- * - the Journeys *list* (cards with title / datetime / duration / distance)
- * - the ride *detail* bottom-sheet (stats + the Strava/komoot upload buttons)
+ * The numeric figures (distance/speed/elevation/duration) are parsed ONCE here —
+ * on the ingestion boundary — into normalized numbers, so localized strings like
+ * "13,5km" (comma-decimal) and "13.5km" both yield 13.5.
  */
 
-// Stat labels shown on the ride-detail sheet (value sits directly above each label).
+// Stat labels shown on the ride-detail sheet.
 export const DETAIL_STAT_LABELS = [
   "Distance",
   "Average speed",
@@ -17,17 +18,11 @@ export const DETAIL_STAT_LABELS = [
   "Elevation loss",
 ] as const;
 
-// A ride's datetime line, e.g. "Sat Jun 13 2026 at 14:22" — used as the unique key.
-const DATETIME_RE =
-  /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+[A-Za-z]+\s+\d{1,2}\s+\d{4}\s+at\s+\d{2}:\d{2}$/;
 const DISTANCE_RE = /^[\d.,]+\s*km$/;
 const DURATION_RE = /^(\d+:)?\d{1,2}:\d{2}$/;
 
-// Stat-value shapes that must never be mistaken for a ride title. When the detail
-// bottom-sheet is swiped up to reveal the Strava/komoot buttons (the Check flow),
-// the heading and datetime can scroll off the top entirely; on such a dump the
-// top-most remaining text is a stat *value* (e.g. "20,0km/h" on a comma-decimal
-// device), which a naive title fallback would otherwise persist as the title.
+// Stat-value shapes that must never be mistaken for a ride title (e.g. a stat
+// value like "20,0km/h" captured when the detail heading scrolled off-screen).
 const SPEED_RE = /^[\d.,]+\s*km\/h$/i;
 const ELEVATION_RE = /^[\d.,]+\s*(m|ft|feet|metres|meters)$/i;
 const STAT_LABEL_SET = new Set<string>([...DETAIL_STAT_LABELS, "Elevation"]);
@@ -43,142 +38,31 @@ export function looksLikeStat(text: string): boolean {
   );
 }
 
-// Strava/komoot button label states.
-const STRAVA_PENDING = "Upload to";
-const STRAVA_PROCESSING = "upload processing";
-const STRAVA_UPLOADED = "View on";
-const ACTION_LABELS = new Set([STRAVA_PENDING, STRAVA_PROCESSING, STRAVA_UPLOADED]);
-
-export interface Bounds {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-}
-
-export function boundsCx(b: Bounds): number {
-  return Math.floor((b.left + b.right) / 2);
-}
-
-export function boundsCy(b: Bounds): number {
-  return Math.floor((b.top + b.bottom) / 2);
-}
-
-const BOUNDS_RE = /^\[(\d+),(\d+)\]\[(\d+),(\d+)\]/;
-
-export function parseBounds(value: string): Bounds | null {
-  const m = BOUNDS_RE.exec(value || "");
-  if (!m) return null;
-  return {
-    left: Number(m[1]),
-    top: Number(m[2]),
-    right: Number(m[3]),
-    bottom: Number(m[4]),
-  };
-}
-
-interface TextNode {
-  text: string;
-  bounds: Bounds;
-}
-
-function textNodes(xml: string): TextNode[] {
-  const doc = new DOMParser().parseFromString(xml, "text/xml");
-  const nodes: TextNode[] = [];
-  for (const n of Array.from(doc.getElementsByTagName("node"))) {
-    const text = (n.getAttribute("text") || "").trim();
-    if (!text) continue;
-    const b = parseBounds(n.getAttribute("bounds") || "");
-    if (b === null) continue;
-    // Drop invisible, zero-area nodes ([0,0][0,0] and the like). Some devices
-    // emit off-screen ghost duplicates (e.g. a collapsed "Elevation" section, or
-    // bottom-nav labels) that share a real label's text but sit at the origin;
-    // sorted by `top` they'd win a naive top-most scan and poison title/stat
-    // detection. They can never be a tap target, so they're always safe to skip.
-    if (b.right <= b.left || b.bottom <= b.top) continue;
-    nodes.push({ text, bounds: b });
-  }
-  return nodes;
-}
-
-// --- Journeys list ------------------------------------------------------------
+// --- ride cards ---------------------------------------------------------------
 
 export interface RideCard {
   key: string; // the datetime string, unique per ride
   title: string;
-  /** Distance in km parsed from the list card ("13,5km" → 13.5); null when absent. */
+  /** Distance in km ("13,5km" → 13.5); null when absent. */
   distance_km: number | null;
-  /** Elapsed time in whole seconds parsed from the list card; null when absent. */
+  /** Elapsed time in whole seconds; null when absent. */
   elapsed_sec: number | null;
-  tapY: number; // vertical centre to tap to open this ride
   /**
-   * Optional richer fields a source already knows at scan time (the Beeline source
-   * fetches full records — track, stats, Strava status — in one request, so it can
-   * persist everything from the scan). The ADB source omits this; its cards carry
-   * only the list-card summary and details are filled in by later Check/GPX passes.
+   * Richer fields the source already knows at scan time — the Beeline source
+   * fetches full records (track, stats, Strava status) in one request, so it can
+   * persist everything from the scan rather than via later passes.
    */
   fields?: import("./store").UpsertFields;
 }
-
-export function parseJourneysList(xml: string): RideCard[] {
-  const nodes = textNodes(xml);
-  nodes.sort((a, b) => a.bounds.top - b.bounds.top);
-
-  const cards: RideCard[] = [];
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
-    if (!DATETIME_RE.test(node.text)) continue;
-    const dt = node.text;
-
-    // Title: the text node directly above the datetime, in the SAME column.
-    // We require horizontal overlap + close left edge so stray nodes like the
-    // top-right "Heatmap" header button or the month header aren't picked.
-    let title = "";
-    for (let j = i - 1; j >= 0; j--) {
-      const cand = nodes[j];
-      const gap = node.bounds.top - cand.bounds.bottom;
-      if (gap > 90) break;
-      if (gap < 0 || DATETIME_RE.test(cand.text)) continue;
-      const overlaps =
-        cand.bounds.left < node.bounds.right && cand.bounds.right > node.bounds.left;
-      const aligned = Math.abs(cand.bounds.left - node.bounds.left) <= 60;
-      if (overlaps && aligned) {
-        title = cand.text;
-        break;
-      }
-    }
-
-    // Duration & distance: the two stat nodes just below the datetime.
-    let duration = "";
-    let distance = "";
-    for (let j = i + 1; j < nodes.length; j++) {
-      const cand = nodes[j];
-      if (cand.bounds.top - node.bounds.bottom > 160) break;
-      if (DURATION_RE.test(cand.text) && !duration) duration = cand.text;
-      else if (DISTANCE_RE.test(cand.text) && !distance) distance = cand.text;
-    }
-
-    cards.push({
-      key: dt,
-      title,
-      distance_km: posOrNull(parseKm(distance)),
-      elapsed_sec: posOrNull(parseDurationSec(duration)),
-      tapY: boundsCy(node.bounds),
-    });
-  }
-  return cards;
-}
-
-// --- Ride detail --------------------------------------------------------------
 
 export type StravaStatus = "pending" | "processing" | "uploaded" | "unknown";
 
 /**
  * Normalized numeric ride metrics — the single source of truth for every figure
- * the app computes or displays. Parsed ONCE on the ingestion path (parseRideDetail,
- * parseJourneysList, the Beeline mapper) via the canonical locale-aware parsers, so
- * "13,5km" (comma-decimal) and "13.5km" both yield 13.5. `null` means the figure was
- * never read for this ride — distinct from a real zero.
+ * the app computes or displays. Parsed ONCE on the ingestion path (the Beeline
+ * mapper) via the canonical locale-aware parsers, so "13,5km" (comma-decimal) and
+ * "13.5km" both yield 13.5. `null` means the figure was never read for this ride —
+ * distinct from a real zero.
  */
 export interface RideMetrics {
   /** Distance in kilometres. */
@@ -250,179 +134,6 @@ export interface RideDetail {
   title: string;
   metrics: RideMetrics;
   stravaStatus: StravaStatus;
-  stravaTap: Bounds | null;
-}
-
-export function parseRideDetail(xml: string): RideDetail {
-  const nodes = textNodes(xml);
-  const detail: RideDetail = {
-    key: "",
-    title: "",
-    metrics: blankMetrics(),
-    stravaStatus: "unknown",
-    stravaTap: null,
-  };
-
-  // datetime / title.
-  let dtNode: TextNode | null = null;
-  for (const node of nodes) {
-    if (DATETIME_RE.test(node.text)) {
-      detail.key = node.text;
-      dtNode = node;
-      break;
-    }
-  }
-  // Title: the heading "<Name>, <City>" sits directly ABOVE the datetime in the
-  // same left column. Anchoring to the datetime (rather than picking the top-most
-  // text) keeps this robust to chrome rendered above the heading on some devices —
-  // e.g. a "Rate this route:" prompt — which a naive top-most scan would mistake
-  // for the title.
-  if (dtNode) {
-    let best: TextNode | null = null;
-    let bestGap = Infinity;
-    for (const cand of nodes) {
-      if (cand === dtNode || DATETIME_RE.test(cand.text) || TITLE_SKIP.has(cand.text))
-        continue;
-      if (looksLikeStat(cand.text)) continue;
-      const gap = dtNode.bounds.top - cand.bounds.bottom;
-      if (gap < 0 || gap > 90) continue;
-      const aligned = Math.abs(cand.bounds.left - dtNode.bounds.left) <= 60;
-      if (!aligned) continue;
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = cand;
-      }
-    }
-    if (best) detail.title = best.text;
-  }
-  if (!detail.title && nodes.length) {
-    // Fallback (no datetime parsed, e.g. the heading scrolled off when the sheet
-    // was swiped up to reveal the upload buttons): topmost non-datetime, non-chrome
-    // text — but never a stat value/label, which would otherwise be picked as the
-    // title once the real heading is off-screen. If only stats remain, leave the
-    // title empty so the store keeps the previously-checked one.
-    for (const node of [...nodes].sort((a, b) => a.bounds.top - b.bounds.top)) {
-      if (DATETIME_RE.test(node.text) || TITLE_SKIP.has(node.text)) continue;
-      if (looksLikeStat(node.text) || ACTION_LABELS.has(node.text)) continue;
-      detail.title = node.text;
-      break;
-    }
-  }
-
-  // Stats: each value node sits directly above its label node. Normalize to
-  // numbers right here so the localized strings never leave the parsing layer.
-  detail.metrics = metricsFromStatStrings(pairStats(nodes));
-
-  // Action buttons: the topmost of the action labels is Strava.
-  const actionNodes = nodes.filter((n) => ACTION_LABELS.has(n.text));
-  actionNodes.sort((a, b) => a.bounds.top - b.bounds.top);
-  if (actionNodes.length) {
-    const strava = actionNodes[0];
-    detail.stravaTap = strava.bounds;
-    detail.stravaStatus =
-      (
-        {
-          [STRAVA_PENDING]: "pending",
-          [STRAVA_PROCESSING]: "processing",
-          [STRAVA_UPLOADED]: "uploaded",
-        } as Record<string, StravaStatus>
-      )[strava.text] ?? "unknown";
-  }
-  return detail;
-}
-
-function pairStats(nodes: TextNode[]): Record<string, string> {
-  const labels = new Set<string>(DETAIL_STAT_LABELS);
-  const stats: Record<string, string> = {};
-  for (const label of nodes) {
-    if (!labels.has(label.text)) continue;
-    let best: TextNode | null = null;
-    let bestGap = 1e9;
-    for (const value of nodes) {
-      if (value === label || labels.has(value.text)) continue;
-      const gap = label.bounds.top - value.bounds.bottom;
-      if (gap < 0 || gap > 120) continue;
-      // require horizontal overlap with the label
-      if (value.bounds.right < label.bounds.left || value.bounds.left > label.bounds.right) {
-        continue;
-      }
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = value;
-      }
-    }
-    if (best !== null) stats[label.text] = best.text;
-  }
-  return stats;
-}
-
-export function hasActionButtons(xml: string): boolean {
-  return textNodes(xml).some((n) => ACTION_LABELS.has(n.text));
-}
-
-/**
- * True when a ride-detail bottom-sheet is on screen — even before it's been
- * swiped up to reveal the Strava/komoot buttons. A freshly opened detail has its
- * action buttons below the fold, so `hasActionButtons` alone misses it; we instead
- * key off the detail's stat labels (Distance / Average speed / Moving time / …),
- * which the Journeys *list* never shows. Two or more such labels means we're
- * looking at a detail, not the list. (Action buttons still count, for the revealed
- * case where the sheet may have scrolled past the stats.)
- */
-export function isRideDetail(xml: string): boolean {
-  const nodes = textNodes(xml);
-  if (nodes.some((n) => ACTION_LABELS.has(n.text))) return true;
-  const statLabels = new Set<string>(DETAIL_STAT_LABELS);
-  let count = 0;
-  for (const n of nodes) {
-    if (statLabels.has(n.text) && ++count >= 2) return true;
-  }
-  return false;
-}
-
-// --- GPX export flow ----------------------------------------------------------
-// Locators for the native "Options → Share/download → download GPX" path. Each
-// returns the tappable Bounds (or null) so automation can drive the export screens
-// the same way on a real device and the demo.
-
-// Chrome labels that must never be chosen as a ride-detail title.
-const TITLE_SKIP = new Set<string>(["Options"]);
-
-/** First text node whose trimmed text matches `matcher` (string = exact, else regex). */
-export function findNodeByText(xml: string, matcher: string | RegExp): Bounds | null {
-  const test =
-    typeof matcher === "string"
-      ? (t: string) => t === matcher
-      : (t: string) => matcher.test(t);
-  for (const n of textNodes(xml)) {
-    if (test(n.text)) return n.bounds;
-  }
-  return null;
-}
-
-/** The top-right "Options" control on the ride-detail sheet. */
-export function findOptionsButton(xml: string): Bounds | null {
-  return findNodeByText(xml, "Options");
-}
-
-/** The "Share/download" row in the Journey-options dialog. */
-export function findShareDownloadRow(xml: string): Bounds | null {
-  return findNodeByText(xml, "Share/download");
-}
-
-/** The "Share/download ridden route" action that triggers the GPX export. */
-export function findRiddenRouteRow(xml: string): Bounds | null {
-  return findNodeByText(xml, /ridden route/i);
-}
-
-/** True while the "Downloading GPX route" progress screen is showing. */
-export function isDownloadingGpx(xml: string): boolean {
-  return textNodes(xml).some((n) => /downloading gpx/i.test(n.text));
-}
-
-/** The system save dialog's "Save" button (DocumentsUI). */
-export function findSaveButton(xml: string): Bounds | null {
-  return findNodeByText(xml, /^save$/i);
 }
 
 // --- date helpers -------------------------------------------------------------
@@ -497,9 +208,9 @@ const MONTH_ABBR_LIST = [
 /**
  * Build a ride key (e.g. "Wed Jun 3 2026 at 19:04") from an epoch-millis instant,
  * the inverse of `rideDatetime`. Used by the Beeline source, whose rides carry a
- * `start` timestamp rather than a phone-rendered datetime line. The instant is
- * read in the browser's LOCAL timezone — matching how `rideDatetime` rebuilds a
- * local Date — so the key round-trips and all month/stats bucketing agrees.
+ * `start` timestamp. The instant is read in the browser's LOCAL timezone —
+ * matching how `rideDatetime` rebuilds a local Date — so the key round-trips and
+ * all month/stats bucketing agrees.
  * Returns "" when the timestamp is not a finite number.
  */
 export function beelineRideKey(startMs: number): string {
@@ -610,7 +321,7 @@ export function bucketRide(key: string, gran: Granularity): [string, string, str
  * Returns NaN when there is no number at all.
  *
  * This is the SINGLE canonical locale-aware number parser for the app — every
- * distance/speed/elevation figure scraped off the phone must flow through here
+ * distance/speed/elevation figure ingested as a string must flow through here
  * (or its `parseKm`/`parseKmh`/`parseMeters` wrappers). Never write a second
  * `parseFloat`/`replace`-based parse elsewhere; see "Data ingestion integrity".
  */

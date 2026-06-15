@@ -1,21 +1,13 @@
 /**
  * In-browser controller — the backend-free equivalent of the Python `server.Backend`.
  *
- * Holds the Store, the JobQueue, the speed profile, and a lazily-created
- * `BeelineApp` bound to a connected `AdbDevice`. Exposes the same operations the
- * old HTTP API did (state / scan / status / upload / cancel / clear / settings),
- * but as direct method calls. Instead of the UI polling `/api/state`, the
- * controller emits a "change" event whenever anything moves, and the UI re-renders.
+ * Holds the Store, the JobQueue, and a lazily-connected `RideSource` (the Beeline
+ * cloud account). Exposes the same operations the old HTTP API did (state / scan /
+ * status / upload / cancel / clear / settings), but as direct method calls. Instead
+ * of the UI polling `/api/state`, the controller emits a "change" event whenever
+ * anything moves, and the UI re-renders.
  */
 
-import { AdbError } from "./adb/types";
-import {
-  DEFAULT_PROFILE,
-  type GpxFile,
-  gpxDownloadName,
-  gpxFilename,
-  PROFILES,
-} from "./beeline";
 import { JobQueue, type JobsSnapshot, type Report, type Task } from "./jobs";
 import {
   type RideDetail,
@@ -25,7 +17,13 @@ import {
   rideShortLabel,
   sinceFromPreset,
 } from "./parsing";
-import type { RideSource, SourceFactory } from "./source";
+import {
+  type GpxFile,
+  gpxDownloadName,
+  gpxFilename,
+  type RideSource,
+  type SourceFactory,
+} from "./source";
 import { monthKey, monthLabel, type Settings, type Store, type UpsertFields } from "./store";
 import { encodedTrackToGpx, gpxToRoughTrack } from "./track";
 
@@ -49,7 +47,7 @@ export interface RideView extends RideMetrics {
   // truth for all maths and display — parsed once on the ingestion path, never
   // re-derived from a raw string here. `distance_km` additionally falls back to the
   // measured track length when no reported distance was captured (see state()).
-  /** Phone model this ride was last scanned from ("" when never recorded). */
+  /** Source label this ride was last scanned from ("" when never recorded). */
   device_model: string;
   month_key: string;
   month_label: string;
@@ -61,7 +59,6 @@ export interface RideView extends RideMetrics {
 export interface AppState {
   rides: RideView[];
   jobs: JobsSnapshot;
-  speed: string;
   settings: Settings;
   connected: boolean;
   device: string;
@@ -75,7 +72,6 @@ export type GpxListener = (file: GpxFile) => void;
 export class Controller {
   readonly store: Store;
   readonly jobs: JobQueue;
-  speed: string = DEFAULT_PROFILE;
 
   private source: RideSource | null = null;
   private deviceLabel = "";
@@ -123,7 +119,6 @@ export class Controller {
   async connect(): Promise<void> {
     if (this.source) return;
     const source = await this.sourceFactory();
-    source.setTiming(PROFILES[this.speed]);
     this.source = source;
     this.deviceLabel = source.label();
     this.notify();
@@ -138,26 +133,18 @@ export class Controller {
     this.notify();
   }
 
-  setSpeed(name: string): string {
-    if (name in PROFILES) {
-      this.speed = name;
-      this.source?.setTiming(PROFILES[name]);
-    }
-    return this.speed;
-  }
-
   /** The connected source, or throw if nothing is connected. */
   private sourceFor(): RideSource {
     if (!this.source) {
-      throw new AdbError("No device connected — click Connect first.");
+      throw new Error("Not connected — sign in first.");
     }
     return this.source;
   }
 
   /**
    * Per-ride attribution stamped onto every record we write while connected, so
-   * the cache records which source (and, for ADB, which phone) the info came from.
-   * Empty fields are omitted so they never overwrite a known value.
+   * the cache records which source the info came from. Empty fields are omitted
+   * so they never overwrite a known value.
    */
   private deviceFields(): UpsertFields {
     return this.source ? this.source.deviceFields() : {};
@@ -209,7 +196,6 @@ export class Controller {
     return {
       rides,
       jobs: this.jobs.snapshot(),
-      speed: this.speed,
       settings: { ...this.store.settings },
       connected: this.connected,
       device: this.deviceLabel,
@@ -257,11 +243,11 @@ export class Controller {
       this.notify();
     });
     // A scan reads the COMPLETE list for its window, so any ride we knew about
-    // within that window but did not see has been deleted on the phone. Only
+    // within that window but did not see has been deleted from the source. Only
     // reconcile when the scan both ran to completion AND was verified to have read
-    // the real Journeys list end-to-end (`complete`). A cancelled scan is partial,
-    // and an incomplete scan means the phone may have drifted to another app/screen
-    // mid-pass — in either case treating unseen rides as deleted would be wrong.
+    // the list end-to-end (`complete`). A cancelled scan is partial, and an
+    // incomplete scan is unreliable — in either case treating unseen rides as
+    // deleted would be wrong.
     let removed = 0;
     if (!cancelled && complete) {
       for (const r of this.store.rides.values()) {
@@ -299,7 +285,7 @@ export class Controller {
         if (task.progress) task.progress.done++;
       },
       (missing) => {
-        // Searched the whole list and never found these → deleted on the phone.
+        // Searched the whole list and never found these → deleted from the source.
         for (const key of missing) if (this.store.markDeleted(key)) removed++;
         if (removed) {
           this.store.save();
@@ -386,10 +372,10 @@ export class Controller {
       }
     }
 
-    // Only touch the source for rides that still need a real download (ADB pulls the
-    // GPX off the phone; rides without a cached full track). When every requested
-    // ride was handled locally, we never call sourceFor() — so no spurious
-    // "No device connected" in a source-less mode.
+    // Only touch the source for rides that still need a real download (rides
+    // without a cached full track). When every requested ride was handled locally,
+    // we never call sourceFor() — so no spurious "Not connected" in a source-less
+    // mode.
     if (remote.length) {
       const source = this.sourceFor();
       const files = await source.downloadGpx(
@@ -521,7 +507,7 @@ export class Controller {
 
   /**
    * Wipe all local state: cancel/clear the job queue and empty the ride cache.
-   * Destroys browser-side data only; nothing on the phone is affected.
+   * Destroys browser-side data only; nothing in your Beeline account is affected.
    */
   reset(): void {
     this.jobs.cancelAll();

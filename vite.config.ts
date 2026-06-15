@@ -22,9 +22,9 @@ function gitCommit(): string {
   }
 }
 
-// Tango (ya-webadb) uses modern JS (BigInt, top-level features) — target esnext.
 // `base: "./"` keeps asset URLs relative so the build can be served from any
 // path on a static host (GitHub Pages project sites, Netlify subpaths, etc.).
+// `target: esnext` (below) keeps modern JS (BigInt, top-level features) intact.
 export default defineConfig({
   base: "./",
   define: {

@@ -64,16 +64,15 @@ describe("Store", () => {
     expect(rec.title_base).toBe("");
   });
 
-  it("round-trips the source-phone identity (model + serial)", async () => {
+  it("round-trips the source identity (device_model)", async () => {
     const s = await Store.load(backend);
-    s.upsert("k", { device_model: "Pixel 10 Pro", device_serial: "ABC123" });
+    s.upsert("k", { device_model: "Beeline (rider@example.com)" });
     s.save();
     await s.flush();
 
     const reloaded = await Store.load(backend);
     const rec = reloaded.rides.get("k")!;
-    expect(rec.device_model).toBe("Pixel 10 Pro");
-    expect(rec.device_serial).toBe("ABC123");
+    expect(rec.device_model).toBe("Beeline (rider@example.com)");
   });
 
   it("defaults the device fields to empty for legacy records without them", async () => {
@@ -83,7 +82,6 @@ describe("Store", () => {
     );
     const rec = (await Store.load(backend)).rides.get("k")!;
     expect(rec.device_model).toBe("");
-    expect(rec.device_serial).toBe("");
   });
 
   it("seeds the display title from the scan name, then keeps the fuller checked title", async () => {

@@ -270,7 +270,7 @@ button.small {
   margin-top: 11px;
   gap: 8px;
 }
-/* Each scanbar label ("Scan", "Interaction speed") is glued to the segmented
+/* Each scanbar label ("Scan") is glued to the segmented
    control it describes by wrapping the pair in a group, so a wrap can never
    leave the label on one line and its buttons on another. The group is a
    transparent flex box that wraps as a single unit. */
@@ -2415,11 +2415,19 @@ body.job-active .toast {
   .brand .ver {
     display: none; /* build hash is desktop-only chrome */
   }
+  /* …except in the source picker, where the version is worth keeping even on
+     narrow screens — only the cute tagline drops out there. */
+  .srcpick-head .brand .ver {
+    display: inline;
+  }
+  .srcpick-head .brand .tagline {
+    display: none;
+  }
   .totals {
     font-size: 11.5px;
   }
   /* The flexible spacer separates info from bulk-actions (header) and the Scan
-     group from the Interaction-speed group (scanbar). At full width it grows and
+     group from the Track-detail group (scanbar). At full width it grows and
      shoves a lone label to the far edge while its segment wraps below it. On
      mobile force it to a zero-height full-width break instead, so each labelled
      group starts a fresh line with its label still attached to its controls. */
@@ -2431,7 +2439,7 @@ body.job-active .toast {
   .filterbar {
     gap: 6px;
   }
-  /* Scan / Interaction-speed / Track-detail labels are verbose; the segmented
+  /* Scan / Track-detail labels are verbose; the segmented
      controls below them already imply the meaning, so shrink the labels. */
   .scanbar .totals {
     font-size: 11px;
@@ -2627,20 +2635,10 @@ body.job-active .toast {
   border-radius: 999px;
   padding: 1px 8px;
 }
-.srcopt-tag.legacy {
-  color: var(--muted);
-  border-color: var(--line);
-}
 .srcopt-desc {
   color: var(--muted);
   font-size: 13px;
   margin-top: 4px;
-}
-.srcopt-actions {
-  display: flex;
-  gap: 8px;
-  flex: 0 0 auto;
-  margin-left: auto;
 }
 /* The Beeline option stacks its description above an inline sign-in form. Reset
    .srcopt-main's row flex-basis (260px) here: in this column it would otherwise
@@ -2790,14 +2788,12 @@ body.job-active .toast {
 }
 
 /* --- Beeline (account) mode chrome ----------------------------------------
-   The cloud source has no phone to pace, no cable to manage, no time-window scan,
-   a single device, and full (not simplified) tracks, so hide the phone-only
-   controls when a Beeline account is the source: the interaction-speed profile,
-   the scan presets/custom-days (only a full "Re-sync" applies), the per-phone
-   "Source" ride filter, the rough-track "Track detail" density control (the
+   The cloud source has no time-window scan, a single account, and full (not
+   simplified) tracks, so hide the controls that don't apply when a Beeline
+   account is the source: the scan presets/custom-days (only a full "Re-sync"
+   applies), the "Source" ride filter, the "Track detail" density control (the
    downloaded polyline is kept verbatim, nothing to thin), and the "Details"
    filter (every Beeline ride arrives fully detailed, so it never narrows). */
-body[data-src="beeline"] #speedGroup,
 body[data-src="beeline"] #scanPresets,
 body[data-src="beeline"] #trackPointsBox,
 body[data-src="beeline"] #fDetails,
@@ -2821,10 +2817,10 @@ body[data-src="beeline"] #btnScan svg {
   height: 14px;
 }
 /* The "Destination" filter is the inverse: a routed destination is a Beeline-only
-   concept (the ADB path never records one), so the chip is hidden everywhere except
-   Beeline mode, where filtering routed vs. free rides is genuinely useful. The
-   "Named" filter is likewise Beeline-only: only there do we synthesize the auto
-   "<time> ride" names, so "named vs unnamed" is a meaningful, unambiguous split. */
+   concept, so the chip is hidden everywhere except Beeline mode, where filtering
+   routed vs. free rides is genuinely useful. The "Named" filter is likewise
+   Beeline-only: only there do we synthesize the auto "<time> ride" names, so
+   "named vs unnamed" is a meaningful, unambiguous split. */
 #fDestination,
 #fNamed {
   display: none;

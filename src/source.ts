@@ -1,37 +1,96 @@
 /**
- * Ride-source abstraction — the seam that lets the Controller drive either the
- * legacy phone (ADB UI automation) or a Beeline cloud account behind one API.
+ * Ride-source abstraction — the seam the Controller drives to obtain ride data
+ * and act on Strava, without knowing which backend answers.
  *
  * The Controller owns the job queue, the Store, deletion reconciliation and all
  * progress/error handling; a `RideSource` only answers "how do I obtain ride data
- * and act on Strava". The interface deliberately mirrors the three long-running
- * `BeelineApp` methods the Controller already called (enumerate / process / GPX),
- * so the ADB path is a thin pass-through and nothing in the orchestration changed.
+ * and act on Strava". The single implementation today is `BeelineRideSource`
+ * (see beeline-source.ts), which talks to the Beeline cloud backend; a demo fake
+ * backs the account-free demo. The seam keeps the orchestration backend-agnostic.
  *
- * Implementations:
- *  - `AdbRideSource`    — wraps a `BeelineApp` over a connected `AdbDevice` (legacy).
- *  - `BeelineRideSource`— talks to the Beeline backend (see beeline-source.ts).
- *  - demo/test fakes    — `DemoAdb` (via AdbRideSource) and `DemoBeelineSource`.
+ * This module also hosts the small set of shared, backend-neutral types and
+ * helpers the seam and its implementations exchange (GPX file/naming, the catalog
+ * result, the progress callback, and the injectable sleep used for pacing/tests).
  */
 
-import type { AdbDevice, Sleep } from "./adb/types";
-import {
-  BeelineApp,
-  type CatalogResult,
-  type GpxFile,
-  type Progress,
-  type Timing,
-} from "./beeline";
-import type { RideCard, RideDetail } from "./parsing";
-import type { RideSource as RideSourceKind, UpsertFields } from "./store";
+import { type RideCard, type RideDetail, rideDatetime } from "./parsing";
+import type { UpsertFields } from "./store";
 
-/** Which backend a source talks to (mirrors RideRecord.source, minus the legacy ""). */
-export type SourceKind = Exclude<RideSourceKind, "">;
+/** Which backend a source talks to (mirrors RideRecord.source). */
+export type SourceKind = "beeline";
+
+// -- shared, backend-neutral seam types --------------------------------------
+
+/** A GPX file produced for one ride. */
+export interface GpxFile {
+  key: string;
+  filename: string;
+  /** Sort-friendly name for the browser download (see `gpxDownloadName`). */
+  downloadName: string;
+  bytes: Uint8Array;
+}
+
+/** Per-ride outcome of a GPX export. */
+export type GpxExport = { ok: true; file: GpxFile } | { ok: false; reason: string };
+
+/** Result of a catalogue scan. `complete` is true only when the ride list was
+ *  read end-to-end — the precondition for trusting that an in-window ride we knew
+ *  about but didn't see has been deleted. A scan cut short by the user reports
+ *  `complete: false`, so callers must NOT reconcile deletions from it. */
+export interface CatalogResult {
+  cards: RideCard[];
+  complete: boolean;
+}
+
+// A callback the long-running passes call to report progress and check for cancel.
+// It receives a short status message; returning true asks the operation to stop.
+export type Progress = (msg: string) => boolean | Promise<boolean>;
+
+/** Sleep helper used for pacing; injectable so tests can make it instant. */
+export type Sleep = (seconds: number) => Promise<void>;
+
+export const realSleep: Sleep = (seconds) =>
+  new Promise((resolve) => setTimeout(resolve, Math.max(0, seconds) * 1000));
 
 /**
- * Everything the Controller needs from a ride backend. The three data methods have
- * the exact shape of the corresponding `BeelineApp` methods, so the Controller's
- * scan / check / upload / GPX orchestration is identical across sources.
+ * A deterministic, collision-free GPX filename derived from a ride's (unique)
+ * datetime key, so two rides that share a title never clobber each other.
+ */
+export function gpxFilename(key: string): string {
+  const slug = key.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return `Beeline-${slug || "ride"}.gpx`;
+}
+
+/**
+ * A human-friendly, sort-friendly name to offer in the browser's "Save As".
+ * Leads with an ISO-ish `YYYY-MM-DD HH-MM` stamp so saved files sort
+ * chronologically, then appends the ride's own title. Colons are rendered as `-`
+ * (illegal in filenames), and any path separators / control chars in the title
+ * are stripped. Falls back to a stamp-only name when the title is empty, and to
+ * the device filename when the key can't be parsed into a date.
+ */
+export function gpxDownloadName(key: string, title: string): string {
+  const dt = rideDatetime(key);
+  if (dt === null) return gpxFilename(key);
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  const stamp =
+    `${dt.getFullYear()}-${p2(dt.getMonth() + 1)}-${p2(dt.getDate())} ` +
+    `${p2(dt.getHours())}-${p2(dt.getMinutes())}`;
+  // Strip path separators and control chars; collapse runs of whitespace.
+  const clean = title
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately strips C0 control chars (\x00-\x1f) so they can't land in a filename.
+    .replace(/[/\\<>:"|?*\x00-\x1f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean ? `${stamp} - ${clean}.gpx` : `${stamp}.gpx`;
+}
+
+// -- the seam ----------------------------------------------------------------
+
+/**
+ * Everything the Controller needs from a ride backend. The data methods stream
+ * results via callbacks so the Controller's scan / check / upload / GPX
+ * orchestration stays identical regardless of backend.
  */
 export interface RideSource {
   /** Which backend this is. */
@@ -46,9 +105,6 @@ export interface RideSource {
    * are omitted so they never clobber known values.
    */
   deviceFields(): UpsertFields;
-
-  /** Apply a timing profile. ADB-only; a no-op for sources without UI pacing. */
-  setTiming(timing: Timing): void;
 
   /** Discover rides in the time window, streaming pages via `onCards`. */
   enumerateCatalog(
@@ -77,96 +133,9 @@ export interface RideSource {
     onDetail?: (detail: RideDetail) => void,
   ): Promise<GpxFile[]>;
 
-  /** Release the underlying connection (closes the ADB device / clears the session). */
+  /** Release the underlying connection (clears the session). */
   close(): Promise<void>;
 }
 
 /** A factory the Controller calls on connect to obtain its (already-connected) source. */
 export type SourceFactory = () => Promise<RideSource>;
-
-/**
- * Legacy ride source: drives the Beeline Android app over ADB via `BeelineApp`.
- * A faithful pass-through — every data method delegates straight to the app, so
- * the long-standing UI-automation behaviour is byte-for-byte unchanged.
- */
-export class AdbRideSource implements RideSource {
-  readonly kind = "adb";
-
-  private constructor(
-    private readonly device: AdbDevice,
-    private readonly app: BeelineApp,
-    private readonly model: string,
-    private readonly serial: string,
-  ) {}
-
-  /** Connect: build the `BeelineApp` (reads screen geometry) and read device identity. */
-  static async create(
-    device: AdbDevice,
-    timing: Timing,
-    sleep: Sleep,
-  ): Promise<AdbRideSource> {
-    const app = await BeelineApp.create(device, timing, sleep);
-    let model = "device";
-    try {
-      model = await device.model();
-    } catch {
-      /* keep the generic fallback */
-    }
-    let serial = "";
-    try {
-      serial = await device.serial();
-    } catch {
-      /* serial unknown — non-fatal */
-    }
-    return new AdbRideSource(device, app, model, serial);
-  }
-
-  label(): string {
-    return this.model && this.model !== "device" ? this.model : "device";
-  }
-
-  deviceFields(): UpsertFields {
-    const fields: UpsertFields = { source: "adb" };
-    if (this.model && this.model !== "device") fields.device_model = this.model;
-    if (this.serial) fields.device_serial = this.serial;
-    return fields;
-  }
-
-  setTiming(timing: Timing): void {
-    this.app.timing = timing;
-  }
-
-  enumerateCatalog(
-    progress?: Progress,
-    since?: Date | null,
-    onCards?: (cards: RideCard[]) => void,
-  ): Promise<CatalogResult> {
-    return this.app.enumerateCatalog(progress, since ?? null, onCards);
-  }
-
-  processTargets(
-    keys: Set<string>,
-    doUpload: boolean,
-    progress?: Progress,
-    onDetail?: (detail: RideDetail) => void,
-    onMissing?: (keys: string[]) => void,
-    onError?: (key: string, reason: string) => void,
-  ): Promise<RideDetail[]> {
-    return this.app.processTargets(keys, doUpload, progress, onDetail, onMissing, onError);
-  }
-
-  downloadGpx(
-    keys: Set<string>,
-    progress?: Progress,
-    onGpx?: (file: GpxFile) => void,
-    onMissing?: (keys: string[]) => void,
-    onFail?: (key: string, reason: string) => void,
-    onDetail?: (detail: RideDetail) => void,
-  ): Promise<GpxFile[]> {
-    return this.app.downloadGpx(keys, progress, onGpx, onMissing, onFail, onDetail);
-  }
-
-  close(): Promise<void> {
-    return this.device.close();
-  }
-}

@@ -2,28 +2,20 @@
  * Beeline cloud-account ride source.
  *
  * Implements the `RideSource` seam over the Beeline backend client
- * ([beeline-api.ts](./beeline-api.ts)). Where the ADB source drives the phone UI
- * one ride at a time, this fetches the whole ride history — tracks, stats and
- * Strava status included — in a single request, so a "scan" persists everything
- * at once and check/preview become near-instant reads off the cached snapshot.
+ * ([beeline-api.ts](./beeline-api.ts)). It fetches the whole ride history —
+ * tracks, stats and Strava status included — in a single request, so a "scan"
+ * persists everything at once and check/preview become near-instant reads off
+ * the cached snapshot.
  *
- * The three data methods synthesize the same `RideCard` / `RideDetail` / `GpxFile`
- * shapes the ADB path produces, so the Controller's scan / check / upload / GPX
+ * The three data methods synthesize the `RideCard` / `RideDetail` / `GpxFile`
+ * shapes the seam exchanges, so the Controller's scan / check / upload / GPX
  * orchestration (queueing, persistence, deletion reconciliation, error reporting)
- * is identical regardless of source.
+ * is driven uniformly through the `RideSource` interface.
  *
  * The backend calls are injected (`BeelineApi`) so tests can drive the full source
  * with an in-memory fake — no network, no real account.
  */
 
-import { realSleep, type Sleep } from "./adb/types";
-import {
-  type CatalogResult,
-  type GpxFile,
-  gpxDownloadName,
-  gpxFilename,
-  type Progress,
-} from "./beeline";
 import {
   type BeelineSession,
   fetchRides,
@@ -43,7 +35,16 @@ import {
   rideDatetime,
   rideShortLabel,
 } from "./parsing";
-import type { RideSource } from "./source";
+import {
+  type CatalogResult,
+  type GpxFile,
+  gpxDownloadName,
+  gpxFilename,
+  type Progress,
+  type RideSource,
+  realSleep,
+  type Sleep,
+} from "./source";
 import type { UpsertFields } from "./store";
 import { encodedTrackToGpx } from "./track";
 
@@ -112,10 +113,6 @@ export class BeelineRideSource implements RideSource {
     return { source: "beeline", device_model: this.label() };
   }
 
-  setTiming(): void {
-    /* no UI pacing for an HTTP source */
-  }
-
   /** Fetch the whole history and rebuild the key→record index. Returns the cards. */
   private async refresh(since: Date | null): Promise<RideCard[]> {
     const rides = await this.api.fetchRides(this.session);
@@ -134,7 +131,6 @@ export class BeelineRideSource implements RideSource {
         title: mapped.fields.title_base ?? "",
         distance_km: mapped.fields.distance_km ?? null,
         elapsed_sec: mapped.fields.elapsed_sec ?? null,
-        tapY: 0,
         fields: mapped.fields,
       });
     }
@@ -176,7 +172,6 @@ export class BeelineRideSource implements RideSource {
       title: f?.title_base ?? "",
       metrics,
       stravaStatus: f?.strava_status ?? "unknown",
-      stravaTap: null,
     };
   }
 
@@ -275,7 +270,7 @@ export class BeelineRideSource implements RideSource {
         continue;
       }
       if (await progress(`building GPX: ${name}…`)) break;
-      // Record the ride's detail too, mirroring the ADB GPX flow.
+      // Record the ride's detail too, alongside the GPX.
       onDetail(this.detailFor(key, entry.raw));
       const file = synthesizeGpx(key, entry.raw, this.detailFor(key, entry.raw).title);
       if (!file) {

@@ -20,21 +20,19 @@
     <span class="hdr-actions">
       <span class="conn">
         <span class="cstate off" id="connState">not connected</span>
-        <button class="small" id="btnConnect">Connect phone</button>
-        <button class="small ghost" id="btnDemo" style="display:none">Demo</button>
         <button class="small ghost" id="btnDisconnect" style="display:none">Disconnect</button>
-        <button class="small accent" id="btnSource" title="Switch data source (Beeline account, phone, or demo)">Change source</button>
+        <button class="small accent" id="btnSource" title="Switch data source (Beeline account or demo)">Change source</button>
       </span>
       <span class="split">
         <button class="ghost small menubtn" data-splitmenu="state" aria-haspopup="true" aria-expanded="false" title="Local data: import, export or reset">Data</button>
         <span class="splitmenu" id="stateMenu">
           <button class="ghost small" id="btnImport" title="Merge a previously exported (or Python tool) state file into this browser">Import…</button>
           <button class="ghost small" id="btnExport" title="Download all locally stored rides, settings and status as a JSON backup">Export</button>
-          <button class="ghost small danger" id="btnReset" title="Erase all locally stored rides, settings, and the remembered phone, then return to offline mode (no phone; shows your stored rides). Does not delete anything on the phone.">Reset</button>
+          <button class="ghost small danger" id="btnReset" title="Erase all locally stored rides and settings, then return to the source-selection screen.">Reset</button>
         </span>
       </span>
       <span class="split" id="selSplit">
-        <button class="ghost small" id="btnStatusSel" title="Read the Strava upload status of the selected rides from the phone">Check selected</button>
+        <button class="ghost small" id="btnStatusSel" title="Read the Strava upload status of the selected rides">Check selected</button>
         <button class="ghost small caret" data-splitmenu="sel" aria-haspopup="true" aria-expanded="false" title="More actions for the selected rides">More selected-ride actions</button>
         <span class="splitmenu" id="selMenu">
           <button class="ghost small" id="btnGpxSel" title="Download a rough GPS route preview for the selected rides (shown on the map; no file saved)">Preview routes</button>
@@ -60,15 +58,6 @@
     </span>
     <button class="primary" id="btnScan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg><span class="scan-label" id="scanLabel">Scan</span></button>
     <span class="spacer"></span>
-    <span class="ctlgroup" id="speedGroup">
-      <span class="totals" title="How fast to drive the phone. Turbo skips upload-verification reads (fastest); a later Check reconciles status.">Interaction speed</span>
-      <div class="seg" id="speeds">
-        <button data-speed="safe">Safe</button>
-        <button data-speed="normal" class="active">Normal</button>
-        <button data-speed="fast">Fast</button>
-        <button data-speed="turbo">Turbo</button>
-      </div>
-    </span>
     <label class="custom" id="trackPointsBox" title="How densely the rough map preview keeps points from a downloaded GPX, in points per kilometre. Start and end are always kept. The stored track is only a lightweight approximation — not the full GPX.">
       Track detail
       <input id="trackPoints" type="number" min="1" max="100" step="1" inputmode="numeric" /> pts/km
@@ -82,27 +71,6 @@
     <button class="vtab active" data-view="explore" role="tab">Explore</button>
     <button class="vtab" data-view="map" role="tab">Map</button>
     <button class="vtab" data-view="stats" role="tab">Stats</button>
-  </div>
-  <div class="notice" id="demoNotice">
-    <span>🧪</span>
-    <span><b>Demo mode</b> — using a simulated phone so you can explore without hardware.
-    Click <b>Connect phone</b> to drive a real <b>Android</b> phone over WebUSB (Chromium, over HTTPS or
-    localhost, with no local <code>adb</code> server running). <b>Android only</b> — iOS/iPhone is not supported.
-    <details class="help">
-      <summary>How do I enable ADB on my Android phone?</summary>
-      <ol>
-        <li>Open <b>Settings → About phone</b> and tap <b>Build number</b> seven times until you see
-          “You are now a developer”.</li>
-        <li>Go to <b>Settings → System → Developer options</b> and turn on <b>USB debugging</b>.
-          (On some phones it's <b>Settings → Developer options</b>.)</li>
-        <li>Connect the phone to this computer with a USB cable.</li>
-        <li>Click <b>Connect phone</b> above and pick your device in the browser's chooser.</li>
-        <li>On the phone, accept the <b>“Allow USB debugging?”</b> prompt (tick <b>Always allow</b>
-          to skip it next time).</li>
-      </ol>
-      <div class="hint">Connection fails with “device busy”? A local adb server is holding the phone
-        — run <kbd>adb kill-server</kbd> in a terminal, then click <b>Connect phone</b> again.</div>
-    </details></span>
   </div>
   <div id="exploreView">
   <div class="stats-panel hidden" id="statsPanel">
@@ -152,7 +120,7 @@
         <button class="fchip" id="fDeleted" data-fchip="deleted" data-state="any" title="Filter by deletion (click to cycle: any → only deleted → hide deleted)">Deleted: any</button>
       </span>
       <span class="fgroup ffields">
-        <label class="custom fdevice" title="Filter by the phone a ride was scanned from">Source
+        <label class="custom fdevice" title="Filter by the source a ride came from">Source
           <select id="fDevice"><option value="all">All</option></select>
         </label>
         <label class="custom fdist" title="Filter by distance in km (leave a side blank for no bound)">Distance
@@ -163,7 +131,7 @@
     </div>
     <div id="months"></div>
     <div class="empty" id="empty">
-      Pick a range and press <b>Scan</b> to read your rides from the phone.
+      Sign in to your <b>Beeline</b> account to load your rides.
     </div>
   </div>
   <div id="mapView" class="hidden">
@@ -185,7 +153,7 @@
   </div>
   <div id="statsView" class="hidden">
     <div class="stats-empty" id="statsEmpty">
-      No rides yet. Press <b>Scan</b> in the Explore tab to read your phone, then come back to see
+      No rides yet. Sign in to your <b>Beeline</b> account, then come back to see
       your lifetime totals, records and a route-frequency heatmap.
     </div>
     <div class="stats-body" id="statsBody">
@@ -263,7 +231,7 @@
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
     </button>
     <div class="srcpick-head">
-      <div class="brand"><span class="dot"></span><h1>Beeline Toolkit</h1><span class="ver" title="A loving tribute to the Beeline Velo route history the app forgot it had.">(the forgotten Beeline Velo UI)</span></div>
+      <div class="brand"><span class="dot"></span><h1>Beeline Toolkit</h1><span class="ver" id="pickVer"></span><span class="ver tagline" title="A loving tribute to the Beeline Velo route history the app forgot it had.">(the forgotten Beeline Velo UI)</span></div>
       <p class="srcpick-sub">Choose where your rides come from.</p>
     </div>
     <div class="srcpick-options">
@@ -284,16 +252,6 @@
           <span>Serverless &amp; private — this app has no backend and runs entirely in your browser. Your password is sent once to Beeline to sign in and kept only in memory; it's never stored, so your password manager can fill it in. It's open source — <a href="https://github.com/gubenkoved/beeline-velo" target="_blank" rel="noopener">read the code on GitHub</a> or run it yourself locally.</span>
         </p>
       </div>
-      <div class="srcopt">
-        <div class="srcopt-main">
-          <div class="srcopt-title">Connect phone <span class="srcopt-tag legacy">legacy / ADB</span></div>
-          <div class="srcopt-desc">Drive the Beeline Android app over USB (Chromium only). Works without an account, but reads one ride at a time.</div>
-        </div>
-        <span class="srcopt-actions">
-          <button class="small" id="btnPickAdb" type="button">Connect phone</button>
-          <button class="small ghost" id="btnDemoAdb" type="button" title="Explore the phone experience with a simulated device">Try demo</button>
-        </span>
-      </div>
     </div>
     <button class="srcpick-dismiss ghost small" id="btnPickDismiss" type="button" title="Browse your saved rides without picking a source">Skip — view saved rides</button>
   </div>
@@ -301,7 +259,7 @@
 
 <div class="confirm hidden" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
   <div class="confirm-card">
-    <h2 class="confirm-title" id="confirmTitle"></h2>
+    <h2 class="confirm-title" id="confirmTitle">Confirm</h2>
     <p class="confirm-body" id="confirmBody"></p>
     <div class="confirm-actions">
       <button class="ghost small" id="confirmCancel" type="button">Cancel</button>

@@ -4,14 +4,12 @@ A **backend-free** browser companion for the **Beeline Velo 2** that batch-uploa
 rides to **Strava**. Beeline only lets you upload rides one-by-one; this app lists your
 rides with their upload status, lets you select them, and uploads in a batch.
 
-The main way to use it is the **Beeline account** source: sign in with your Beeline
-email/password and the app downloads your **entire** ride history — routes, stats and Strava
-status — in a single request from Beeline's own cloud backend, then uploads to Strava
-server-side (fast, and several rides at once). No cable, works in any modern browser.
+The app uses the **Beeline account** source: sign in with your Beeline email/password and the
+app downloads your **entire** ride history — routes, stats and Strava status — in a single
+request from Beeline's own cloud backend, then uploads to Strava server-side (fast, and
+several rides at once). No cable, works in any modern browser.
 
-A legacy **phone (ADB)** source is also available for the cable-bound, account-credential-free
-route — see [Legacy: phone (ADB) source](#legacy-phone-adb-source). Each source has its own
-**demo** so you can explore either experience with no hardware and no account.
+There's also a **demo** so you can explore with no account and no data of your own.
 
 > **Your Beeline password is never stored.** Sign-in uses it once to obtain a short-lived
 > token held only in memory; nothing is written to disk. On reload (or whenever an action
@@ -35,9 +33,6 @@ kept per-source in the browser (IndexedDB).
 - Any modern browser; the page served over `localhost` or HTTPS.
 - For development: Node.js 20+ and npm.
 
-(The legacy phone source has its own extra requirements — see
-[Legacy: phone (ADB) source](#legacy-phone-adb-source).)
-
 ## Quick start
 
 ```bash
@@ -46,9 +41,9 @@ npm run dev          # open the printed http://localhost:… URL
 ```
 
 On first run the app shows a **source picker** — sign in to your **Beeline account** (or try
-its **demo**). The legacy **Connect phone** option lives here too. Your choice is remembered,
-so later visits go straight back into that mode (a Beeline account opens on your cached rides
-and asks for the password only when you sync). Use **Change source** in the header to switch.
+its **demo**). Your choice is remembered, so later visits go straight back into that mode (a
+Beeline account opens on your cached rides and asks for the password only when you sync). Use
+**Change source** in the header to switch.
 
 ## Beeline account & your password
 
@@ -102,16 +97,14 @@ npm run test:watch   # watch mode
 | [index.html](index.html) | App shell, styles, and markup |
 | [src/main.ts](src/main.ts) | UI entry point — rendering, DOM wiring, source picker |
 | [src/controller.ts](src/controller.ts) | App state + scan/check/upload orchestration |
-| [src/source.ts](src/source.ts) | `RideSource` seam + `AdbRideSource` (legacy phone adapter) |
+| [src/source.ts](src/source.ts) | `RideSource` seam + shared GPX/catalog types |
 | [src/beeline-api.ts](src/beeline-api.ts) | Beeline cloud backend client (auth, rides, upload) |
 | [src/beeline-source.ts](src/beeline-source.ts) | `BeelineRideSource` — the account source over the API |
 | [src/beeline-demo.ts](src/beeline-demo.ts) | Simulated Beeline backend for the account demo |
-| [src/beeline.ts](src/beeline.ts) | Beeline app navigation + upload automation (phone) |
-| [src/parsing.ts](src/parsing.ts) | Parse uiautomator dumps + ride-key helpers |
+| [src/parsing.ts](src/parsing.ts) | Normalized metrics + ride-key/date helpers |
 | [src/jobs.ts](src/jobs.ts) | Single-worker background job queue |
 | [src/store.ts](src/store.ts) | Per-source IndexedDB-backed status cache |
 | [src/track.ts](src/track.ts) | Decode/render ride GPS tracks |
-| [src/adb/](src/adb/) | ADB transports — `webusb.ts` (real), `demo.ts` (sample data) |
 
 ## Tests
 
@@ -119,42 +112,8 @@ npm run test:watch   # watch mode
 npm test
 ```
 
-Parser tests run against real Beeline UI dumps captured during recon, in
-[tests/fixtures/recon/](tests/fixtures/recon/); the Beeline-account source is tested against
-a captured backend response in [tests/fixtures/beeline/](tests/fixtures/beeline/).
-
-## Legacy: phone (ADB) source
-
-Before the Beeline-account source existed, the only way in was to drive the **real Beeline
-Android app** over USB — reading the phone's screen (uiautomator XML) and tapping buttons,
-one ride at a time. That path is still available as an extra (pick **Connect phone** in the
-source picker), but the account source supersedes it: it's far faster (whole history in one
-request vs ~10 s per ride), needs no cable, and isn't tied to Android or a particular screen
-layout. Prefer the account source unless you specifically can't use it.
-
-It talks to a USB-connected Android phone over **WebUSB** (ADB via
-[`@yume-chan/adb`](https://github.com/yume-chan/ya-webadb)) and never handles your account
-credentials — it's the app on the phone (already signed in) that's being driven.
-
-**Extra requirements:**
-
-- An **Android** phone with the Beeline Velo 2 app (`co.beeline`) — **signed in** and with
-  **Strava connected**. iOS/iPhone is **not supported** (ADB is Android-only).
-- A Chromium-based browser (Chrome / Edge) — WebUSB is unavailable in Firefox/Safari; served
-  over `localhost` or HTTPS (WebUSB is secure-context only).
-- USB debugging enabled (Developer Options), phone plugged in and **authorized**.
-
-**Notes specific to this source:**
-
-- Choose a time range (Today / Week / Month / Year / All, or a custom number of days) and
-  press **Scan**; scans stop early once they pass the window. Rides keep a lightweight route
-  sketch (not the full GPS track the account source carries).
-- An **Interaction speed** control (Safe → Turbo) tunes how aggressively the tool drives the
-  phone — Turbo skips upload-verification reads (tap-and-go) and a later **Check** reconciles
-  the real status. Uploads run one ride at a time.
-- It's UI automation, so it can break if Beeline changes its layout; update coordinates/labels
-  in [src/beeline.ts](src/beeline.ts) and [src/parsing.ts](src/parsing.ts) if that happens.
-  Keep the phone unlocked and on while running; don't touch it mid-run.
+The Beeline-account source is tested against a captured backend response in
+[tests/fixtures/beeline/](tests/fixtures/beeline/).
 
 ## Notes
 

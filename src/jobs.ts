@@ -1,9 +1,8 @@
 /**
- * Background work queue for phone automation.
+ * Background work queue.
  *
- * Port of `beeline_uploader.jobs` (Python) to a single-threaded async model: the
- * phone is a single shared resource, so all work (scan / status / upload) runs on
- * one async worker that drains the queue in order. Consecutive upload/status tasks
+ * A single-threaded async model: all work (scan / status / upload) runs on one
+ * async worker that drains the queue in order. Consecutive upload/status tasks
  * are *coalesced* into one pass over the ride list, so clicking "Upload" on many
  * rides in a row results in one efficient sweep rather than many.
  */

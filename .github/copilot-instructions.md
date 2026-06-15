@@ -1,19 +1,18 @@
 # Beeline Toolkit — Copilot instructions
 
 A **backend-free**, framework-free browser SPA (vanilla TypeScript + DOM) that batch-uploads
-**Beeline Velo 2** rides to **Strava**. It reads rides from one of two **sources** behind a
-common `RideSource` seam ([src/source.ts](../src/source.ts)):
+**Beeline Velo 2** rides to **Strava**. It reads rides from the **Beeline account** source
+behind a `RideSource` seam ([src/source.ts](../src/source.ts)):
 
-- **Beeline account** (preferred) — talks to Beeline's own Firebase cloud backend over
-  `fetch` ([src/beeline-api.ts](../src/beeline-api.ts) + [src/beeline-source.ts](../src/beeline-source.ts)):
+- **Beeline account** — talks to Beeline's own Firebase cloud backend over `fetch`
+  ([src/beeline-api.ts](../src/beeline-api.ts) + [src/beeline-source.ts](../src/beeline-source.ts)):
   one request returns the **whole** history (routes, stats, Strava status); uploads run
   server-side and **concurrently**. CORS-friendly, no proxy, any modern browser.
-- **Phone (ADB)** — the legacy path: drives the real Beeline Android app over **WebUSB ADB**
-  (reads uiautomator XML, taps buttons), one ride at a time. Android + Chromium only.
 
-Each source has a demo (`DemoAdb` for phone; [src/beeline-demo.ts](../src/beeline-demo.ts)
-for the account). Everything runs in the browser; ride state is cached **per source** in
-IndexedDB (a separate `Store` key per profile). There is no server.
+The source has a demo ([src/beeline-demo.ts](../src/beeline-demo.ts)) for exploring without an
+account. Everything runs in the browser; ride state is cached **per source** in IndexedDB (a
+separate `Store` key per profile). There is no server. The `RideSource` seam is kept so a
+second source could be added later, but Beeline is the only implementation today.
 
 ### Beeline credentials — never store the password
 
@@ -65,12 +64,12 @@ out when a request pushes against them (see *Review & challenge the request*).
 ## Data ingestion integrity (read this first)
 
 **This is the foundation — if numbers come in wrong, nothing else matters.** Every total,
-filter, chart, record, and rollup in this app is downstream of one thing: turning the strings
-we scrape off the phone screen into correct numbers. A single mis-parsed value silently
-corrupts every aggregate that touches it, and the user has no way to tell. We already shipped
-this exact bug once: a phone in a comma-decimal locale shows `13,5km`, a blind `replace(/,/g,"")`
-turned that into `135` km, and every distance/speed stat from that device was inflated 10×.
-Treat ingestion correctness as non-negotiable, not a nicety.
+filter, chart, record, and rollup in this app is downstream of one thing: turning any external
+strings we ingest into correct numbers. A single mis-parsed value silently corrupts every
+aggregate that touches it, and the user has no way to tell. We already shipped this exact bug
+once: a comma-decimal locale renders `13,5km`, a blind `replace(/,/g,"")` turned that into
+`135` km, and every distance/speed stat from that source was inflated 10×. Treat ingestion
+correctness as non-negotiable, not a nicety.
 
 Hard rules:
 
@@ -78,23 +77,22 @@ Hard rules:
   ([src/parsing.ts](../src/parsing.ts)) — `parseLocaleNumber` and its `parseKm`/`parseMeters`/`parseKmh`
   wrappers. Never write a second `parseFloat`/`replace`-based number parse anywhere else; import
   the canonical one. Two parsers means two behaviours means a bug.
-- **Never blind-strip separators.** `,` and `.` are locale-dependent: one device's decimal point
+- **Never blind-strip separators.** `,` and `.` are locale-dependent: one locale's decimal point
   is another's thousands group. Detect the decimal separator (`parseLocaleNumber` already does);
   never assume, never `replace(/,/g, "")`.
-- **Normalize once, at the boundary.** Parse phone strings into numbers as they enter app state
-  (the `RideView` numeric fields), then compute and display from those numbers. Downstream code
-  must consume normalized numbers, not re-parse raw strings ad hoc.
+- **Normalize once, at the boundary.** Parse external strings into numbers as they enter app
+  state (the `RideView` numeric fields), then compute and display from those numbers. Downstream
+  code must consume normalized numbers, not re-parse raw strings ad hoc.
 - **Every numeric path is tested in both locales.** Any change touching parsing/aggregation must
   keep both comma-decimal (`13,5km`, `20,0km/h`) and period-decimal (`13.5km`, `20.0km/h`)
-  coverage green, using the real captured fixtures (e.g. `tests/fixtures/recon/2*_yal.xml`).
+  coverage green.
   A parsing change without a both-separators test is incomplete.
 
 ## Tech stack & commands
 
 - **TypeScript 5.6** (strict), **Vite 6** (`base: "./"`, `target: "esnext"`), **Vitest 2** + **jsdom**, **leaflet** for maps.
 - Beeline-account source: plain `fetch` to Beeline's Firebase backend (CORS-friendly, no proxy).
-- ADB transport: [`@yume-chan/adb`](https://github.com/yume-chan/ya-webadb) (Tango) — Chromium-only, secure-context only.
-- `npm run dev` — Vite dev server (boots into the source picker; each source has a demo).
+- `npm run dev` — Vite dev server (boots into the source picker; the source has a demo).
 - `npm run build` — `tsc --noEmit` type-check **then** `vite build`. Always type-check before considering a change done.
 - `npm test` / `npm run test:watch` — Vitest.
 
@@ -131,47 +129,41 @@ green, CHANGELOG updated), **offer to commit it yourself** rather than leaving i
 
 ## Architecture / module map
 
-UI → Controller → RideSource → (BeelineApi · BeelineApp/AdbDevice) ; + JobQueue · Store.
+UI → Controller → RideSource → BeelineApi ; + JobQueue · Store.
 The Controller is source-agnostic: it drives a `RideSource` (scan/check/upload/GPX) and
-never touches a concrete backend. `main.ts` picks the source (Beeline / phone / demo).
+never touches a concrete backend. `main.ts` wires the source (Beeline account / demo).
 
 | File | Responsibility | Key symbols |
 |------|----------------|-------------|
 | [index.html](../index.html) | App shell, markup, styles, source picker | — |
-| [src/main.ts](../src/main.ts) | UI entry: render + wiring, source picker, re-auth gating | `activate()`, `goBeeline()`, `goBeelineOffline()`, `goReal()`, `goDemoAdb()`/`goDemoBeeline()`, `withBeelineAccess()`, `showPicker()` |
+| [src/main.ts](../src/main.ts) | UI entry: render + wiring, source picker, re-auth gating | `activate()`, `goBeeline()`, `goBeelineOffline()`, `goDemoBeeline()`, `withBeelineAccess()`, `showPicker()` |
 | [src/controller.ts](../src/controller.ts) | Orchestration + app state; scan/check/upload/cancel | `Controller`, `state()`, `onChange()`, `runTask()` |
-| [src/source.ts](../src/source.ts) | `RideSource` seam + legacy phone adapter | `RideSource`, `SourceFactory`, `AdbRideSource` |
+| [src/source.ts](../src/source.ts) | `RideSource` seam + shared GPX/catalog types | `RideSource`, `SourceFactory`, `GpxFile`, `CatalogResult`, `gpxFilename()` |
 | [src/beeline-api.ts](../src/beeline-api.ts) | Beeline cloud backend client + ride mapping | `signIn()`, `fetchRides()`, `uploadRideToStrava()`, `mapBeelineRide()`, `BeelineSession` |
 | [src/beeline-source.ts](../src/beeline-source.ts) | Account `RideSource` over the API (concurrent uploads) | `BeelineRideSource`, `BeelineApi`, `runPool()` |
 | [src/beeline-demo.ts](../src/beeline-demo.ts) | Simulated Beeline backend for the account demo | `demoBeelineDeps()`, `DEMO_BEELINE_EMAIL` |
-| [src/beeline.ts](../src/beeline.ts) | Beeline app automation (the "what to tap") | `BeelineApp`, `Geometry`, `PROFILES` |
-| [src/parsing.ts](../src/parsing.ts) | uiautomator XML → ride data; ride-key helpers | `parseJourneysList()`, `parseRideDetail()`, `rideDatetime()`, `beelineRideKey()` |
+| [src/parsing.ts](../src/parsing.ts) | Normalized metrics + ride-key/date helpers | `metricsFromStatStrings()`, `rideDatetime()`, `beelineRideKey()`, `bucketRide()` |
 | [src/jobs.ts](../src/jobs.ts) | Single-worker background queue with coalescing | `JobQueue`, `Task`, `TaskSnapshot` |
-| [src/store.ts](../src/store.ts) | Per-source IndexedDB cache (Python `rides.json`-compatible) | `Store` (keyed per profile), `RideRecord` (`source`/`source_id`), `upsert()` |
+| [src/store.ts](../src/store.ts) | Per-source IndexedDB cache | `Store` (keyed per profile), `RideRecord` (`source`/`source_id`), `upsert()` |
 | [src/track.ts](../src/track.ts) | GPS track decode/simplify/render | `extractTrack()`, `simplify()` (Douglas–Peucker), encoded polylines |
 | [src/mapview.ts](../src/mapview.ts) | Map-view geometry: pick drawable tracks + hover/overlap hit-testing | `ridesWithTracks()`, `nearestRides()`, `RideTrack`, `ProjectedTrack` |
-| [src/adb/types.ts](../src/adb/types.ts) | Transport-agnostic device contract | `AdbDevice`, `AdbError`, `shellQuote()` |
-| [src/adb/webusb.ts](../src/adb/webusb.ts) | Real transport via Tango | `WebUsbAdb` |
-| [src/adb/demo.ts](../src/adb/demo.ts) | Stateful fake device (no phone needed) | `DemoAdb` |
 
 ## Conventions
 
 - **Strict TS**: full null-safety, `noUnusedLocals`/`noUnusedParameters` are on — no dead vars/params, no implicit `any`.
 - **Naming**: `camelCase` functions (verb-prefixed: `parse…`, `upload…`), `PascalCase` classes/interfaces, `snake_case` string constants for storage keys.
-- **Types**: `interface` for public contracts (`AdbDevice`, `RideRecord`); type aliases / discriminated unions for state (e.g. `TaskStatus = "queued" | "running" | …`).
+- **Types**: `interface` for public contracts (`RideSource`, `RideRecord`); type aliases / discriminated unions for state (e.g. `TaskStatus = "queued" | "running" | …`).
 - **Comments**: module-level docstrings explain purpose & design; `// -- section ----` headers group blocks; inline comments explain **why**, not what.
-- **Async-first**: everything is `async/await` (WebUSB is async). Never block.
+- **Async-first**: everything is `async/await` (`fetch` is async). Never block.
 - **Subscriptions**: `onChange(fn)` returns an unsubscribe function — always store and call it on teardown.
 - **Immutable-ish state**: mutate the `Store` only via `store.upsert(key, partial)`; let the Controller emit a change event to re-render.
-- **No hardcoded screen coordinates**: derive every tap/swipe from `Geometry` (computed from `screenSize()`), so it works on any device resolution.
-- **Transport abstraction**: code against the `AdbDevice` interface, never `WebUsbAdb`/`DemoAdb` directly — this is what keeps demo mode and tests working.
-- **Minimal device round-trips**: every `uiDump`/tap/swipe is a real over-the-wire ADB call and the slowest thing we do (~10 s/ride already), so keep phone interaction quick — never add reads/gestures to the per-gesture happy path. Verify device state (foreground app via `currentFocus()`, current screen via `parseJourneysList`/`isRideDetail`) only at rare, high-stakes decision points — above all before marking a ride **deleted**, since one stray tap can drift us to another app/screen and an empty parse would otherwise look like "all rides gone". The guard `BeelineApp.onJourneysList()` is the canonical gate; `enumerateCatalog` returns a `complete` flag and `sweepTargets` pauses without deleting when that gate fails.
+- **Deletion reconciliation is gated on a complete scan**: a ride known locally but absent from a freshly fetched history is only marked **deleted** when the scan ran to completion (`enumerateCatalog` returns a `complete` flag); a cancelled/partial scan never reconciles deletions.
 - **Unified map look & feel**: both Leaflet basemaps — the Explore per-ride mini-maps (`.rmap`) and the all-rides Map view (`#allRidesMap`) — share one dark, desaturated tile treatment (`.leaflet-tile-pane { filter: grayscale(85%) brightness(.6) contrast(1.1) }` over a `#05070a` container) so colored tracks pop consistently. Keep the two filter rules in sync; mini-maps draw a single ride with a white casing + solid orange line for legibility, while the Map view uses translucent overlapping lines as a heatmap.
 - **Floating map/heatmap controls are icon-only, drawn with inline SVG — never Unicode glyphs**: the Map view and the Stats route-frequency heatmap each carry the same two floating square buttons (`.map-expand` full-screen toggle + `.map-select` area-select), so they look and behave identically. Buttons are icon-only (34px square, centred 17px SVG, `stroke: currentColor`); the meaning lives in `aria-label`/`title`, not visible text. Icons **swap by state via CSS**, never by rewriting button content: `.map-expand` shows the maximize frame and flips to minimize on `[aria-pressed="true"]`; `.map-select` shows the dashed marquee and flips to an X on `.active`. Raw Unicode symbols (`⤢ ⤡ ▢ ✕ ▸ ▾` …) render inconsistently across fonts/DPI and are banned here — add a new SVG glyph (or reuse the CSS-border chevrons used by split buttons/disclosures) instead. `createAreaSelect` (in [areaselect.ts](../src/areaselect.ts)) owns only the button's `.active`/`aria-pressed`/`aria-label`, leaving the glyph swap to CSS so the icon-only markup survives.
 - **Map and heatmap share one full-screen pattern**: a CSS pseudo-fullscreen (no `requestFullscreen` API) where the container goes `position: fixed; inset: 0; z-index: 60` under a body class — `body.map-expanded .map-wrap` for the Map view, `body.heat-expanded .freq-wrap` for the heatmap. Each toggle (`setMapExpanded`/`setHeatExpanded` in [main.ts](../src/main.ts)) flips the body class, sets the button's `aria-pressed`, and calls `invalidateSize()` so Leaflet re-measures. Both exit on **Esc** and when switching away from their view (in `applyView`). Keep the two in lockstep when touching either.
 - **Aligned group-header indicators**: in the year/month group headers (`.yhead`/`.mhead`), the title column (`.ytitle`/`.mtitle`) is fixed-width (`flex: 0 0 auto; min-width; white-space: nowrap`) so the progress bar (`.bars`, itself a fixed 90px) and the meta text start at the same x across every sibling row. Variable-length labels ("May 2026" vs "September 2026") must NOT push the bars/meta around or wrap — ragged indicators read as heavy and add cognitive parsing load. When adding columns to these headers keep them fixed-width so the row reads as aligned columns.
 - **Status/progress messages**: say exactly WHAT is happening and WHY, verbosely if needed — never vague counts. When acting on a specific ride, name it with the params we know (e.g. `rideShortLabel(key)` → "Jun 13 14:22"), not "1 ride". Prefer "scrolling down to find Jun 13 14:22…" over "scrolling down — looking for 1 ride…". When several rides are involved, name the first couple and append "(+N more)".
-- **Error handling**: throw/catch `AdbError` for device issues; wrap `localStorage` access in `try/catch` (private mode can throw — non-fatal); surface failures to the user via `toast(message, isError)` and fall back to demo mode rather than crashing.
+- **Error handling**: surface failures to the user via `toast(message, isError)` / `pushError()` and a persistent error card rather than crashing; wrap `localStorage` access in `try/catch` (private mode can throw — non-fatal).
 
 ## Domain notes
 
@@ -183,21 +175,18 @@ never touches a concrete backend. `main.ts` picks the source (Beeline / phone / 
   this reason), keep per-ride work O(1)-ish, and prefer culling/caching over recomputing the
   full set on every interaction. When adding a feature that scans all rides, sanity-check its
   cost against thousands of tracks before considering it done.
-- **Ride keys** are human dates like `"Sat Jun 13 2026 at 14:22"`; months are `"2026-06"` / `"June 2026"`.
-- **Timing profiles** (`PROFILES`: `safe`/`normal`/`fast`/`turbo`) trade robustness for speed; `turbo` skips upload-verification reads (optimistic) and is reconciled by a later Check.
+- **Ride keys** are human dates like `"Sat Jun 13 2026 at 14:22"`; months are `"2026-06"` / `"June 2026"`. `beelineRideKey(startMs)` builds one from a Beeline ride's start instant; `rideDatetime()` is its inverse.
 - **Job coalescing**: consecutive `upload`/`status`/`download-gpx` tasks merge into one sweep — preserve this when touching `JobQueue`.
 - Only the **Strava** upload path is automated (komoot is detected but left alone).
 
 ## Testing
 
 - Tests live in `tests/**/*.test.ts` (Vitest + jsdom).
-- **Parser tests** run against real captured Beeline screens in [tests/fixtures/recon/](../tests/fixtures/recon/) — reuse these dumps rather than hand-writing XML.
-- **Integration tests** drive a full `Controller` + `DemoAdb` (no phone). Wait for async work with `await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false))`.
-- Use the in-test `memStorage()` helper and a `makeController()` factory with an instant sleep — don't touch real `localStorage` or wall-clock delays in tests.
-- **Demo GPX downloads never trigger a browser "Save As"**: `saveGpxFile()` in [src/main.ts](../src/main.ts) short-circuits when `isDemo` (demo bytes are synthetic; the route is still drawn on the map from the stored track). This keeps the browser-driven demo/test flow prompt-free — Chromium's "ask where to save each file" would otherwise pop a dialog per ride. Only real-device GPX is written to disk. Preserve this guard when touching the GPX save path.
+- **Source tests** drive `BeelineRideSource` against an in-memory fake `BeelineApi` (no network), and a captured backend response in [tests/fixtures/beeline/](../tests/fixtures/beeline/).
+- Inject an instant `sleep` and a `memoryBackend()` store — don't touch real `localStorage` or wall-clock delays in tests. Wait for async work with `await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false))`.
+- **Demo GPX downloads never trigger a browser "Save As"**: `saveGpxFile()` in [src/main.ts](../src/main.ts) short-circuits when `isDemo` (demo bytes are synthetic; the route is still drawn on the map from the stored track). This keeps the browser-driven demo/test flow prompt-free. Preserve this guard when touching the GPX save path.
 
 ## Gotchas
 
-- UI automation is inherently brittle (~10 s/ride) and breaks if Beeline changes its layout — update coordinates/labels in [src/beeline.ts](../src/beeline.ts) and [src/parsing.ts](../src/parsing.ts) when that happens, and add a fresh fixture under `tests/fixtures/recon/`.
-- WebUSB requires Chromium (Chrome/Edge) and a secure context (`localhost` or HTTPS); it is unavailable in Firefox/Safari.
 - Keep new code dependency-light — this app intentionally has no backend and a tiny dependency set.
+- The `RideSource` seam is kept deliberately even though Beeline is the only implementation; if you add a source, code to the interface and never let the Controller touch a concrete backend.

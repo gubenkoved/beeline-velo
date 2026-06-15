@@ -1,8 +1,8 @@
 /**
  * Demo data + fake backend for the Beeline (cloud account) source.
  *
- * Where `DemoAdb` simulates the phone's UI-scraping mechanics, this simulates the
- * Beeline *cloud* mechanics so the demo faithfully shows how that source behaves:
+ * Simulates the Beeline *cloud* mechanics so the demo faithfully shows how the
+ * source behaves:
  *  - one-shot history download (a single delayed `fetchRides`, not a per-ride scroll),
  *  - Strava uploads that run server-side and are observed by polling a status node,
  *  - several pending rides so concurrent uploads are visible.

@@ -2,9 +2,9 @@
  * UI entry point — ported from the Python app's `web/index.html` inline script.
  *
  * The render functions and DOM event handling are kept faithful to the original
- * SPA (same `STATE = { rides, jobs, speed }` model, same markup). The only change
- * is the data layer: instead of `fetch('/api/…')` + 1.5s polling, the UI talks to
- * an in-browser `Controller` and re-renders on its change events.
+ * SPA (same `STATE = { rides, jobs }` model, same markup). The only change is the
+ * data layer: instead of `fetch('/api/…')` + 1.5s polling, the UI talks to an
+ * in-browser `Controller` and re-renders on its change events.
  */
 
 import "./style.css";
@@ -12,11 +12,7 @@ import "leaflet/dist/leaflet.css";
 
 import L from "leaflet";
 
-import { DemoAdb } from "./adb/demo";
-import { type AdbDevice, AdbError, realSleep } from "./adb/types";
-import { WebUsbAdb } from "./adb/webusb";
 import { type AreaSelect, createAreaSelect } from "./areaselect";
-import { DEFAULT_PROFILE, PROFILES } from "./beeline";
 import { type AppState, Controller, type RideView } from "./controller";
 import {
   emptyFilters,
@@ -47,7 +43,7 @@ import "leaflet.heat";
 import { DEMO_BEELINE_EMAIL, demoBeelineDeps } from "./beeline-demo";
 import { BeelineRideSource, type BeelineSourceDeps } from "./beeline-source";
 import { idbBackend, memoryBackend } from "./kv";
-import { AdbRideSource, type SourceFactory } from "./source";
+import type { SourceFactory } from "./source";
 import { Store } from "./store";
 import { cumulativeKm, decodePolyline } from "./track";
 
@@ -55,7 +51,7 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string): T =>
   document.querySelector(sel) as T;
 
 // --------------------------------------------------------------------------- //
-// Controller wiring (demo by default; "Connect phone" switches to WebUSB)
+// Controller wiring (Beeline cloud account, with an account-free demo)
 // --------------------------------------------------------------------------- //
 
 /** Durable ride-cache storage. One IndexedDB connection shared by every controller. */
@@ -73,56 +69,22 @@ let currentSource: SourceKind = "offline";
 let unsubscribe: (() => void) | null = null;
 let unsubscribeGpx: (() => void) | null = null;
 
-type SourceKind = "beeline" | "adb" | "demo" | "offline";
+type SourceKind = "beeline" | "offline";
 
 /** True when the active source is a Beeline account (real or demo). */
 const beelineMode = (): boolean => currentSource === "beeline";
 
-/** IndexedDB key for the Beeline account profile (kept separate from the ADB cache). */
+/** IndexedDB key for the Beeline account profile. */
 const BEELINE_STORAGE_KEY = "beeline-toolkit-state:beeline";
 
-// Remember, across visits, that the user chose a real phone (and which one) so we
-// can silently reconnect on load using the browser's persisted WebUSB permission.
-const MODE_KEY = "beeline_uploader.mode";
-const SERIAL_KEY = "beeline_uploader.serial";
 const FILTERS_KEY = "beeline_uploader.filters";
-const rememberReal = (serial: string): void => {
-  try {
-    localStorage.setItem(MODE_KEY, "real");
-    if (serial) localStorage.setItem(SERIAL_KEY, serial);
-  } catch {
-    /* private mode / storage disabled — non-fatal */
-  }
-};
-const forgetReal = (): void => {
-  try {
-    localStorage.removeItem(MODE_KEY);
-    localStorage.removeItem(SERIAL_KEY);
-  } catch {
-    /* non-fatal */
-  }
-};
-const wantsReal = (): boolean => {
-  try {
-    return localStorage.getItem(MODE_KEY) === "real";
-  } catch {
-    return false;
-  }
-};
-const rememberedSerial = (): string | undefined => {
-  try {
-    return localStorage.getItem(SERIAL_KEY) ?? undefined;
-  } catch {
-    return undefined;
-  }
-};
 
-// Which data source the user last chose ("beeline" | "adb"); demo/offline aren't
-// persisted. Beeline can't auto-sign-in (we never store the password), so a
-// remembered Beeline profile just re-opens the picker with the email prefilled.
+// Which data source the user last chose. Demo/offline aren't persisted. Beeline
+// can't auto-sign-in (we never store the password), so a remembered Beeline
+// profile just re-opens the picker with the email prefilled.
 const PROFILE_KEY = "beeline_uploader.profile";
 const BEELINE_EMAIL_KEY = "beeline_uploader.beeline_email";
-const rememberProfile = (profile: "beeline" | "adb", email = ""): void => {
+const rememberProfile = (profile: "beeline", email = ""): void => {
   try {
     localStorage.setItem(PROFILE_KEY, profile);
     if (profile === "beeline" && email) localStorage.setItem(BEELINE_EMAIL_KEY, email);
@@ -166,11 +128,11 @@ function activate(next: Controller, demo: boolean, source: SourceKind): void {
 }
 
 /**
- * In Beeline mode the scan bar's only live control is "Re-sync" (the phone-only
- * presets/speed/custom-days are all hidden), so giving it a whole second header
- * row is wasteful — hoist Re-sync up into the header's connection cluster and let
- * the body[data-src="beeline"] CSS drop the now-empty bar. Any other source puts
- * it back in the scan bar in its original slot (just before the trailing spacer).
+ * In Beeline mode the scan bar's only live control is "Re-sync", so giving it a
+ * whole second header row is wasteful — hoist Re-sync up into the header's
+ * connection cluster and let the body[data-src="beeline"] CSS drop the now-empty
+ * bar. Any other source puts it back in the scan bar in its original slot (just
+ * before the trailing spacer).
  */
 function placeScanButton(beeline: boolean): void {
   const btn = document.getElementById("btnScan");
@@ -252,15 +214,7 @@ function withBeelineAccess(action: () => void): void {
   action();
 }
 
-/** Build an ADB ride source from a device getter (closure captures serial, etc.). */
-function adbSourceFactory(getDevice: () => Promise<AdbDevice>): SourceFactory {
-  return async () => {
-    const device = await getDevice();
-    return AdbRideSource.create(device, PROFILES[DEFAULT_PROFILE], realSleep);
-  };
-}
-
-/** Build a Beeline ride source factory bound to a (real or demo) backend. */
+/** Build a ride source from a device getter (closure captures serial, etc.). */
 function beelineSourceFactory(
   email: string,
   password: string,
@@ -274,21 +228,6 @@ function beelineSourceFactory(
       () => store.settings.beelineUploadConcurrency,
       deps,
     );
-}
-
-/** ADB demo: a simulated phone exercising the UI-scraping mechanics. */
-async function goDemoAdb(): Promise<void> {
-  const c = new Controller(
-    adbSourceFactory(async () => new DemoAdb({ latencyMs: 110 })),
-    new Store(memoryBackend()),
-  );
-  activate(c, true, "demo");
-  try {
-    await c.connect();
-    toast("Demo (phone) — a simulated Android phone over ADB. Click Change source to leave.");
-  } catch {
-    /* demo connect never fails */
-  }
 }
 
 /**
@@ -361,73 +300,26 @@ async function goBeeline(email: string, password: string): Promise<boolean> {
 async function goBeelineOffline(): Promise<void> {
   const store = await Store.load(storageBackend, onStorageError, BEELINE_STORAGE_KEY);
   const factory: SourceFactory = async () => {
-    throw new AdbError("Not signed in — sign in to Beeline to sync.");
+    throw new Error("Not signed in — sign in to Beeline to sync.");
   };
   const c = new Controller(factory, store);
   activate(c, false, "beeline");
 }
 
 /**
- * Offline mode: show the user's real, persisted rides from LocalStorage without a
- * phone. Viewing works; any device action (scan/check/upload/GPX) fails gracefully
- * with "No device connected". This is the default when there's no remembered phone
- * or a remembered phone isn't reachable — we never silently drop into demo anymore.
+ * Offline mode: show the user's persisted rides without a live source. Viewing
+ * works; any action that needs the source (Re-sync / upload / GPX) fails
+ * gracefully. This is the default when there's no remembered profile.
  */
 async function goOffline(): Promise<void> {
   const factory: SourceFactory = async () => {
-    throw new AdbError("No device connected — click Connect phone first.");
+    throw new Error("Not connected — sign in to Beeline to sync.");
   };
   const c = new Controller(factory, await Store.load(storageBackend, onStorageError));
   activate(c, false, "offline");
 }
 
-async function goReal(): Promise<void> {
-  let serial = "";
-  const factory = adbSourceFactory(async () => {
-    const device = await WebUsbAdb.connect();
-    serial = device.deviceSerial;
-    return device;
-  });
-  const c = new Controller(factory, await Store.load(storageBackend, onStorageError));
-  activate(c, false, "adb");
-  try {
-    await c.connect();
-    rememberReal(serial);
-    rememberProfile("adb");
-    hidePicker();
-    toast(`Connected: ${controller.state().device}`);
-  } catch (err) {
-    pushError("Connection failed", err instanceof AdbError ? err.message : String(err));
-    void goOffline(); // keep the app usable, showing stored rides
-  }
-}
-
-/**
- * Silently re-establish a previously-authorized phone on load (no prompt, no error
- * toasts). Falls back to demo mode if the device isn't currently reachable.
- */
-async function tryAutoReconnect(): Promise<void> {
-  let serial = "";
-  const factory = adbSourceFactory(async () => {
-    const reconnected = await WebUsbAdb.tryReconnect(rememberedSerial());
-    if (!reconnected) throw new AdbError("remembered device not available");
-    serial = reconnected.deviceSerial;
-    return reconnected;
-  });
-  const c = new Controller(factory, await Store.load(storageBackend, onStorageError));
-  activate(c, false, "adb");
-  try {
-    await c.connect();
-    rememberReal(serial);
-    toast(`Reconnected: ${controller.state().device}`);
-  } catch {
-    // Device not plugged in / not authorized this session — show stored rides offline.
-    void goOffline();
-  }
-}
-
 async function leaveSource(): Promise<void> {
-  forgetReal(); // stop auto-reconnecting a phone on future loads
   forgetProfile(); // forget the chosen source so the picker leads next time
   await goOffline(); // keep showing the user's stored rides, just without a source
   showPicker(); // let the user pick a source again
@@ -446,7 +338,6 @@ let STATE: AppState = {
     active_keys: [],
     busy: false,
   },
-  speed: "normal",
   settings: {
     trackPointsPerKm: 20,
     speedTrimSlowPct: 0,
@@ -466,7 +357,7 @@ const openStats = new Set<string>();
 
 // -- Explore list filters -------------------------------------------------
 // Live, AND-combined filters applied to the cached rides before grouping. They
-// never touch the phone — just narrow what the Explore list shows. Kept at module
+// never touch the source — just narrow what the Explore list shows. Kept at module
 // scope (like `selected`/`openStats`) so they survive the frequent re-renders the
 // job ticker triggers; folded into `stateSig()` so a change re-renders the list.
 // The predicates themselves live in ./filter (pure + unit-tested).
@@ -1223,7 +1114,7 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
   const rides = inRange.slice().sort((a, b) => compareRideKeysDesc(a.key, b.key));
   if (live.length === 0) {
     side.innerHTML =
-      `<div class="ms-empty">No rides yet. Press <b>Scan</b> in the Explore tab to read your phone, ` +
+      `<div class="ms-empty">No rides yet. Sign in to your <b>Beeline</b> account to load them, ` +
       `then <b>GPX</b> on a ride to download its route and see it here.</div>`;
     return;
   }
@@ -1715,12 +1606,12 @@ function queueBadge(key: string): string {
   return "";
 }
 function deletedBadge(): string {
-  return `<span class="badge deleted" title="This ride is no longer on your phone — it was deleted in the Beeline app.">deleted</span>`;
+  return `<span class="badge deleted" title="This ride is no longer in your Beeline account — it was deleted in the Beeline app.">deleted</span>`;
 }
 /**
  * Marks a ride whose rough route preview is already downloaded and ready to draw.
- * ADB-only: in Beeline mode every ride carries its track, so the badge would be
- * constant noise (the GPS filter still finds the rare track-less one-offs).
+ * In Beeline mode every ride carries its track, so the badge is usually constant
+ * (the GPS filter still finds the rare track-less one-offs).
  */
 function gpsBadge(): string {
   return `<span class="badge gps" title="Route preview available — expand details to see the map.">gps</span>`;
@@ -1764,7 +1655,7 @@ function checkSplit(scope: string, newAct: string, allAct: string, dataAttr: str
   );
 }
 function fmtStats(r: RideView): string {
-  // Render the detail grid from the NORMALIZED numbers so a comma-decimal phone
+  // Render the detail grid from the NORMALIZED numbers so a comma-decimal source
   // ("20,0km/h") reads identically to a dot one ("20.0 km/h"). Each row appears
   // only when its figure is known (non-null).
   const rows: Array<[string, string]> = [];
@@ -1779,7 +1670,10 @@ function fmtStats(r: RideView): string {
   add("Elevation gain", r.elevation_gain_m, fmtElevation);
   add("Elevation loss", r.elevation_loss_m, fmtElevation);
   return rows
-    .map(([k, v]) => `<div class="stat"><span class="k">${k}</span><span class="v">${escHtml(v)}</span></div>`)
+    .map(
+      ([k, v]) =>
+        `<div class="stat"><span class="k">${k}</span><span class="v">${escHtml(v)}</span></div>`,
+    )
     .join("");
 }
 function bars(up: number, pe: number, total: number): string {
@@ -2078,25 +1972,15 @@ function renderSpeed(
 
 function renderConn(): void {
   const el = $("#connState");
-  const connectBtn = $<HTMLButtonElement>("#btnConnect");
-  const demoBtn = $<HTMLButtonElement>("#btnDemo");
   const disconnectBtn = $<HTMLButtonElement>("#btnDisconnect");
   const sourceBtn = $<HTMLButtonElement>("#btnSource");
-  const notice = $("#demoNotice");
 
-  // The source picker is now the single entry point for choosing/adding a source,
-  // so the old header "Connect phone"/"Demo" buttons are retired for one "Source"
-  // button that reopens it. (Their click handlers stay as harmless no-op paths.)
-  connectBtn.style.display = "none";
-  demoBtn.style.display = "none";
   sourceBtn.style.display = "";
 
   const beeline = currentSource === "beeline";
-  // The ADB "enable USB debugging" notice only makes sense for the phone source.
-  const adbDemo = isDemo && !beeline;
 
   if (isDemo) {
-    el.textContent = beeline ? "demo · Beeline" : "demo · phone";
+    el.textContent = "demo · Beeline";
     el.className = "cstate demo";
     // No dedicated "Exit demo" button: the always-visible "Change source" already
     // leads out of the demo (picking any source replaces it), so a second exit
@@ -2105,7 +1989,7 @@ function renderConn(): void {
   } else if (STATE.connected) {
     el.textContent = STATE.device || "connected";
     el.className = "cstate on";
-    disconnectBtn.textContent = beeline ? "Sign out" : "Disconnect";
+    disconnectBtn.textContent = "Sign out";
     disconnectBtn.style.display = "";
   } else if (beeline) {
     // Showing cached Beeline rides without a live account — flag it in red so the
@@ -2119,7 +2003,6 @@ function renderConn(): void {
     el.className = "cstate off";
     disconnectBtn.style.display = "none";
   }
-  notice.classList.toggle("hidden", !adbDemo);
 
   // In Beeline mode the one action pulls the whole history at once: "Re-sync".
   const scanLabel = document.getElementById("scanLabel");
@@ -2142,8 +2025,7 @@ function render(): void {
   const emptyEl = $("#empty") as HTMLElement;
   if (allRides.length === 0) {
     emptyEl.style.display = "block";
-    emptyEl.innerHTML =
-      "Pick a range and press <b>Scan</b> to read your rides from the phone.";
+    emptyEl.innerHTML = "Sign in to your <b>Beeline</b> account to load your rides.";
   } else if (rides.length === 0) {
     emptyEl.style.display = "block";
     emptyEl.innerHTML =
@@ -2240,12 +2122,6 @@ function render(): void {
 
   const sizeEl = $("#stateSize");
   if (sizeEl) sizeEl.textContent = fmtBytes(controller.stateBytes());
-
-  if (STATE.speed) {
-    document.querySelectorAll<HTMLButtonElement>("#speeds button").forEach((b) => {
-      b.classList.toggle("active", b.dataset.speed === STATE.speed);
-    });
-  }
 
   const tp = $<HTMLInputElement>("#trackPoints");
   if (tp && document.activeElement !== tp) tp.value = String(STATE.settings.trackPointsPerKm);
@@ -2691,12 +2567,12 @@ function applyState(): void {
   render();
 }
 
-/** Run a controller action, surfacing AdbError to a persistent error card. */
+/** Run a controller action, surfacing errors to a persistent error card. */
 function run(fn: () => void): void {
   try {
     fn();
   } catch (err) {
-    pushError("Action failed", err instanceof AdbError ? err.message : String(err));
+    pushError("Action failed", err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -2738,7 +2614,7 @@ function exportRides(): void {
   URL.revokeObjectURL(url);
 }
 
-/** Trigger a browser "Save As" for a GPX file pulled off the phone. */
+/** Trigger a browser "Save As" for a GPX file of one ride's route. */
 function saveGpxFile(file: {
   filename: string;
   downloadName: string;
@@ -2808,20 +2684,19 @@ function importRides(file: File): void {
 }
 
 /**
- * Erase every trace of local state: the ride cache + settings, the queued jobs,
- * and the remembered phone — then fall back to demo mode. Browser-only; the
- * phone is never touched. Guarded by a single confirm().
+ * Erase every trace of local state: the ride cache + settings and the queued
+ * jobs — then return to the source picker. Browser-only; nothing in your Beeline
+ * account is touched. Guarded by a single confirm().
  */
 async function resetEverything(): Promise<void> {
   if (
     !confirm(
-      "Erase all locally stored rides, settings, and the remembered phone? This cannot be undone and returns you to the source-selection screen. Nothing on your phone is deleted.",
+      "Erase all locally stored rides and settings? This cannot be undone and returns you to the source-selection screen.",
     )
   ) {
     return;
   }
   controller.reset(); // clear the active controller's cache (IndexedDB) + job queue
-  forgetReal(); // stop auto-reconnecting to the phone on future loads
   forgetProfile(); // forget the chosen source so the picker leads next time
   await goOffline(); // rebuild a fresh controller over the now-empty cache
   showPicker(); // start fresh: let the user pick a source again
@@ -2837,14 +2712,6 @@ document.addEventListener("click", (e) => {
   const t = (target.closest("button, a, .mhead, .yhead") as HTMLElement) || target;
 
   // Source picker actions (modal): handle before anything else.
-  if (t.id === "btnPickAdb") {
-    hidePicker();
-    return void goReal();
-  }
-  if (t.id === "btnDemoAdb") {
-    hidePicker();
-    return void goDemoAdb();
-  }
   if (t.id === "btnDemoBeeline") {
     hidePicker();
     return void goDemoBeeline();
@@ -2969,16 +2836,6 @@ document.addEventListener("click", (e) => {
     render();
     return;
   }
-  if (t.dataset?.speed) {
-    document.querySelectorAll<HTMLButtonElement>("#speeds button").forEach((b) => {
-      b.classList.toggle("active", b.dataset.speed === t.dataset.speed);
-    });
-    run(() => controller.setSpeed(t.dataset.speed!));
-    applyState();
-    return;
-  }
-  if (t.id === "btnConnect") return void goReal();
-  if (t.id === "btnDemo") return void goDemoAdb();
   if (t.id === "btnSource") return showPicker();
   // The disconnect slot is "Disconnect"/"Sign out" for a live source and "Sign in"
   // for an offline Beeline session (the focused re-auth prompt); demo has no exit
@@ -3320,7 +3177,7 @@ if (heatMatchedEl) {
   });
 }
 
-// Warn before leaving while phone work is in progress — closing/reloading the tab
+// Warn before leaving while a sync/upload is in progress — closing/reloading the tab
 // kills the in-browser worker, abandoning the running task and anything queued.
 window.addEventListener("beforeunload", (e) => {
   const jobs = controller?.state().jobs;
@@ -3341,13 +3198,17 @@ window.addEventListener("keydown", (e) => {
   if (document.body.classList.contains("heat-expanded")) setHeatExpanded(false);
 });
 
-/** Show the build version in the header; hover reveals commit + build date. */
+/** Show the build version in the header + source picker; hover reveals commit + build date. */
 function showVersion(): void {
-  const el = document.getElementById("appVer");
-  if (!el) return;
   const hasCommit = __APP_COMMIT__ && __APP_COMMIT__ !== "unknown";
-  el.textContent = `v${__APP_VERSION__}${hasCommit ? `+${__APP_COMMIT__}` : ""}`;
-  el.title = `commit ${__APP_COMMIT__} · built ${__APP_BUILD_DATE__}`;
+  const label = `v${__APP_VERSION__}${hasCommit ? `+${__APP_COMMIT__}` : ""}`;
+  const title = `commit ${__APP_COMMIT__} · built ${__APP_BUILD_DATE__}`;
+  for (const id of ["appVer", "pickVer"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.textContent = label;
+    el.title = title;
+  }
 }
 showVersion();
 
@@ -3385,13 +3246,10 @@ function trackViewportInset(): void {
 trackViewportInset();
 
 // Boot: pick the right starting mode.
-//  - A remembered phone (ADB) silently reconnects (no prompt).
 //  - A remembered Beeline account can't auto-sign-in (we never store the password),
 //    so we show its cached rides offline; "Change source"/"Re-sync" lead to sign-in.
 //  - Otherwise (no profile) start offline and show the source picker.
-if (wantsReal()) {
-  void tryAutoReconnect();
-} else if (rememberedProfile() === "beeline") {
+if (rememberedProfile() === "beeline") {
   void goBeelineOffline();
 } else {
   void goOffline().then(() => {
