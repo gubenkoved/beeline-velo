@@ -1221,6 +1221,11 @@ function mountAllRidesMap(opts: { fit?: boolean } = {}): void {
       attributionControl: true,
       zoomControl: true,
       fadeAnimation: false,
+      // Render every track onto one <canvas> instead of one SVG <path> per ride:
+      // at thousands of overlapping tracks the SVG DOM is the bottleneck. The
+      // translucent strokes still blend on canvas, so the "ridden more = brighter"
+      // heatmap look is preserved, and pan/zoom stays smooth at scale.
+      preferCanvas: true,
     });
     allRidesMap.attributionControl.setPrefix(false); // compact credit, no "Leaflet" flag
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {

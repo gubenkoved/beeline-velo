@@ -1880,8 +1880,10 @@ body.ridemap-open {
 #allRidesMap .leaflet-interactive {
   cursor: pointer;
 }
-/* Soft glow lifts the thin translucent tracks off the dark basemap. */
-#allRidesMap .track-line {
+/* Soft glow lifts the thin translucent tracks off the dark basemap. The tracks
+   are drawn on a single Leaflet overlay <canvas> (preferCanvas), so the glow goes
+   on the canvas element rather than per-line (.track-line is a no-op on canvas). */
+#allRidesMap .leaflet-canvas {
   filter: drop-shadow(0 0 1.5px rgba(255, 90, 31, 0.55));
 }
 

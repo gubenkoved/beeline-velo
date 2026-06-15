@@ -30,7 +30,6 @@ export interface TrackSelection {
   /** How many non-deleted rides have no downloaded track yet. */
   missing: number;
 }
-
 /** A 2-D screen point, in container pixels. */
 export interface PixelPoint {
   x: number;
@@ -41,6 +40,24 @@ export interface PixelPoint {
 export interface ProjectedTrack {
   key: string;
   pts: PixelPoint[];
+}
+
+/**
+ * Memoized polyline decode. The encoded `r.track` string is immutable per ride,
+ * so decoding the same string always yields the same points — but `ridesWithTracks`
+ * runs on every map mount (including background/job-tick re-renders), and decoding
+ * thousands of strings each time is wasted work. Cache decoded arrays keyed by the
+ * encoded string; the cache is bounded by the number of distinct ride tracks.
+ */
+const decodeCache = new Map<string, LatLon[]>();
+
+function decodeTrackCached(encoded: string): LatLon[] {
+  let pts = decodeCache.get(encoded);
+  if (!pts) {
+    pts = decodePolyline(encoded);
+    decodeCache.set(encoded, pts);
+  }
+  return pts;
 }
 
 /**
@@ -60,7 +77,7 @@ export function ridesWithTracks(rides: RideView[]): TrackSelection {
     }
     let points: LatLon[];
     try {
-      points = decodePolyline(r.track);
+      points = decodeTrackCached(r.track);
     } catch {
       missing++;
       continue;

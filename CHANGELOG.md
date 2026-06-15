@@ -17,6 +17,18 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Render the all-rides Map on a canvas (perf at scale)
+- **What:** Switched `#allRidesMap` to Leaflet's canvas renderer (`preferCanvas: true`)
+  so every ride track draws onto one `<canvas>` instead of one SVG `<path>` per ride,
+  moved the track glow CSS from per-line `.track-line` onto `.leaflet-canvas`, and
+  memoized polyline decoding in `ridesWithTracks()` (keyed by the immutable encoded
+  string) so background/job-tick re-mounts don't re-decode thousands of tracks.
+- **Why:** At a power user's scale (here ~1964 drawable tracks) the SVG DOM and the
+  repeated decode were the bottleneck — pan/zoom and re-renders dragged. Canvas blends
+  the translucent strokes identically (the "ridden more = brighter" heatmap look is
+  preserved) and selection is unaffected (it uses our own pixel projection, not
+  Leaflet path events), so this is a pure perf win with no UX change.
+
 ## Unify the heatmap's selection UX with the Map view
 - **What:** Moved the Stats route-frequency heatmap's "Selected" matches out of the
   full-width strip below the map into a side panel beside it (`.freq-wrap` is now a
