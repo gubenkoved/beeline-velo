@@ -2782,14 +2782,16 @@ function importRides(file: File): void {
 async function resetEverything(): Promise<void> {
   if (
     !confirm(
-      "Erase all locally stored rides, settings, and the remembered phone? This cannot be undone and returns the app to offline mode. Nothing on your phone is deleted.",
+      "Erase all locally stored rides, settings, and the remembered phone? This cannot be undone and returns you to the source-selection screen. Nothing on your phone is deleted.",
     )
   ) {
     return;
   }
   controller.reset(); // clear the active controller's cache (IndexedDB) + job queue
   forgetReal(); // stop auto-reconnecting to the phone on future loads
+  forgetProfile(); // forget the chosen source so the picker leads next time
   await goOffline(); // rebuild a fresh controller over the now-empty cache
+  showPicker(); // start fresh: let the user pick a source again
   toast("Local data cleared.");
 }
 

@@ -17,6 +17,14 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Reset returns to the source picker
+- **What:** After erasing local data, Reset now forgets the chosen source and shows
+  the source-selection screen (mirroring Change source) instead of dropping into
+  offline mode on the last-used source. Updated the confirm/toast copy to match.
+- **Why:** A full wipe is effectively starting over, so the user should land on the
+  same first-run picker — landing back on a now-empty source was confusing, and a
+  later reload already led to the picker, so this makes the two paths consistent.
+
 ## Mobile-friendly header + job pill
 - **What:** Make the chrome reflow on narrow screens (wrap the connection cluster,
   guard against sideways scroll, drop the storage-size pill, tighten buttons) and
