@@ -125,7 +125,7 @@ describe("Controller + BeelineRideSource (no network)", () => {
     await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
 
     const key = beelineRideKey(FIXTURE[UPLOADED].start as number);
-    c.downloadGpx([key], true);
+    c.downloadGpx([key]);
     await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
 
     expect(files.length).toBe(1);
@@ -245,7 +245,7 @@ describe("Controller + BeelineRideSource (no network)", () => {
     const files: { downloadName: string; bytes: Uint8Array }[] = [];
     c.onGpx((f) => files.push(f));
 
-    c.downloadGpx([key], true);
+    c.downloadGpx([key]);
     await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
 
     // No "No device connected" error, and a real GPX was produced from the cache.

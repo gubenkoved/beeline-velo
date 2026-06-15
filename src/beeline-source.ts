@@ -177,7 +177,6 @@ export class BeelineRideSource implements RideSource {
 
   async processTargets(
     keys: Set<string>,
-    doUpload: boolean,
     progress: Progress = () => false,
     onDetail: (detail: RideDetail) => void = () => {},
     onMissing: (keys: string[]) => void = () => {},
@@ -209,10 +208,10 @@ export class BeelineRideSource implements RideSource {
       const name = rideShortLabel(key) || key;
       try {
         let raw = entry.raw;
-        if (doUpload && stravaStatusOf(raw) === "pending") {
+        if (stravaStatusOf(raw) === "pending") {
           raw = await this.uploadOne(entry.pushId, raw, name, rep);
         } else {
-          await rep(`checked: ${name} — ${stravaStatusOf(raw)}`);
+          await rep(`skipping ${name} — already ${stravaStatusOf(raw)}`);
         }
         const detail = this.detailFor(key, raw);
         results.push(detail);
@@ -224,8 +223,7 @@ export class BeelineRideSource implements RideSource {
 
     // Beeline uploads are independent network calls, so run them through a bounded
     // pool (uploads can be slow; concurrency is the whole point of this source).
-    // Checks are instant snapshot reads, so a single worker is plenty.
-    const poolSize = doUpload ? Math.max(1, this.concurrency()) : 1;
+    const poolSize = Math.max(1, this.concurrency());
     await runPool(found, poolSize, handle, () => cancelled);
     return results;
   }

@@ -1,9 +1,9 @@
 /**
  * Background work queue.
  *
- * A single-threaded async model: all work (scan / status / upload) runs on one
- * async worker that drains the queue in order. Consecutive upload/status tasks
- * are *coalesced* into one pass over the ride list, so clicking "Upload" on many
+ * A single-threaded async model: all work (scan / upload / GPX export) runs on one
+ * async worker that drains the queue in order. Consecutive upload tasks are
+ * *coalesced* into one pass over the ride list, so clicking "Upload" on many
  * rides in a row results in one efficient sweep rather than many.
  */
 
@@ -12,9 +12,9 @@
 export type Report = (msg: string) => boolean;
 export type Runner = (task: Task, report: Report) => Promise<void>;
 
-const COALESCE_KINDS = new Set(["upload", "status", "download-gpx"]);
+const COALESCE_KINDS = new Set(["upload", "download-gpx"]);
 
-export type TaskKind = "scan" | "status" | "upload" | "download-gpx";
+export type TaskKind = "scan" | "upload" | "download-gpx";
 export type TaskStatus = "queued" | "running" | "done" | "error" | "cancelled";
 
 export interface TaskSnapshot {
@@ -176,13 +176,7 @@ export class JobQueue {
     // Coalesce consecutive same-kind upload/status tasks into this one.
     if (COALESCE_KINDS.has(task.kind)) {
       const seen = new Set(task.keys);
-      while (
-        this.queue.length &&
-        this.queue[0].kind === task.kind &&
-        // Don't merge GPX previews with GPX file-saves: they behave differently
-        // (only saves emit a file), so a mixed sweep would drop or add downloads.
-        this.queue[0].payload.saveToDisk === task.payload.saveToDisk
-      ) {
+      while (this.queue.length && this.queue[0].kind === task.kind) {
         const nxt = this.queue.shift()!;
         for (const k of nxt.keys) {
           if (!seen.has(k)) {

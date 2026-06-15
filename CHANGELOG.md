@@ -17,6 +17,42 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Remove the orphaned Check / route-preview engine paths
+- **What:** Second cleanup batch after deleting the Check / Preview-route UI. Dropped
+  `controller.status()` and the `"status"` `TaskKind` (renamed the shared `doTargets`
+  to `doUpload`, upload-only); removed the `doUpload` parameter from
+  `RideSource.processTargets` (+ Beeline impl) so it is always an upload sweep; and
+  collapsed `downloadGpx`'s preview-vs-save split — GPX export now always writes the
+  file (the `saveToDisk` flag, its job-payload, and the preview-only coalescing guard
+  are gone). Updated tests to the new signatures and removed the obsolete
+  preview/save coalescing test.
+- **Why:** With Beeline the only source, status arrives with the one-shot history
+  download and every ride already carries its full track, so "check status" and
+  "rough route preview" did nothing. Removing the dead branches also fixes the
+  half-applied UI cleanup where the "Save .gpx" actions had been pointed at the
+  (now-removed) preview mode and silently stopped writing files.
+
+## Drop the "Sign out" button
+- **What:** Removed the connected-state "Sign out" affordance (the connection slot
+  now just shows the device name when signed in) and its only handler, the
+  orphaned `leaveSource()`. The offline "Sign in" re-auth shortcut stays.
+- **Why:** The password is never stored, so a plain page refresh already drops
+  account access back to the offline cached-rides state, and "Change source"
+  already leads out — a dedicated sign-out did little but add header clutter.
+
+## "View saved rides" reads the Beeline cache (fix empty list after sign out)
+- **What:** Folded the vestigial `goOffline()` into `goBeelineOffline()` so every
+  saved-rides entry point — Sign out → "Skip — view saved rides", Reset, and the
+  no-profile boot — loads the Beeline profile store (`beeline-toolkit-state:beeline`)
+  and presents Beeline-offline chrome, instead of a separate empty default-key store
+  under the now-dead `"offline"` source mode.
+- **Why:** Beeline rides are cached under the per-profile key, but `goOffline()` loaded
+  `Store.load()` with no key → the default `"beeline-toolkit-state"` blob a Beeline user
+  never wrote to, so the saved-rides view came up blank. With Beeline the only source,
+  the distinct `"offline"` runtime mode was a leftover; converging fixes the empty list
+  and stops the legacy non-Beeline Check/Preview chrome (gated on `!beelineMode()`) from
+  ever rendering.
+
 ## Map & Stats UX polish
 - **What:** Date filter sits below the basemap (Map + Stats) so it never covers the
   OSM credit; drag the selected span as a fixed-width window; area-select works on

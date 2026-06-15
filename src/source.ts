@@ -113,10 +113,9 @@ export interface RideSource {
     onCards?: (cards: RideCard[]) => void,
   ): Promise<CatalogResult>;
 
-  /** Check (and optionally upload) the given rides, streaming each result via `onDetail`. */
+  /** Upload the given pending rides to Strava, streaming each result via `onDetail`. */
   processTargets(
     keys: Set<string>,
-    doUpload: boolean,
     progress?: Progress,
     onDetail?: (detail: RideDetail) => void,
     onMissing?: (keys: string[]) => void,

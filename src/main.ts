@@ -306,25 +306,6 @@ async function goBeelineOffline(): Promise<void> {
   activate(c, false, "beeline");
 }
 
-/**
- * Offline mode: show the user's persisted rides without a live source. Viewing
- * works; any action that needs the source (Re-sync / upload / GPX) fails
- * gracefully. This is the default when there's no remembered profile.
- */
-async function goOffline(): Promise<void> {
-  const factory: SourceFactory = async () => {
-    throw new Error("Not connected — sign in to Beeline to sync.");
-  };
-  const c = new Controller(factory, await Store.load(storageBackend, onStorageError));
-  activate(c, false, "offline");
-}
-
-async function leaveSource(): Promise<void> {
-  forgetProfile(); // forget the chosen source so the picker leads next time
-  await goOffline(); // keep showing the user's stored rides, just without a source
-  showPicker(); // let the user pick a source again
-}
-
 // --------------------------------------------------------------------------- //
 // UI state
 // --------------------------------------------------------------------------- //
@@ -1752,44 +1733,6 @@ function deletedBadge(): string {
 function gpsBadge(): string {
   return `<span class="badge gps" title="Route preview available — expand details to see the map.">gps</span>`;
 }
-/**
- * GPX split button: a primary "Preview" action (download a rough route, no file) plus
- * a caret that reveals the secondary "Save .gpx file" action. `scope` identifies which
- * menu is open (a ride key, or "sel" for the selection toolbar); `key` is forwarded on
- * the per-ride actions so the click handler knows which ride to act on.
- */
-function gpxSplit(scope: string, key: string): string {
-  const dataKey = key ? ` data-key="${key}"` : "";
-  // Beeline rides already carry their full track from the download, so there's no
-  // "preview" step — just the same Save .gpx action, on its own (no split).
-  if (beelineMode()) {
-    return `<button class="small ghost" data-act="gpx-save-one"${dataKey} title="Download the full GPX and save it to disk">Save .gpx file</button>`;
-  }
-  const open = openMenu === scope;
-  return (
-    `<span class="split${open ? " open" : ""}">` +
-    `<button class="small ghost" data-act="gpx-one"${dataKey} title="Download a rough GPS route preview (shown on the map; no file saved)">Preview route</button>` +
-    `<button class="small ghost caret" data-splitmenu="${scope}" aria-haspopup="true" aria-expanded="${open}" title="More GPX options">▾</button>` +
-    `<span class="splitmenu"><button class="small ghost" data-act="gpx-save-one"${dataKey} title="Download the full GPX and save it to disk">Save .gpx file</button></span>` +
-    `</span>`
-  );
-}
-/**
- * Check split button: a primary "Check new" action (read details only for rides that have
- * never been detailed) plus a caret revealing "Check all" (re-read every ride). `scope`
- * identifies which menu is open; `newAct`/`allAct` are the data-act values and `dataAttr`
- * (e.g. ` data-m="2026-06"`) is forwarded so the handler knows which month/year to act on.
- */
-function checkSplit(scope: string, newAct: string, allAct: string, dataAttr: string): string {
-  const open = openMenu === scope;
-  return (
-    `<span class="split${open ? " open" : ""}">` +
-    `<button class="small ghost" data-act="${newAct}"${dataAttr} title="Check only rides that have never had their details read">Check new</button>` +
-    `<button class="small ghost caret" data-splitmenu="${scope}" aria-haspopup="true" aria-expanded="${open}" title="More check options">▾</button>` +
-    `<span class="splitmenu"><button class="small ghost" data-act="${allAct}"${dataAttr} title="Re-check every ride, even ones already detailed">Check all</button></span>` +
-    `</span>`
-  );
-}
 function fmtStats(r: RideView): string {
   // Render the detail grid from the NORMALIZED numbers so a comma-decimal source
   // ("20,0km/h") reads identically to a dot one ("20.0 km/h"). Each row appears
@@ -2125,8 +2068,10 @@ function renderConn(): void {
   } else if (STATE.connected) {
     el.textContent = STATE.device || "connected";
     el.className = "cstate on";
-    disconnectBtn.textContent = "Sign out";
-    disconnectBtn.style.display = "";
+    // No "Sign out" button: the password is never stored, so a plain page refresh
+    // already drops account access (back to offline cached rides), and "Change
+    // source" leads out — a dedicated sign-out would just be header clutter.
+    disconnectBtn.style.display = "none";
   } else if (beeline) {
     // Showing cached Beeline rides without a live account — flag it in red so the
     // "stale, can't sync right now" state is unmistakable, and offer a way back in.
@@ -2209,11 +2154,9 @@ function render(): void {
 
   // Batch actions apply to the current selection — disable + count-label them so
   // "nothing to do" is obvious instead of a button that just toasts on click. The
-  // actions live in one split button (visible "Check selected" primary + a caret
-  // revealing Preview/Save/Upload), so the caret is disabled too when empty.
+  // actions live behind one dropdown (Save .gpx + Upload), so the caret is disabled
+  // too when empty.
   const selBtns: Array<[string, string]> = [
-    ["btnStatusSel", "Check selected"],
-    ["btnGpxSel", "Preview routes"],
     ["btnGpxSaveSel", "Save .gpx files"],
     ["btnUploadSel", "Upload selected to Strava"],
   ];
@@ -2223,32 +2166,15 @@ function render(): void {
     b.disabled = nSel === 0;
     b.textContent = nSel ? `${base} (${nSel})` : base;
   }
-  // Beeline has no per-ride Check (status comes with the download) and no rough
-  // Preview (rides carry their full track), so hide those two selection actions —
-  // matching the per-ride/month menus — leaving Save .gpx + Upload.
-  const beeline = beelineMode();
-  for (const id of ["btnStatusSel", "btnGpxSel"]) {
-    const b = document.getElementById(id) as HTMLButtonElement | null;
-    if (b) b.style.display = beeline ? "none" : "";
-  }
+  // The selection actions live behind one labelled dropdown; without a fused primary
+  // button the caret would read as a lone icon, so promote it to a standalone
+  // `.menubtn` (the style the "Data" button uses).
   const selCaret = document.querySelector<HTMLButtonElement>('[data-splitmenu="sel"]');
   if (selCaret) {
     selCaret.disabled = nSel === 0;
-    // Without the fused "Check selected" primary, the caret would read as a lone
-    // icon button — promote it to a standalone labelled dropdown (the `.menubtn`
-    // style the "Data" button uses) in Beeline mode, and restore the icon caret
-    // (whose accessible name lives in its text) otherwise.
-    if (beeline) {
-      selCaret.classList.remove("caret");
-      selCaret.classList.add("menubtn");
-      selCaret.textContent = nSel
-        ? `Selected ride actions (${nSel})`
-        : "Selected ride actions";
-    } else {
-      selCaret.classList.add("caret");
-      selCaret.classList.remove("menubtn");
-      selCaret.textContent = "More selected-ride actions";
-    }
+    selCaret.classList.remove("caret");
+    selCaret.classList.add("menubtn");
+    selCaret.textContent = nSel ? `Selected ride actions (${nSel})` : "Selected ride actions";
   }
   // The whole selected-ride actions cluster only makes sense with a selection —
   // hide it entirely when nothing is selected rather than showing disabled "Check
@@ -2290,8 +2216,6 @@ function render(): void {
         <span class="yactions${openMenu === `ovr-y:${year}` ? " open" : ""}">
           <button class="small ghost ovr" data-splitmenu="ovr-y:${year}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-y:${year}`}" title="Actions for ${year}">${KEBAB_ICON}</button>
           <span class="ovr-items">
-            ${beelineMode() ? "" : checkSplit(`check-y:${year}`, "status-year-new", "status-year", ` data-y="${year}"`)}
-            ${beelineMode() ? "" : `<button class="small ghost" data-act="gpx-year-missing" data-y="${year}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>`}
             <button class="small" data-act="upload-year" data-y="${year}">Upload pending to Strava</button>
           </span>
         </span>
@@ -2322,8 +2246,6 @@ function render(): void {
           <span class="mactions${openMenu === `ovr-m:${mkey}` ? " open" : ""}">
             <button class="small ghost ovr" data-splitmenu="ovr-m:${mkey}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-m:${mkey}`}" title="Actions for ${m.label}">${KEBAB_ICON}</button>
             <span class="ovr-items">
-              ${beelineMode() ? "" : checkSplit(`check-m:${mkey}`, "status-month-new", "status-month", ` data-m="${mkey}"`)}
-              ${beelineMode() ? "" : `<button class="small ghost" data-act="gpx-month-missing" data-m="${mkey}" title="Download rough route previews for rides that don't have one yet">Preview routes</button>`}
               <button class="small" data-act="upload-month" data-m="${mkey}">Upload pending to Strava</button>
             </span>
           </span>
@@ -2359,8 +2281,7 @@ function render(): void {
           <div class="rbtns${openMenu === `ovr-r:${r.key}` ? " open" : ""}">
             <button class="small ghost ovr" data-splitmenu="ovr-r:${r.key}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-r:${r.key}`}" title="Ride actions">${KEBAB_ICON}</button>
             <span class="ovr-items">
-              ${beelineMode() ? "" : `<button class="small ghost" data-act="status-one" data-key="${r.key}">Check</button>`}
-              ${gpxSplit(r.key, r.key)}
+              <button class="small ghost" data-act="gpx-save-one" data-key="${r.key}" title="Download the full GPX and save it to disk">Save .gpx file</button>
               <button class="small accent" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ""}>Upload to Strava</button>
             </span>
           </div>`;
@@ -2594,32 +2515,6 @@ const pendingOfYear = (y: string): string[] =>
     )
     .map((r) => r.key);
 
-// A ride is "never checked" until its detail sheet has been opened, which is the
-// only thing that fills the detail-only metrics (speeds / moving time / elevation);
-// a plain scan sets just title + the summary distance/elapsed.
-const isUnchecked = (r: AppState["rides"][number]): boolean =>
-  !r.deleted &&
-  r.avg_speed_kmh == null &&
-  r.max_speed_kmh == null &&
-  r.moving_sec == null &&
-  r.elevation_gain_m == null &&
-  r.elevation_loss_m == null;
-const uncheckedOfMonth = (m: string): string[] =>
-  STATE.rides.filter((r) => r.month_key === m && isUnchecked(r)).map((r) => r.key);
-const uncheckedOfYear = (y: string): string[] =>
-  STATE.rides
-    .filter((r) => (r.month_key || "").slice(0, 4) === y && isUnchecked(r))
-    .map((r) => r.key);
-
-// A ride is "missing a preview" until a GPX download has stored its rough track.
-const hasNoPreview = (r: AppState["rides"][number]): boolean => !r.deleted && !r.track;
-const missingPreviewOfMonth = (m: string): string[] =>
-  STATE.rides.filter((r) => r.month_key === m && hasNoPreview(r)).map((r) => r.key);
-const missingPreviewOfYear = (y: string): string[] =>
-  STATE.rides
-    .filter((r) => (r.month_key || "").slice(0, 4) === y && hasNoPreview(r))
-    .map((r) => r.key);
-
 function toggleGroup(keys: string[]): void {
   const allSel = keys.length > 0 && keys.every((k) => selected.has(k));
   for (const k of keys) allSel ? selected.delete(k) : selected.add(k);
@@ -2834,7 +2729,7 @@ async function resetEverything(): Promise<void> {
   }
   controller.reset(); // clear the active controller's cache (IndexedDB) + job queue
   forgetProfile(); // forget the chosen source so the picker leads next time
-  await goOffline(); // rebuild a fresh controller over the now-empty cache
+  await goBeelineOffline(); // rebuild a fresh controller over the now-empty cache
   showPicker(); // start fresh: let the user pick a source again
   toast("Local data cleared.");
 }
@@ -2973,14 +2868,11 @@ document.addEventListener("click", (e) => {
     return;
   }
   if (t.id === "btnSource") return showPicker();
-  // The disconnect slot is "Disconnect"/"Sign out" for a live source and "Sign in"
-  // for an offline Beeline session (the focused re-auth prompt); demo has no exit
-  // button here (use "Change source"). Otherwise drop the source and reopen the
-  // full picker.
-  if (t.id === "btnDisconnect") {
-    if (beelineMode() && !STATE.connected && !isDemo) return showPicker({ reauth: true });
-    return void leaveSource();
-  }
+  // The disconnect slot only shows for an offline Beeline session, where it's a
+  // "Sign in" shortcut to the focused re-auth prompt (connected/demo hide it; the
+  // password is never stored so there's no "Sign out" — refresh/"Change source"
+  // handle leaving).
+  if (t.id === "btnDisconnect") return showPicker({ reauth: true });
   if (t.id === "btnImport") return void ($("#importFile") as HTMLInputElement).click();
   if (t.id === "btnExport") return exportRides();
   if (t.id === "btnReset") return void resetEverything();
@@ -3021,18 +2913,10 @@ document.addEventListener("click", (e) => {
     render();
     return;
   }
-  if (t.id === "btnStatusSel") {
-    if (!selected.size) return toast("Select some rides first.");
-    return run(() => controller.status([...selected]));
-  }
-  if (t.id === "btnGpxSel") {
-    if (!selected.size) return toast("Select some rides first.");
-    return run(() => controller.downloadGpx([...selected]));
-  }
   if (t.id === "btnGpxSaveSel") {
     openMenu = null;
     if (!selected.size) return toast("Select some rides first.");
-    return run(() => controller.downloadGpx([...selected], true));
+    return run(() => controller.downloadGpx([...selected]));
   }
   if (t.id === "btnUploadSel") {
     if (!selected.size) return toast("Select some rides first.");
@@ -3046,7 +2930,7 @@ document.addEventListener("click", (e) => {
     const keys = STATE.rides
       .filter((r) => r.status === "pending" && !r.deleted)
       .map((r) => r.key);
-    if (!keys.length) return toast("No known pending rides. Check status first.");
+    if (!keys.length) return toast("No known pending rides.");
     void (async () => {
       const ok = await confirmDialog({
         title: "Upload all to Strava?",
@@ -3061,54 +2945,24 @@ document.addEventListener("click", (e) => {
   }
 
   const act = t.dataset?.act;
-  if (act === "status-one") return run(() => controller.status([t.dataset.key!]));
-  if (act === "gpx-one") return run(() => controller.downloadGpx([t.dataset.key!]));
   if (act === "gpx-save-one") {
     openMenu = null;
-    return run(() => controller.downloadGpx([t.dataset.key!], true));
+    return run(() => controller.downloadGpx([t.dataset.key!]));
   }
   if (act === "upload-one") {
     const ride = STATE.rides.find((r) => r.key === t.dataset.key);
     if (ride && ride.status === "uploaded") return toast("Already uploaded to Strava.");
     return withBeelineAccess(() => run(() => controller.upload([t.dataset.key!])));
   }
-  if (act === "status-month") {
-    openMenu = null;
-    return run(() => controller.status(keysOfMonth(t.dataset.m!)));
-  }
-  if (act === "status-month-new") {
-    const keys = uncheckedOfMonth(t.dataset.m!);
-    if (!keys.length) return toast("All rides this month are already checked.");
-    return run(() => controller.status(keys));
-  }
   if (act === "upload-month") {
     const keys = pendingOfMonth(t.dataset.m!);
-    if (!keys.length) return toast("No known pending rides this month. Check first.");
+    if (!keys.length) return toast("No known pending rides this month.");
     return withBeelineAccess(() => run(() => controller.upload(keys)));
-  }
-  if (act === "gpx-month-missing") {
-    const keys = missingPreviewOfMonth(t.dataset.m!);
-    if (!keys.length) return toast("All rides this month already have a preview.");
-    return run(() => controller.downloadGpx(keys));
-  }
-  if (act === "status-year") {
-    openMenu = null;
-    return run(() => controller.status(keysOfYear(t.dataset.y!)));
-  }
-  if (act === "status-year-new") {
-    const keys = uncheckedOfYear(t.dataset.y!);
-    if (!keys.length) return toast("All rides this year are already checked.");
-    return run(() => controller.status(keys));
   }
   if (act === "upload-year") {
     const keys = pendingOfYear(t.dataset.y!);
-    if (!keys.length) return toast("No known pending rides this year. Check first.");
+    if (!keys.length) return toast("No known pending rides this year.");
     return withBeelineAccess(() => run(() => controller.upload(keys)));
-  }
-  if (act === "gpx-year-missing") {
-    const keys = missingPreviewOfYear(t.dataset.y!);
-    if (!keys.length) return toast("All rides this year already have a preview.");
-    return run(() => controller.downloadGpx(keys));
   }
 
   if (t.dataset?.stats) {
@@ -3393,14 +3247,11 @@ function trackViewportInset(): void {
 }
 trackViewportInset();
 
-// Boot: pick the right starting mode.
-//  - A remembered Beeline account can't auto-sign-in (we never store the password),
-//    so we show its cached rides offline; "Change source"/"Re-sync" lead to sign-in.
-//  - Otherwise (no profile) start offline and show the source picker.
-if (rememberedProfile() === "beeline") {
-  void goBeelineOffline();
-} else {
-  void goOffline().then(() => {
-    if (!rememberedProfile()) showPicker();
-  });
-}
+// Boot: pick the right starting mode. Either way we open over the cached Beeline
+// rides (we never store the password, so we can't silently re-sign-in):
+//  - A remembered Beeline account lands straight on its cached rides;
+//    "Change source"/"Re-sync" lead to sign-in.
+//  - Otherwise (no profile) we also show the source picker on top.
+void goBeelineOffline().then(() => {
+  if (rememberedProfile() !== "beeline") showPicker();
+});

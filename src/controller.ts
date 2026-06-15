@@ -206,8 +206,7 @@ export class Controller {
 
   private async runTask(task: Task, report: Report): Promise<void> {
     if (task.kind === "scan") await this.doScan(task, report);
-    else if (task.kind === "status") await this.doTargets(task, report, false);
-    else if (task.kind === "upload") await this.doTargets(task, report, true);
+    else if (task.kind === "upload") await this.doUpload(task, report);
     else if (task.kind === "download-gpx") await this.doDownloadGpx(task, report);
   }
 
@@ -266,7 +265,7 @@ export class Controller {
     report(`scan done (${label}): ${cards.length} rides${suffix}`);
   }
 
-  private async doTargets(task: Task, report: Report, doUpload: boolean): Promise<void> {
+  private async doUpload(task: Task, report: Report): Promise<void> {
     const source = this.sourceFor();
     let uploaded = 0;
     let removed = 0;
@@ -276,7 +275,6 @@ export class Controller {
     task.progress = { done: 0, total: task.keys.length };
     const details = await source.processTargets(
       new Set(task.keys),
-      doUpload,
       (msg) => report(msg),
       (d) => {
         // Persist and surface each ride's status the moment it is read/uploaded.
@@ -300,18 +298,15 @@ export class Controller {
       },
     );
     const suffix = removed ? `, ${removed} deleted` : "";
-    if (doUpload)
-      report(`done: ${uploaded} now on Strava (${details.length} processed)${suffix}`);
-    else report(`checked ${details.length} rides${suffix}`);
+    report(`done: ${uploaded} now on Strava (${details.length} processed)${suffix}`);
 
     if (failures.length) {
       // Fail the task so the UI shows a persistent, acknowledgeable error with full
       // per-ride detail — not a status message that just blinks past. The rides that
       // did succeed are already persisted above; this only reports the ones that didn't.
-      const verb = doUpload ? "upload" : "check";
       const header = `${failures.length} of ${task.keys.length} ride${
         task.keys.length === 1 ? "" : "s"
-      } failed to ${verb} (${details.length} succeeded):`;
+      } failed to upload (${details.length} succeeded):`;
       throw new Error([header, ...failures.map((f) => `  • ${f}`)].join("\n"));
     }
   }
@@ -334,9 +329,7 @@ export class Controller {
   }
 
   private async doDownloadGpx(task: Task, report: Report): Promise<void> {
-    // Two modes: preview-only (default) just stores the rough track for the mini-map;
-    // save mode additionally hands the full GPX to the UI to write to disk.
-    const saveToDisk = task.payload.saveToDisk === true;
+    // Export each ride's route as a GPX file handed to the UI to write to disk.
     let removed = 0;
     let succeeded = 0;
     const failures: string[] = [];
@@ -354,14 +347,12 @@ export class Controller {
         const title = rec.title || rec.title_base || "";
         const xml = encodedTrackToGpx(rec.track, title || rideShortLabel(key) || key);
         if (xml) {
-          if (saveToDisk) {
-            this.emitGpx({
-              key,
-              filename: gpxFilename(key),
-              downloadName: gpxDownloadName(key, title),
-              bytes: new TextEncoder().encode(xml),
-            });
-          }
+          this.emitGpx({
+            key,
+            filename: gpxFilename(key),
+            downloadName: gpxDownloadName(key, title),
+            bytes: new TextEncoder().encode(xml),
+          });
           succeeded++;
         } else {
           failures.push(`${rideShortLabel(key) || key}: no route track to export`);
@@ -400,8 +391,7 @@ export class Controller {
             // bogus empty track; record it so the task surfaces a real, persistent error.
             failures.push(`${file.key}: couldn't extract a GPS track from the downloaded GPX`);
           }
-          // Only hand the full file to the UI when the user actually asked to save it.
-          if (saveToDisk) this.emitGpx(file);
+          this.emitGpx(file);
           if (task.progress) task.progress.done++;
         },
         (missing) => {
@@ -420,8 +410,7 @@ export class Controller {
     }
 
     const suffix = removed ? `, ${removed} deleted` : "";
-    const noun = saveToDisk ? "GPX file" : "preview";
-    report(`downloaded ${succeeded} ${noun}${succeeded === 1 ? "" : "s"}${suffix}`);
+    report(`exported ${succeeded} GPX file${succeeded === 1 ? "" : "s"}${suffix}`);
 
     if (failures.length) {
       // Fail the task so the UI shows a persistent, acknowledgeable error with full
@@ -440,10 +429,6 @@ export class Controller {
     return this.jobs.submit("scan", { label, payload: { preset, days } });
   }
 
-  status(keys: string[], label = ""): TaskSnapshotResult {
-    return this.jobs.submit("status", { label: label || `${keys.length} rides`, keys });
-  }
-
   upload(keys: string[], label = ""): TaskSnapshotResult {
     // Never re-upload a ride that's already on Strava: filter out uploaded keys at the
     // single choke point every caller funnels through (per-ride, selection, month, year,
@@ -455,16 +440,11 @@ export class Controller {
     });
   }
 
-  /**
-   * Download GPX for the given rides. By default this is *preview-only*: it stores a
-   * rough track for the mini-map and never touches the disk. Pass `saveToDisk = true`
-   * to also hand the full GPX file to the UI to write out.
-   */
-  downloadGpx(keys: string[], saveToDisk = false, label = ""): TaskSnapshotResult {
+  /** Export each given ride's route as a GPX file handed to the UI to write to disk. */
+  downloadGpx(keys: string[], label = ""): TaskSnapshotResult {
     return this.jobs.submit("download-gpx", {
       label: label || `${keys.length} rides`,
       keys,
-      payload: { saveToDisk },
     });
   }
 
