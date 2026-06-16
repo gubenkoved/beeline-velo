@@ -98,6 +98,10 @@ const FULL_GPX_MIN_INTERVAL_S = 1;
 export class BeelineRideSource implements RideSource {
   readonly kind = "beeline";
 
+  /** Beeline rides can be uploaded to Strava (server-side), but are fetched from
+   *  the cloud account, not imported from local files. */
+  readonly capabilities = { upload: true, import: false };
+
   /** Last fetched rides, keyed by ride key → {pushId, raw record}. */
   private byKey = new Map<string, { pushId: string; raw: RawBeelineRide }>();
 

@@ -34,7 +34,7 @@
 
 import { gunzip } from "./gzip";
 import type { StravaStatus } from "./parsing";
-import { beelineRideKey } from "./parsing";
+import { beelineRideKey, timeOfDayName } from "./parsing";
 import type { RideSource, UpsertFields } from "./store";
 import { decodePolyline, trackLengthKm } from "./track";
 
@@ -456,30 +456,6 @@ export function isTerminalStatus(status: StravaStatus): boolean {
 // trip through the parsers any more.
 
 const MPS_TO_KMH = 3.6;
-
-/**
- * A Strava-style time-of-day ride name from a start instant (local wall-clock).
- * Beeline's backend stores NO ride title (the app generates one client-side), so
- * without this every ride would render as a bare "Ride". This mirrors the naming
- * Strava itself applies to uploaded activities, so titles read naturally.
- */
-function timeOfDayName(startMs: number): string {
-  const h = new Date(startMs).getHours();
-  if (h < 5) return "Night ride";
-  if (h < 12) return "Morning ride";
-  if (h < 17) return "Afternoon ride";
-  if (h < 21) return "Evening ride";
-  return "Night ride";
-}
-
-/**
- * True when `name` is one of our auto-generated time-of-day fallback names (see
- * `timeOfDayName`) rather than a real, user-given ride title. Kept next to the
- * generator so the two stay in lockstep — used to filter "named" rides.
- */
-export function isSynthesizedRideName(name: string): boolean {
-  return /^(Morning|Afternoon|Evening|Night) ride$/.test(name.trim());
-}
 
 /**
  * The most specific human place for a ride's routed destination, or "" when the

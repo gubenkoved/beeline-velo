@@ -43,10 +43,12 @@ import { computeStats, type PeriodRecord } from "./stats";
 import "leaflet.heat";
 import { DEMO_BEELINE_EMAIL, demoBeelineDeps } from "./beeline-demo";
 import { BeelineRideSource, type BeelineSourceDeps } from "./beeline-source";
+import { GpxRideSource } from "./gpx-source";
 import { GpxCache } from "./gpxcache";
 import { idbBackend, idbBlobBackend, memoryBackend } from "./kv";
+import { createLocate, type Locate } from "./locate";
 import type { SourceFactory } from "./source";
-import { Store } from "./store";
+import { type RideSource, STORAGE_KEY, Store } from "./store";
 import {
   cumulativeKm,
   decodePolyline,
@@ -74,21 +76,10 @@ const onStorageError = (message: string): void => pushError("Storage error", mes
 
 let controller!: Controller;
 // Starts false so the first paint matches the offline boot; activate() sets the
-// real value once a controller is wired up.
+// real value once a controller is wired up. `isDemo` is the Beeline simulated account.
 let isDemo = false;
-// Which data source is active. Drives the streamlined Beeline chrome (via the
-// body[data-src] attribute) and the "Source" switcher. "offline" = no source yet.
-let currentSource: SourceKind = "offline";
 let unsubscribe: (() => void) | null = null;
 let unsubscribeGpx: (() => void) | null = null;
-
-type SourceKind = "beeline" | "offline";
-
-/** True when the active source is a Beeline account (real or demo). */
-const beelineMode = (): boolean => currentSource === "beeline";
-
-/** IndexedDB key for the Beeline account profile. */
-const BEELINE_STORAGE_KEY = "beeline-toolkit-state:beeline";
 
 const FILTERS_KEY = "beeline_uploader.filters";
 
@@ -127,6 +118,25 @@ const rememberedEmail = (): string => {
   }
 };
 
+// First-launch onboarding: show the Sources dialog (with the welcome intro) exactly
+// ONCE — on the first-ever launch — then never auto-open it again. Set when first
+// shown so a returning user lands straight in the app.
+const WELCOMED_KEY = "gpx_toolkit.welcomed";
+const hasBeenWelcomed = (): boolean => {
+  try {
+    return localStorage.getItem(WELCOMED_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+const markWelcomed = (): void => {
+  try {
+    localStorage.setItem(WELCOMED_KEY, "1");
+  } catch {
+    /* non-fatal */
+  }
+};
+
 // One-time consent for routing the full-GPX download through the external export
 // gateway (see infra/gpx-relay). Only relevant when a relay URL is configured at
 // build time; remembered per device so we don't re-prompt every download.
@@ -146,39 +156,17 @@ const rememberRelayConsent = (): void => {
   }
 };
 
-function activate(next: Controller, demo: boolean, source: SourceKind): void {
+function activate(next: Controller, demo: boolean): void {
   if (unsubscribe) unsubscribe();
   if (unsubscribeGpx) unsubscribeGpx();
   controller = next;
   isDemo = demo;
-  currentSource = source;
-  document.body.dataset.src = source;
-  placeScanButton(source === "beeline");
   unsubscribe = controller.onChange(applyState);
   unsubscribeGpx = controller.onGpx(saveGpxFile);
   applyState();
 }
 
-/**
- * In Beeline mode the scan bar's only live control is "Re-sync", so giving it a
- * whole second header row is wasteful — hoist Re-sync up into the header's
- * connection cluster and let the body[data-src="beeline"] CSS drop the now-empty
- * bar. Any other source puts it back in the scan bar in its original slot (just
- * before the trailing spacer).
- */
-function placeScanButton(beeline: boolean): void {
-  const btn = document.getElementById("btnScan");
-  if (!btn) return;
-  if (beeline) {
-    document.querySelector(".conn")?.prepend(btn);
-  } else {
-    const bar = document.getElementById("scanbar");
-    const spacer = bar?.querySelector(".spacer");
-    if (bar && spacer) bar.insertBefore(btn, spacer);
-  }
-}
-
-// -- source picker ----------------------------------------------------------
+// -- sources dialog ---------------------------------------------------------
 
 // A cloud action deferred until the user (re)authenticates to Beeline. Set when a
 // signed-out Beeline session triggers something needing the account (Re-sync,
@@ -186,16 +174,17 @@ function placeScanButton(beeline: boolean): void {
 let afterBeelineSignIn: (() => void) | null = null;
 
 /**
- * Show the data-source picker, prefilling the remembered Beeline email if any.
- * In `reauth` mode it presents ONLY the Beeline sign-in (the user already has a
- * profile and just needs to re-enter the password — which a password manager can
- * inject), with focused copy and the password field focused.
+ * Show the Sources dialog (connect/manage data sources), prefilling the remembered
+ * Beeline email if any. In `reauth` mode it focuses the Beeline sign-in (the user
+ * already has a profile and just needs to re-enter the password — which a password
+ * manager can inject). In `welcome` mode it leads with the onboarding intro.
  */
-function showPicker(opts: { reauth?: boolean } = {}): void {
+function showSources(opts: { reauth?: boolean; welcome?: boolean } = {}): void {
   const picker = document.getElementById("srcPick");
   if (!picker) return;
   const reauth = opts.reauth === true;
   picker.classList.toggle("reauth", reauth);
+  picker.classList.toggle("welcome", opts.welcome === true);
 
   const email = rememberedEmail();
   const emailInput = document.getElementById("beelineEmail") as HTMLInputElement | null;
@@ -205,8 +194,9 @@ function showPicker(opts: { reauth?: boolean } = {}): void {
   if (sub) {
     sub.textContent = reauth
       ? "Sign in to your Beeline account to sync."
-      : "Choose where your rides come from.";
+      : "Connect the sources your rides come from. They all live together in one library.";
   }
+  renderSources();
 
   setBeelineError("");
   picker.classList.remove("hidden");
@@ -216,10 +206,10 @@ function showPicker(opts: { reauth?: boolean } = {}): void {
   }
 }
 
-function hidePicker(): void {
+function hideSources(): void {
   const picker = document.getElementById("srcPick");
   picker?.classList.add("hidden");
-  picker?.classList.remove("reauth");
+  picker?.classList.remove("reauth", "welcome");
   // Dismissing the prompt abandons any action that was waiting on sign-in.
   afterBeelineSignIn = null;
 }
@@ -230,20 +220,52 @@ function setBeelineError(message: string): void {
 }
 
 /**
- * Run a cloud action that needs a live Beeline connection. When the Beeline
- * account is the active source but we're signed out (the offline, cached-rides
- * state — we never store the password), defer the action and prompt for the
- * password so a password manager can inject it; the action runs once sign-in
- * succeeds. In every other case (connected, demo, or a non-Beeline source) it
- * runs immediately.
+ * Populate the Beeline card in the Sources dialog from the live connection state:
+ * when connected (or demo) it shows "Connected as …" + the per-source actions
+ * (Pull from Beeline / Disconnect); otherwise the sign-in form. Driven by the
+ * Controller's state, so it stays correct as the connection changes while open.
+ */
+function renderSources(): void {
+  const card = document.getElementById("srcBeeline");
+  if (!card) return;
+  const connected = STATE.connected || isDemo;
+  card.classList.toggle("connected", connected);
+  const status = document.getElementById("beelineStatus");
+  if (status) {
+    status.textContent = connected
+      ? isDemo
+        ? "Connected — demo account"
+        : `Connected — ${STATE.device || "Beeline account"}`
+      : "";
+  }
+}
+
+/**
+ * Run an action that needs a live Beeline connection. When signed out (the offline,
+ * cached-rides state — we never store the password), defer the action and open the
+ * Sources dialog focused on sign-in so a password manager can inject it; the action
+ * runs once sign-in succeeds. When already connected (or in the demo) it runs now.
  */
 function withBeelineAccess(action: () => void): void {
-  if (beelineMode() && !STATE.connected && !isDemo) {
+  if (!STATE.connected && !isDemo) {
     afterBeelineSignIn = action;
-    showPicker({ reauth: true });
+    showSources({ reauth: true });
     return;
   }
   action();
+}
+
+/**
+ * Run a per-ride mutation (rename / delete) with exactly the access its source needs.
+ * A Beeline-backed ride is changed on the cloud account, so it goes through the
+ * re-auth gate (a signed-out user is asked to sign in first); a local source (an
+ * imported GPX) is changed entirely in the browser, so it runs straight away and must
+ * NEVER trip the Beeline sign-in prompt. Gate on the ride's own source, not a global
+ * mode, so a GPX ride behaves the same whether or not Beeline is also connected.
+ */
+function withRideAccess(source: RideSource, action: () => void): void {
+  if (source === "beeline") withBeelineAccess(action);
+  else action();
 }
 
 /**
@@ -348,11 +370,14 @@ function beelineSourceFactory(
 async function goDemoBeeline(): Promise<void> {
   const store = new Store(memoryBackend());
   const factory = beelineSourceFactory(DEMO_BEELINE_EMAIL, "demo", store, demoBeelineDeps());
-  const c = new Controller(factory, store, GpxCache.memory());
-  activate(c, true, "beeline");
+  const gpxCache = GpxCache.memory();
+  const gpxData = GpxCache.memory();
+  const c = new Controller(factory, store, gpxCache, gpxData);
+  c.registerSource(new GpxRideSource(gpxData, () => store.settings.trackPointsPerKm));
+  activate(c, true);
   try {
     await c.connect();
-    toast("Demo (Beeline) — a simulated cloud account. Click Change source to leave.");
+    toast("Demo (Beeline) — a simulated cloud account. Open Sources to leave.");
   } catch {
     /* demo connect never fails */
   }
@@ -368,12 +393,12 @@ async function goDemoBeeline(): Promise<void> {
  * leaves the app fully usable on the last downloaded data instead of blank.
  */
 async function goBeeline(email: string, password: string): Promise<boolean> {
-  const store = await Store.load(storageBackend, onStorageError, BEELINE_STORAGE_KEY);
-  const gpxCache = await GpxCache.load(gpxBlobBackend, BEELINE_STORAGE_KEY, onStorageError);
-  const c = new Controller(beelineSourceFactory(email, password, store), store, gpxCache);
-  activate(c, false, "beeline"); // show cached rides immediately
+  const c = await getRealController();
+  activate(c, false); // show cached rides immediately
   try {
-    await c.connect(); // signs in; throws on bad credentials / no network
+    // Connect with a fresh factory carrying these credentials (registers the Beeline
+    // source onto the shared controller alongside any imported GPX rides).
+    await c.connect(beelineSourceFactory(email, password, c.store));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     setBeelineError(msg);
@@ -387,9 +412,9 @@ async function goBeeline(email: string, password: string): Promise<boolean> {
     return false;
   }
   rememberProfile("beeline", email);
-  // Capture any action that was waiting on sign-in BEFORE hidePicker() clears it.
+  // Capture any action that was waiting on sign-in BEFORE hideSources() clears it.
   const pending = afterBeelineSignIn;
-  hidePicker();
+  hideSources();
   toast(`Signed in: ${controller.state().device}`);
   if (pending) {
     // The user triggered sign-in by doing something (Re-sync, upload) — run it now
@@ -404,19 +429,91 @@ async function goBeeline(email: string, password: string): Promise<boolean> {
 }
 
 /**
- * Beeline, offline: show the cached Beeline rides without an account connection
- * (e.g. on reload — we never store the password, so we can't silently re-sign-in).
- * The source is a stub that errors if used; any action needing the account
- * (Re-sync, upload) prompts for the password first via `withBeelineAccess`.
+ * Open the app over the unified cache without a live account connection (e.g. on
+ * reload — we never store the password, so we can't silently re-sign-in). The GPX
+ * source is already registered, so imported rides remain usable; any action needing
+ * the Beeline account (Pull from Beeline, upload) prompts for the password via
+ * `withBeelineAccess`.
  */
-async function goBeelineOffline(): Promise<void> {
-  const store = await Store.load(storageBackend, onStorageError, BEELINE_STORAGE_KEY);
-  const gpxCache = await GpxCache.load(gpxBlobBackend, BEELINE_STORAGE_KEY, onStorageError);
-  const factory: SourceFactory = async () => {
-    throw new Error("Not signed in — sign in to Beeline to sync.");
-  };
-  const c = new Controller(factory, store, gpxCache);
-  activate(c, false, "beeline");
+async function openApp(): Promise<void> {
+  const c = await getRealController();
+  activate(c, false);
+}
+
+/** Pull the whole ride history from the connected Beeline account (the one
+ *  Beeline-specific data action). Prompts for sign-in first when signed out. */
+function pullFromBeeline(): void {
+  withBeelineAccess(() => run(() => controller.scan("all", null)));
+}
+
+// --------------------------------------------------------------------------- //
+// Shared multi-source controller (Beeline account + imported GPX coexist)
+// --------------------------------------------------------------------------- //
+
+/** The one persistent, real (non-demo) controller. Holds the unified ride cache and
+ *  a source registry: the GPX import source is always registered; Beeline connects
+ *  on sign-in. Reused across sign-in/out so imported rides + cache survive. */
+let realController: Controller | null = null;
+
+/** Unified ride-state key — all sources' rides coexist here (each tagged `source`). */
+const UNIFIED_STORAGE_KEY = `${STORAGE_KEY}:all`;
+/**
+ * GPX blob namespaces — kept physically separate (Android's data-vs-cache split):
+ *  - `cache`: re-fetchable full-GPX downloads (Beeline). Safe to flush; re-downloads.
+ *  - `data` : imported GPX originals — the ONLY copy, primary state. Never flushed by
+ *             a cache clear; removed only on ride delete or a full reset.
+ * Keys within each carry the cross-source ride uid.
+ */
+const GPX_CACHE_PREFIX = "cache";
+const GPX_DATA_PREFIX = "data";
+
+/** Build (once) the shared real controller with the GPX source pre-registered. */
+async function getRealController(): Promise<Controller> {
+  if (realController) return realController;
+  const store = await Store.load(storageBackend, onStorageError, UNIFIED_STORAGE_KEY);
+  // Two physically separate GPX blob stores: a re-fetchable cache (Beeline) and the
+  // imported-GPX data vault (primary state). A cache flush can only touch the former.
+  const gpxCache = await GpxCache.load(gpxBlobBackend, GPX_CACHE_PREFIX, onStorageError);
+  const gpxData = await GpxCache.load(gpxBlobBackend, GPX_DATA_PREFIX, onStorageError);
+  const c = new Controller(
+    async () => {
+      throw new Error("Not signed in — sign in to Beeline to sync.");
+    },
+    store,
+    gpxCache,
+    gpxData,
+  );
+  c.registerSource(new GpxRideSource(gpxData, () => store.settings.trackPointsPerKm));
+  realController = c;
+  return c;
+}
+
+/**
+ * Import user-supplied GPX files (and/or .zip bundles) into the unified cache. Adds
+ * `gpx`-source rides that coexist with Beeline's; never needs an account.
+ */
+function importGpxFiles(files: File[]): void {
+  if (!files.length) return;
+  void getRealController().then((c) => {
+    if (controller !== c) activate(c, false);
+    hideSources();
+    run(() => c.importGpx(files));
+  });
+}
+
+/** Open the hidden GPX file picker (multi-select .gpx / .zip). */
+function openGpxFilePicker(): void {
+  const input = document.getElementById("gpxFile") as HTMLInputElement | null;
+  input?.click();
+}
+
+/** Choose the GPX source from the Sources dialog: ensure the app is active and
+ *  prompt for files to import. */
+function goGpx(): void {
+  void getRealController().then((c) => {
+    if (controller !== c) activate(c, false);
+    openGpxFilePicker();
+  });
 }
 
 // --------------------------------------------------------------------------- //
@@ -441,6 +538,7 @@ let STATE: AppState = {
   },
   connected: false,
   device: "",
+  sources: [],
 };
 let ACTIVE = new Set<string>(); // keys queued or running
 let RUNNING = new Set<string>(); // keys in the currently running task
@@ -466,6 +564,7 @@ const STATUS_VALUES: ReadonlyArray<Filters["status"]> = [
 ];
 const TRI_VALUES: ReadonlyArray<TriState> = ["any", "yes", "no"];
 const DELETED_VALUES: ReadonlyArray<Filters["deleted"]> = ["any", "only", "none"];
+const SOURCE_VALUES: ReadonlyArray<Filters["source"]> = ["all", "beeline", "gpx"];
 
 /** A finite, non-negative number or null (for the distance bounds). */
 function sanitizeBound(v: unknown): number | null {
@@ -487,10 +586,10 @@ function loadFilters(): Filters {
     if (STATUS_VALUES.includes(o.status as Filters["status"])) f.status = o.status!;
     if (TRI_VALUES.includes(o.gps as TriState)) f.gps = o.gps!;
     if (TRI_VALUES.includes(o.cached as TriState)) f.cached = o.cached!;
-    if (TRI_VALUES.includes(o.details as TriState)) f.details = o.details!;
     if (TRI_VALUES.includes(o.destination as TriState)) f.destination = o.destination!;
     if (TRI_VALUES.includes(o.named as TriState)) f.named = o.named!;
     if (DELETED_VALUES.includes(o.deleted as Filters["deleted"])) f.deleted = o.deleted!;
+    if (SOURCE_VALUES.includes(o.source as Filters["source"])) f.source = o.source!;
     if (typeof o.device === "string") f.device = o.device;
     f.distMin = sanitizeBound(o.distMin);
     f.distMax = sanitizeBound(o.distMax);
@@ -510,9 +609,9 @@ function saveFilters(): void {
 }
 
 const filters: Filters = loadFilters();
-// Which GPX split-button menu is open, if any: a ride key for a per-ride button or
-// "sel" for the selection toolbar. Kept at module scope (like openStats/selected) so
-// it survives the frequent re-renders the job ticker triggers.
+// Which menu is open, if any: a ride key for a per-ride overflow button, or "state"
+// for the consolidated header actions menu. Kept at module scope (like openStats/
+// selected) so it survives the frequent re-renders the job ticker triggers.
 let openMenu: string | null = null;
 // Whether the queue panel's "Up next" list is expanded. Module-scope so it
 // survives the frequent re-renders the job ticker triggers; starts open so the
@@ -522,7 +621,6 @@ let queueExpanded = true;
 // scope so it survives the job ticker's re-renders; auto-resets when work ends so
 // the next batch shows itself rather than staying hidden silently.
 let jobHidden = false;
-let preset = "month";
 let statGran: Granularity | "auto" = "auto";
 let statMetric: "distance" | "speed" = "distance";
 // Persistent error stack. Every error — failed jobs AND standalone connection/
@@ -590,16 +688,13 @@ const OSM_ATTRIBUTION =
 const mapRegistry = new Map<string, L.Map>();
 
 /** Markup for a ride's mini-map + its caption. */
-function trackBlock(key: string, track: string): string {
-  // Beeline rides carry the FULL route polyline from the download, so there's no
-  // GPX to fetch and no "rough approximation" caveat — the map is the real track.
-  const beeline = beelineMode();
+function trackBlock(key: string, track: string, source: RideSource): string {
+  // Beeline rides carry the FULL route polyline from the download (the map is the
+  // real track, no caveat); an imported GPX ride's displayed line is a simplified
+  // sketch of its original, so it gets the "rough approximation" note.
+  const rough = source !== "beeline";
   if (!track) {
-    if (beeline) {
-      return `<div class="rmaphint">No route recorded for this ride.</div>`;
-    }
-    // Details are open but we have no route yet — point the user at the GPX button.
-    return `<div class="rmaphint">No map yet — press <b>GPX</b> to download this ride and draw a rough route.</div>`;
+    return `<div class="rmaphint">No route available for this ride.</div>`;
   }
   return (
     `<div class="rmapwrap">` +
@@ -608,7 +703,7 @@ function trackBlock(key: string, track: string): string {
     `<svg class="mi mi-expand" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` +
     `</button>` +
     `</div>` +
-    (beeline ? "" : `<div class="rmapnote">Rough approximation only — not the full GPX.</div>`)
+    (rough ? `<div class="rmapnote">Rough approximation only — not the full GPX.</div>` : "")
   );
 }
 
@@ -634,7 +729,7 @@ function detailsBlock(r: RideView): string {
   }
   return (
     `<div class="stats open" id="st-${esc(r.key)}">${fmtStats(r)}</div>` +
-    trackBlock(r.key, r.track)
+    trackBlock(r.key, r.track, r.source)
   );
 }
 
@@ -992,9 +1087,18 @@ function renderRideSummary(): void {
  *  track loaded the time/elevation are REAL (read from the nearest recorded point);
  *  otherwise the time is an even-pace estimate (rendered with a "~"). */
 function onRideMapHover(e: L.LeafletMouseEvent): void {
-  const out = document.getElementById("rideMapHover");
-  if (!rideMapBig || !rideHover || !out) return;
-  const cur = e.containerPoint;
+  updateRideHoverAt(e.containerPoint, 28);
+}
+
+/**
+ * Light up the nearest along-track point to a container-pixel position — the shared
+ * core of the desktop hover AND the mobile tap (Leaflet `mousemove` never fires on
+ * touch, so a tap drives this instead). Clears when the position is farther than
+ * `maxDistPx` from the route, so an off-route tap/hover dismisses the marker. The
+ * tap path passes a larger radius than a mouse hover since a fingertip is coarser.
+ */
+function updateRideHoverAt(cur: L.Point, maxDistPx: number): void {
+  if (!rideMapBig || !rideHover) return;
   const px = rideHover.px;
   let best = Number.POSITIVE_INFINITY;
   let bestKm = 0;
@@ -1022,7 +1126,7 @@ function onRideMapHover(e: L.LeafletMouseEvent): void {
       bestLatLng = [la[0] + t * (lb[0] - la[0]), la[1] + t * (lb[1] - la[1])];
     }
   }
-  if (best > 28 || !bestLatLng) {
+  if (best > maxDistPx || !bestLatLng) {
     clearRideTrackPoint();
     return;
   }
@@ -1056,6 +1160,7 @@ function showRideTrackPoint(latLng: [number, number], idx: number, km: number): 
       weight: 2,
       fillColor: "#fc5200",
       fillOpacity: 1,
+      interactive: false, // let taps pass through to the map (mobile tap-to-place)
     }).addTo(rideMapBig);
   } else {
     rideMapMarker.setLatLng(latLng);
@@ -1291,6 +1396,11 @@ function openRideMap(key: string): void {
   map.on("move zoom resize zoomend moveend", reprojectRideHover);
   map.on("mousemove", onRideMapHover);
   map.on("mouseout", clearRideTrackPoint);
+  // Touch has no hover: a tap on (or near) the route places and syncs the dot the
+  // same way a desktop hover does. Leaflet fires `click` for both mouse and touch,
+  // so this is the mobile entry point for "show & sync the marker". A generous
+  // radius accommodates an imprecise fingertip; a tap well off the route clears it.
+  map.on("click", (e: L.LeafletMouseEvent) => updateRideHoverAt(e.containerPoint, 44));
 }
 
 /** Fetch the open ride's full recorded track, then upgrade the map in place. On
@@ -1745,6 +1855,14 @@ const mapAreaSelect: AreaSelect = createAreaSelect({
   clickPx: CLICK_PX,
 });
 
+// "Locate me" on the all-rides map: drop a live marker at the device position so the
+// user can see where they are against their rides.
+const mapLocate: Locate = createLocate({
+  getMap: () => allRidesMap,
+  button: document.getElementById("btnMapLocate"),
+  onError: (msg) => toast(msg, true),
+});
+
 /** Switch to the Explore view and reveal a specific ride's details. */
 function openRideInExplore(key: string): void {
   const ride = STATE.rides.find((r) => r.key === key);
@@ -1820,8 +1938,9 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
   const rides = inRange.slice().sort((a, b) => compareRideKeysDesc(a.key, b.key));
   if (live.length === 0) {
     side.innerHTML =
-      `<div class="ms-empty">No rides yet. Sign in to your <b>Beeline</b> account to load them, ` +
-      `then <b>GPX</b> on a ride to download its route and see it here.</div>`;
+      `<div class="ms-empty">No rides on the map yet. ` +
+      `<button type="button" class="linkbtn" data-act="open-sources">Connect a source</button> ` +
+      `to fill your library, then your routes show up here.</div>`;
     return;
   }
   const items = rides
@@ -1967,11 +2086,13 @@ function applyView(): void {
   document.getElementById("exploreView")?.classList.toggle("hidden", isMap || isStats);
   document.getElementById("mapView")?.classList.toggle("hidden", !isMap);
   document.getElementById("statsView")?.classList.toggle("hidden", !isStats);
-  document.getElementById("scanbar")?.classList.toggle("hidden", isMap || isStats);
   if (!isMap && document.body.classList.contains("map-expanded")) setMapExpanded(false);
   if (!isStats && document.body.classList.contains("heat-expanded")) setHeatExpanded(false);
   if (!isMap && mapAreaSelect.isArmed()) mapAreaSelect.setMode(false);
   if (!isStats && heatAreaSelect.isArmed()) heatAreaSelect.setMode(false);
+  // Stop watching the device position when its map leaves the screen.
+  if (!isMap && mapLocate.isActive()) mapLocate.setActive(false);
+  if (!isStats && heatLocate.isActive()) heatLocate.setActive(false);
   document.querySelectorAll<HTMLButtonElement>("#viewTabs .vtab").forEach((b) => {
     b.classList.toggle("active", b.dataset.view === activeView);
   });
@@ -2080,6 +2201,13 @@ const heatAreaSelect: AreaSelect = createAreaSelect({
     renderHeatMatched();
   },
   clickPx: CLICK_PX,
+});
+
+// "Locate me" on the route-frequency heatmap (same control as the Map view).
+const heatLocate: Locate = createLocate({
+  getMap: () => freqHeatMap,
+  button: document.getElementById("btnHeatLocate"),
+  onError: (msg) => toast(msg, true),
 });
 
 /** On-screen pixel gap we aim to keep between heat points; half the glow radius keeps them merged. */
@@ -2358,9 +2486,9 @@ const KEBAB_ICON =
   '<circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>';
 
 /**
- * Inline SVG for the "Upload to Strava" action — an up-arrow into a tray, drawn
- * with strokes (matching the app's other line icons) so it reads as "upload" at
- * a glance. Shown only when the button collapses to icon-only on narrow screens
+ * Inline SVG for the "Push to Strava" action — an up-arrow into a tray, drawn
+ * with strokes (matching the app's other line icons) so it reads as "send/upload"
+ * at a glance. Shown only when the button collapses to icon-only on narrow screens
  * (the text label carries the meaning on wider ones); `currentColor` inherits
  * the accent button's text colour. Inline SVG, never a Unicode glyph.
  */
@@ -2369,18 +2497,6 @@ const UPLOAD_ICON =
   'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
   '<path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>';
 
-function badge(s: string): string {
-  const label =
-    (
-      {
-        pending: "upload pending",
-        uploaded: "uploaded",
-        processing: "working",
-        unknown: "\u2014",
-      } as Record<string, string>
-    )[s] || s;
-  return `<span class="badge ${s}">${label}</span>`;
-}
 function queueBadge(key: string): string {
   if (RUNNING.has(key)) return `<span class="badge working">working</span>`;
   if (ACTIVE.has(key)) return `<span class="badge queued">queued</span>`;
@@ -2390,22 +2506,36 @@ function deletedBadge(): string {
   return `<span class="badge deleted" title="This ride is no longer in your Beeline account — it was deleted in the Beeline app.">deleted</span>`;
 }
 /**
- * Marks a ride whose rough route preview is already downloaded and ready to draw.
- * In Beeline mode every ride carries its track, so the badge is usually constant
- * (the GPS filter still finds the rare track-less one-offs).
- */
-function gpsBadge(): string {
-  return `<span class="badge gps" title="Route preview available — expand details to see the map.">gps</span>`;
-}
-/**
  * Subtle marker for a ride whose FULL recorded GPX is cached locally (real
  * per-point time + elevation), so its map/profile work offline and a save is
- * instant. Distinct from the `gps` badge, which only means the lightweight route
- * preview is present. Rendered as a small dot + "GPX" so it reads as a quiet
+ * instant. Rendered as a small dot + "GPX" so it reads as a quiet
  * "ready offline" hint, not another loud status pill.
  */
 function cachedBadge(): string {
   return `<span class="badge cached" title="Full recorded GPX is cached locally (real time + elevation) — its map and profile work offline and saving is instant.">GPX</span>`;
+}
+/**
+ * A tiny, icon-only marker for a ride's source, shown at the START of its title so
+ * the origin (Beeline cloud account vs an imported GPX file) is readable at a glance
+ * without opening a filter. Rendered ONLY when the library actually mixes sources —
+ * a single-source list needs no per-ride marker, so it stays clean. Icon-only (the
+ * source name lives in the tooltip) so it costs almost no width; a subtle source
+ * tint plus the cloud/file shape make the two instantly distinguishable.
+ */
+function sourceMark(source: RideSource, multiSource: boolean): string {
+  if (!multiSource) return "";
+  if (source === "gpx") {
+    return (
+      `<span class="src-mark src-gpx" title="Imported from a GPX file">` +
+      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M18 21H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h8l5 5v11a1 1 0 0 1-1 1z"/></svg>` +
+      `</span>`
+    );
+  }
+  return (
+    `<span class="src-mark src-beeline" title="From your Beeline account">` +
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A6 6 0 0 0 6.5 8.5 4 4 0 0 0 7 19z"/></svg>` +
+    `</span>`
+  );
 }
 function fmtStats(r: RideView): string {
   // Render the detail grid from the NORMALIZED numbers so a comma-decimal source
@@ -2429,11 +2559,17 @@ function fmtStats(r: RideView): string {
     )
     .join("");
 }
-function bars(up: number, pe: number, total: number): string {
-  if (!total) return "";
-  const u = Math.round((up / total) * 100);
-  const p = Math.round((pe / total) * 100);
-  return `<span class="bars"><i class="up" style="width:${u}%"></i><i class="pe" style="width:${p}%"></i></span>`;
+/**
+ * A source-agnostic riding-volume bar for a group header: the group's distance as a
+ * fraction of the busiest sibling group (`maxKm`). Replaces the old Strava
+ * upload-progress bar so the indicator means something for ANY ride library — glance
+ * down the year/month list to see where the big riding was. Always rendered (even
+ * empty) so the fixed-width column keeps every sibling row's meta aligned.
+ */
+function volumeBar(km: number, maxKm: number): string {
+  const pct = maxKm > 0 && km > 0 ? Math.max(3, Math.round((km / maxKm) * 100)) : 0;
+  const fill = pct > 0 ? `<i class="vol" style="width:${pct}%"></i>` : "";
+  return `<span class="bars" title="${fmtKm(km)} ridden">${fill}</span>`;
 }
 function fmtKm(v: number): string {
   return v >= 1000 ? `${(v / 1000).toFixed(1)}k km` : `${Math.round(v)} km`;
@@ -2448,12 +2584,45 @@ function fmtSpeed(v: number): string {
 
 // -- filter bar (predicates live in ./filter) -----------------------------
 
+/** The Strava-status chip cycles through these in order on each click; "all" is the
+ *  neutral (any) state. Kept in sync with `STATUS_CHIP_LABEL`. */
+const STATUS_CYCLE: Filters["status"][] = ["all", "not-uploaded", "processing", "uploaded"];
+/** Self-labeling text for the Strava-status chip (it can't use the tri-state ✓/✕). */
+const STATUS_CHIP_LABEL: Record<Filters["status"], string> = {
+  all: "Strava: any",
+  "not-uploaded": "Strava: not uploaded",
+  processing: "Strava: processing",
+  uploaded: "Strava: uploaded",
+};
+
+/** The Source chip cycles through these on each click; "all" is the neutral (any)
+ *  state. Kept in sync with `SOURCE_CHIP_LABEL`. */
+const SOURCE_CYCLE: Filters["source"][] = ["all", "beeline", "gpx"];
+/** Self-labeling text for the Source chip (a 3-way pick, not a tri-state ✓/✕). */
+const SOURCE_CHIP_LABEL: Record<Filters["source"], string> = {
+  all: "Source: any",
+  beeline: "Source: Beeline",
+  gpx: "Source: GPX",
+};
+
 /** Reflect the filter state in the bar: device options, chip labels, active classes. */
 function syncFilterBar(allRides: AppState["rides"]): void {
-  // Status segment.
-  document.querySelectorAll<HTMLButtonElement>("#fStatus button").forEach((b) => {
-    b.classList.toggle("active", b.dataset.fstatus === filters.status);
-  });
+  // Source chip (any / Beeline / GPX). Only shown once rides from more than one
+  // source coexist — with a single source there's nothing to narrow.
+  const sourceKinds = new Set(allRides.map((r) => r.source));
+  const multiSource = sourceKinds.size > 1;
+  const sourceChip = document.getElementById("fSource");
+  if (sourceChip) {
+    sourceChip.classList.toggle("hidden", !multiSource);
+    sourceChip.dataset.state = filters.source;
+    sourceChip.textContent = SOURCE_CHIP_LABEL[filters.source];
+    sourceChip.classList.toggle("on", filters.source !== "all");
+  }
+  if (!multiSource && filters.source !== "all") {
+    // Drop a now-meaningless source filter so a hidden control can't keep rides hidden.
+    filters.source = "all";
+    saveFilters();
+  }
 
   // Tri-state chips: glyph + active styling reflect the current state.
   const chip = (id: string, label: string, state: string, yes: string): void => {
@@ -2466,34 +2635,50 @@ function syncFilterBar(allRides: AppState["rides"]): void {
   };
   chip("fGps", "Route", filters.gps, "yes");
   chip("fCached", "Full GPX", filters.cached, "yes");
-  chip("fDetails", "Details", filters.details, "yes");
   chip("fDestination", "Destination", filters.destination, "yes");
   chip("fNamed", "Named", filters.named, "yes");
   chip("fDeleted", "Deleted", filters.deleted, "only");
 
-  // Source dropdown: rebuild options from the distinct devices present.
-  const sel = $<HTMLSelectElement>("#fDevice");
-  if (sel) {
-    const models = [...new Set(allRides.map((r) => r.device_model).filter(Boolean))].sort();
-    const hasMissing = allRides.some((r) => !r.device_model);
-    const want =
-      `<option value="all">All</option>` +
-      models.map((m) => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join("") +
-      (hasMissing ? `<option value="__none__">(no device)</option>` : "");
-    if (sel.dataset.opts !== want) {
-      sel.dataset.opts = want;
-      sel.innerHTML = want;
+  // Strava upload status is a 4-state cycle (any → not uploaded → processing →
+  // uploaded), so it can't use the tri-state ✓/✗ helper — render its current state as
+  // the chip's own label. Same pill, same accent-when-active as its peers, so it reads
+  // as one of the click-through filters rather than a segmented control.
+  const statusEl = document.getElementById("fStatus");
+  if (statusEl) {
+    statusEl.dataset.state = filters.status;
+    statusEl.textContent = STATUS_CHIP_LABEL[filters.status];
+    statusEl.classList.toggle("on", filters.status !== "all");
+  }
+
+  // Beeline-centric dimensions: Strava upload status, route-preview presence, full-
+  // GPX caching, synthesized-name and remote deletion are concepts that only exist
+  // for Beeline rides — a GPX import always carries its full track, takes its filename
+  // as its name, and is never deleted out from under us. So these controls can only
+  // ever narrow a Beeline library: show them only when Beeline rides are present, and
+  // neutralize any active one so a hidden control can't keep rides hidden. (Destination
+  // is NOT here — it now applies to both sources: Beeline rides route to a place, and a
+  // GPX ride's destination is user-editable, so the chip stays available either way.)
+  const hasBeeline = allRides.some((r) => r.source === "beeline");
+
+  const statusChip = document.getElementById("fStatus");
+  if (statusChip) statusChip.classList.toggle("hidden", !hasBeeline);
+  if (!hasBeeline && filters.status !== "all") {
+    filters.status = "all";
+    saveFilters();
+  }
+
+  for (const [id, key] of [
+    ["fGps", "gps"],
+    ["fCached", "cached"],
+    ["fNamed", "named"],
+    ["fDeleted", "deleted"],
+  ] as const) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle("hidden", !hasBeeline);
+    if (!hasBeeline && filters[key] !== "any") {
+      filters[key] = "any";
+      saveFilters();
     }
-    // Selected value may have vanished (e.g. cache cleared) — fall back to All.
-    const valid =
-      filters.device === "all" ||
-      models.includes(filters.device) ||
-      (filters.device === "__none__" && hasMissing);
-    if (!valid) filters.device = "all";
-    sel.value = filters.device;
-    // Mirror the chips: a non-"All" device turns the pill accent-orange so an
-    // active Source filter reads as active like the rest of the bar.
-    sel.closest(".fdevice")?.classList.toggle("on", filters.device !== "all");
   }
 
   // Distance inputs (don't clobber the field being typed into).
@@ -2522,9 +2707,14 @@ function syncFilterBar(allRides: AppState["rides"]): void {
 function cycleChip(which: string): void {
   const nextTri = (s: TriState): TriState =>
     s === "any" ? "yes" : s === "yes" ? "no" : "any";
-  if (which === "gps") filters.gps = nextTri(filters.gps);
+  if (which === "status") {
+    const i = STATUS_CYCLE.indexOf(filters.status);
+    filters.status = STATUS_CYCLE[(i + 1) % STATUS_CYCLE.length];
+  } else if (which === "source") {
+    const i = SOURCE_CYCLE.indexOf(filters.source);
+    filters.source = SOURCE_CYCLE[(i + 1) % SOURCE_CYCLE.length];
+  } else if (which === "gps") filters.gps = nextTri(filters.gps);
   else if (which === "cached") filters.cached = nextTri(filters.cached);
-  else if (which === "details") filters.details = nextTri(filters.details);
   else if (which === "destination") filters.destination = nextTri(filters.destination);
   else if (which === "named") filters.named = nextTri(filters.named);
   else if (which === "deleted") {
@@ -2538,10 +2728,10 @@ function clearFilters(): void {
   filters.status = "all";
   filters.gps = "any";
   filters.cached = "any";
-  filters.details = "any";
   filters.destination = "any";
   filters.named = "any";
   filters.deleted = "any";
+  filters.source = "all";
   filters.device = "all";
   filters.distMin = null;
   filters.distMax = null;
@@ -2740,14 +2930,25 @@ function renderConn(): void {
   const el = $("#connState");
   const disconnectBtn = $<HTMLButtonElement>("#btnDisconnect");
   const sourceBtn = $<HTMLButtonElement>("#btnSource");
+  const scanBtn = document.getElementById("btnScan") as HTMLButtonElement | null;
 
   sourceBtn.style.display = "";
 
-  const beeline = currentSource === "beeline";
+  // Does the user actually use Beeline? — connected now, the demo, has Beeline rides
+  // cached, or previously chose the Beeline profile. ONLY then do we surface the
+  // Beeline-account chrome (the connection state + the whole-history "Re-sync"), so a
+  // pure-GPX user isn't nagged by a red "not signed in" banner and a sync button that
+  // has nothing to sync. "Change source" stays visible as the way in to Beeline.
+  const usesBeeline =
+    isDemo ||
+    STATE.connected ||
+    STATE.rides.some((r) => r.source === "beeline") ||
+    rememberedProfile() === "beeline";
 
   if (isDemo) {
     el.textContent = "demo · Beeline";
     el.className = "cstate demo";
+    el.style.display = "";
     // No dedicated "Exit demo" button: the always-visible "Change source" already
     // leads out of the demo (picking any source replaces it), so a second exit
     // affordance would just be header clutter.
@@ -2755,26 +2956,37 @@ function renderConn(): void {
   } else if (STATE.connected) {
     el.textContent = STATE.device || "connected";
     el.className = "cstate on";
+    el.style.display = "";
     // No "Sign out" button: the password is never stored, so a plain page refresh
     // already drops account access (back to offline cached rides), and "Change
     // source" leads out — a dedicated sign-out would just be header clutter.
     disconnectBtn.style.display = "none";
-  } else if (beeline) {
+  } else if (usesBeeline) {
     // Showing cached Beeline rides without a live account — flag it in red so the
     // "stale, can't sync right now" state is unmistakable, and offer a way back in.
-    el.textContent = "offline — not signed in";
+    // Name the source so the state is clear once several sources can coexist.
+    el.textContent = "Beeline: offline — not signed in";
     el.className = "cstate err";
+    el.style.display = "";
     disconnectBtn.textContent = "Sign in";
     disconnectBtn.style.display = "";
   } else {
-    el.textContent = "not connected";
-    el.className = "cstate off";
+    // Pure-GPX (or empty): no Beeline footprint, so no account chrome at all — the
+    // connection state and Re-sync would be meaningless noise here.
+    el.style.display = "none";
     disconnectBtn.style.display = "none";
   }
 
-  // In Beeline mode the one action pulls the whole history at once: "Re-sync".
+  // The whole-history "Re-sync" pull is a Beeline-account action; hide it entirely
+  // for non-Beeline users (GPX rides come from import, not a sync).
+  if (scanBtn) scanBtn.style.display = usesBeeline ? "" : "none";
+
+  // The one Beeline scan action pulls the whole history at once: "Pull from Beeline".
   const scanLabel = document.getElementById("scanLabel");
-  if (scanLabel) scanLabel.textContent = beeline ? "Re-sync" : "Scan";
+  if (scanLabel) scanLabel.textContent = "Pull from Beeline";
+
+  // Keep the Sources dialog's Beeline card in step with the live connection.
+  renderSources();
 }
 
 function render(): void {
@@ -2793,7 +3005,18 @@ function render(): void {
   const emptyEl = $("#empty") as HTMLElement;
   if (allRides.length === 0) {
     emptyEl.style.display = "block";
-    emptyEl.innerHTML = "Sign in to your <b>Beeline</b> account to load your rides.";
+    // Light onboarding: one line on the model (a library fed by sources), then the
+    // two ways in as plain buttons + a demo link. Kept minimal on purpose.
+    emptyEl.innerHTML =
+      `<div class="onb">` +
+      `<h2 class="onb-title">Your ride library is empty</h2>` +
+      `<p class="onb-lede">Fill it from a <b>source</b> — your Beeline account or your own GPX files.</p>` +
+      `<div class="onb-cta">` +
+      `<button class="primary small" id="emptyConnect">Connect Beeline</button>` +
+      `<button class="ghost small" id="emptyAddGpx">Add GPX files…</button>` +
+      `</div>` +
+      `<p class="onb-foot">Just exploring? <a href="#" id="emptyDemo">Try the demo</a>.</p>` +
+      `</div>`;
   } else if (rides.length === 0) {
     emptyEl.style.display = "block";
     emptyEl.innerHTML =
@@ -2826,6 +3049,12 @@ function render(): void {
   const up = rides.filter((r) => r.status === "uploaded").length;
   const pe = rides.filter((r) => r.status === "pending" && !r.deleted).length;
   const del = rides.filter((r) => r.deleted).length;
+  // Strava upload is a Beeline-only capability; only surface its chrome (the totals
+  // segments, the "Push all" button, the Strava-status filter) when at least one
+  // ride can actually be pushed. A pure-GPX library never sees Strava UI it can't use.
+  const hasUploadable = allRides.some((r) => r.can_upload);
+  // Whether to mark each ride's source: only worth it once the library mixes sources.
+  const multiSource = new Set(allRides.map((r) => r.source)).size > 1;
   const shown = filtersActive(filters)
     ? `${rides.length} of ${allRides.length} rides`
     : `${rides.length} rides`;
@@ -2833,77 +3062,106 @@ function render(): void {
   // The "N selected" suffix doubles as a one-click "Clear selection" affordance.
   // Everything interpolated here is static text or a number, so innerHTML is safe.
   $("#totals").innerHTML =
-    `${shown} · ${up} uploaded · ${pe} upload pending` +
+    `${shown}` +
+    (hasUploadable ? ` · ${up} uploaded · ${pe} upload pending` : "") +
     (del ? ` · ${del} deleted` : "") +
     (nSel
       ? ` · <button class="selchip" id="selClear" title="Clear selection">${nSel} selected <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`
       : "");
 
-  // Batch actions apply to the current selection — disable + count-label them so
-  // "nothing to do" is obvious instead of a button that just toasts on click. The
-  // actions live behind one dropdown (Save/Fetch GPX + Upload), so the caret is
-  // disabled too when empty.
-  const selBtns: Array<[string, string]> = [
-    ["btnGpxSaveSel", "Save route GPX"],
-    ["btnGpxSaveSelFull", "Save full GPX"],
-    ["btnGpxFetchSel", "Fetch full GPX"],
-    ["btnUploadSel", "Upload selected to Strava"],
-  ];
-  for (const [id, base] of selBtns) {
-    const b = document.getElementById(id) as HTMLButtonElement | null;
-    if (!b) continue;
-    b.disabled = nSel === 0;
-    b.textContent = nSel ? `${base} (${nSel})` : base;
+  // Batch actions apply to the current selection — they live in the consolidated
+  // ⋯ menu's "Selected" group, which is shown only when something is selected, so
+  // the buttons inside are always actionable (no per-item disabled/count needed).
+  // "Push selected to Strava" only applies to upload-capable (Beeline) rides; hide it
+  // when the selection has none (e.g. a GPX-only pick), so the menu never offers an
+  // action that would silently skip everything chosen.
+  const selUploadBtn = document.getElementById("btnUploadSel") as HTMLButtonElement | null;
+  if (selUploadBtn) {
+    const selHasUploadable = [...selected].some(
+      (k) => allRides.find((r) => r.key === k)?.can_upload,
+    );
+    selUploadBtn.style.display = selHasUploadable ? "" : "none";
   }
-  // The selection actions live behind one labelled dropdown; without a fused primary
-  // button the caret would read as a lone icon, so promote it to a standalone
-  // `.menubtn` (the style the "Data" button uses).
-  const selCaret = document.querySelector<HTMLButtonElement>('[data-splitmenu="sel"]');
-  if (selCaret) {
-    selCaret.disabled = nSel === 0;
-    selCaret.classList.remove("caret");
-    selCaret.classList.add("menubtn");
-    selCaret.textContent = nSel ? `Selected ride actions (${nSel})` : "Selected ride actions";
-  }
-  // The whole selected-ride actions cluster only makes sense with a selection —
-  // hide it entirely when nothing is selected rather than showing disabled "Check
-  // selected"/"Selected ride actions" controls that can't do anything yet.
-  const selCluster = document.getElementById("selSplit");
-  if (selCluster) selCluster.style.display = nSel ? "" : "none";
+  // The whole "Push all to Strava" menu item + the Strava-status filter are
+  // Beeline-only; hide them when no ride can be pushed (a pure-GPX library).
+  const uploadAllBtn = document.getElementById("btnUploadPending") as HTMLButtonElement | null;
+  if (uploadAllBtn) uploadAllBtn.style.display = hasUploadable ? "" : "none";
+  document.getElementById("fStatus")?.classList.toggle("hidden", !hasUploadable);
+  // The selected-ride section only makes sense with a selection — hide the whole
+  // group (label + actions) when nothing is selected, and stamp its label with the
+  // count (the only place the count now lives in this menu).
+  const selGroup = document.getElementById("selGroup");
+  if (selGroup) selGroup.classList.toggle("hidden", nSel === 0);
+  const selGroupLabel = document.getElementById("selGroupLabel");
+  if (selGroupLabel) selGroupLabel.textContent = nSel ? `Selected (${nSel})` : "Selected";
 
   const sizeEl = $("#stateSize");
   if (sizeEl) {
-    // The header chip is the single "how much am I storing locally?" readout. The
-    // GPX cache lives in its own store and is usually the BIGGER consumer, so fold
-    // it in — but only show the GPX segment when the cache is non-empty, so users
-    // who never download full GPX see no extra clutter. The tooltip breaks it down
-    // and points at the separate flush; the in-menu button shows the per-cache detail.
+    // The header chip is the single "how much am I storing locally?" readout. GPX
+    // blobs live in their own stores and are usually the BIGGER consumer, so fold
+    // them in — distinguishing the re-fetchable Beeline cache from imported-GPX data,
+    // and showing each segment only when non-empty so a user with neither sees no
+    // clutter. The tooltip breaks it down; the Data menu repeats the split + the flush.
     const stateBytes = controller.stateBytes();
-    const gpxBytes = controller.gpxCacheBytes();
-    const gpxCount = controller.gpxCacheCount();
-    sizeEl.textContent = gpxCount
-      ? `${fmtBytes(stateBytes)} · ${fmtBytes(gpxBytes)} GPX`
-      : fmtBytes(stateBytes);
-    sizeEl.title = gpxCount
-      ? `Stored locally in this browser: ${fmtBytes(stateBytes)} of rides, settings & status` +
-        ` + ${fmtBytes(gpxBytes)} of cached full-GPX downloads (${gpxCount} ride${
-          gpxCount === 1 ? "" : "s"
-        }).\nClear the GPX cache on its own via Data ▸ Clear GPX cache. Export backs up` +
-        ` rides/settings; Reset clears everything.`
-      : "Size of all rides, settings and status stored locally in this browser." +
-        " Export to back it up; Reset to clear it.";
+    const cacheBytes = controller.gpxCacheBytes();
+    const cacheCount = controller.gpxCacheCount();
+    const dataBytes = controller.gpxDataBytes();
+    const dataCount = controller.gpxDataCount();
+    const segs = [fmtBytes(stateBytes)];
+    if (cacheCount) segs.push(`${fmtBytes(cacheBytes)} cache`);
+    if (dataCount) segs.push(`${fmtBytes(dataBytes)} GPX`);
+    sizeEl.textContent = segs.join(" · ");
+    const ride = (n: number) => `${n} ride${n === 1 ? "" : "s"}`;
+    const lines = [
+      `Stored locally in this browser:`,
+      `• ${fmtBytes(stateBytes)} — rides, settings & status`,
+    ];
+    if (cacheCount)
+      lines.push(
+        `• ${fmtBytes(cacheBytes)} — cached full-GPX downloads (${ride(cacheCount)}, clearable; re-downloaded from Beeline)`,
+      );
+    if (dataCount)
+      lines.push(
+        `• ${fmtBytes(dataBytes)} — imported GPX files (${ride(dataCount)}, your data; kept until you delete the ride)`,
+      );
+    lines.push(
+      cacheCount
+        ? `\nData ▸ Clear download cache frees the cache only. Export backs up rides/settings; Reset clears everything.`
+        : `\nExport backs up rides/settings; Reset clears everything.`,
+    );
+    sizeEl.title = lines.join("\n");
   }
 
-  // The GPX-cache flush is only meaningful when something is cached, so disable it
-  // when empty. The count + size aren't repeated here — the header size chip already
-  // shows the cache total, and the "Full GPX" filter lists exactly which rides hold it.
+  // Data-menu storage breakdown: spell out the cache-vs-data split so it's obvious
+  // what "Clear download cache" does and doesn't touch.
+  const storageInfo = document.getElementById("storageInfo");
+  if (storageInfo) {
+    const cacheCount = controller.gpxCacheCount();
+    const dataCount = controller.gpxDataCount();
+    const rows: string[] = [];
+    if (cacheCount)
+      rows.push(
+        `<span class="ms-row"><span>Download cache</span><span>${fmtBytes(controller.gpxCacheBytes())} · clearable</span></span>`,
+      );
+    if (dataCount)
+      rows.push(
+        `<span class="ms-row"><span>Imported GPX</span><span>${fmtBytes(controller.gpxDataBytes())} · your data</span></span>`,
+      );
+    storageInfo.innerHTML = rows.join("");
+    storageInfo.classList.toggle("hidden", rows.length === 0);
+  }
+
+  // The cache flush is only meaningful when something is cached, so disable it when
+  // empty and label it with the reclaimable size. Imported-GPX data is NOT counted
+  // here — it's never touched by a flush.
   const flushGpxBtn = document.getElementById("btnFlushGpx") as HTMLButtonElement | null;
   if (flushGpxBtn) {
-    flushGpxBtn.disabled = controller.gpxCacheCount() === 0;
+    const cacheCount = controller.gpxCacheCount();
+    flushGpxBtn.disabled = cacheCount === 0;
+    flushGpxBtn.textContent = cacheCount
+      ? `Clear download cache (${fmtBytes(controller.gpxCacheBytes())})`
+      : "Clear download cache";
   }
-
-  const tp = $<HTMLInputElement>("#trackPoints");
-  if (tp && document.activeElement !== tp) tp.value = String(STATE.settings.trackPointsPerKm);
 
   const allSelState = (keys: string[]): boolean | null => {
     const sel = keys.filter((k) => selected.has(k)).length;
@@ -2912,6 +3170,17 @@ function render(): void {
 
   const root = $("#months");
   root.innerHTML = "";
+  // Busiest-group distances, so the volume bars read as "relative to my biggest
+  // year / month". Years compare against years, months against all months.
+  const groupKm = (rs: AppState["rides"]) => rs.reduce((s, r) => s + (r.distance_km ?? 0), 0);
+  const maxYearKm = Math.max(
+    0,
+    ...years.map(([, ym]) => groupKm(ym.flatMap(([, m]) => m.rides))),
+  );
+  const maxMonthKm = Math.max(
+    0,
+    ...years.flatMap(([, ym]) => ym.map(([, m]) => groupKm(m.rides))),
+  );
   for (const [year, ymonths] of years) {
     const yKeys = ymonths.flatMap(([, m]) => m.rides.map((r) => r.key));
     const yRides = ymonths.flatMap(([, m]) => m.rides);
@@ -2920,6 +3189,9 @@ function render(): void {
     const ykm = yRides.reduce((s, r) => s + (r.distance_km ?? 0), 0);
     const yOpen = !openYears.has(`c${year}`);
     const ySel = allSelState(yKeys);
+    // The "up · pending" upload meta only applies to upload-capable (Beeline)
+    // rides — omit it for a GPX-only year.
+    const yUploadable = yRides.some((r) => r.can_upload);
 
     const ybox = document.createElement("div");
     ybox.className = "year";
@@ -2928,14 +3200,8 @@ function render(): void {
         <span class="caret${yOpen ? " open" : ""}" aria-hidden="true"></span>
         <input type="checkbox" class="selall" data-selyear="${year}" ${ySel === true ? "checked" : ""}>
         <span class="ytitle">${year}</span>
-        ${bars(yup, ype, yRides.length)}
-        <span class="ymeta">${yRides.length} rides · ${fmtKm(ykm)} · ${yup} up · ${ype} upload pending</span>
-        <span class="yactions${openMenu === `ovr-y:${year}` ? " open" : ""}">
-          <button class="small ghost ovr" data-splitmenu="ovr-y:${year}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-y:${year}`}" title="Actions for ${year}">${KEBAB_ICON}</button>
-          <span class="ovr-items">
-            <button class="small" data-act="upload-year" data-y="${year}">Upload pending to Strava</button>
-          </span>
-        </span>
+        ${volumeBar(ykm, maxYearKm)}
+        <span class="ymeta">${yRides.length} rides · ${fmtKm(ykm)}${yUploadable ? ` · ${yup} up · ${ype} upload pending` : ""}</span>
       </div>
       <div class="ybody" ${yOpen ? "" : 'style="display:none"'}></div>`;
     root.appendChild(ybox);
@@ -2950,6 +3216,7 @@ function render(): void {
       const isOpen = openMonths.has(mkey);
       const mKeys = m.rides.map((r) => r.key);
       const mSel = allSelState(mKeys);
+      const mUploadable = m.rides.some((r) => r.can_upload);
 
       const box = document.createElement("div");
       box.className = "month";
@@ -2958,14 +3225,8 @@ function render(): void {
           <span class="caret${isOpen ? " open" : ""}" aria-hidden="true"></span>
           <input type="checkbox" class="selall" data-selmonth="${mkey}" ${mSel === true ? "checked" : ""}>
           <span class="mtitle">${m.label}</span>
-          ${bars(mup, mpe, m.rides.length)}
-          <span class="mmeta">${m.rides.length} rides · ${fmtKm(mkm)} · ${mup} up · ${mpe} upload pending</span>
-          <span class="mactions${openMenu === `ovr-m:${mkey}` ? " open" : ""}">
-            <button class="small ghost ovr" data-splitmenu="ovr-m:${mkey}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-m:${mkey}`}" title="Actions for ${m.label}">${KEBAB_ICON}</button>
-            <span class="ovr-items">
-              <button class="small" data-act="upload-month" data-m="${mkey}">Upload pending to Strava</button>
-            </span>
-          </span>
+          ${volumeBar(mkm, maxMonthKm)}
+          <span class="mmeta">${m.rides.length} rides · ${fmtKm(mkm)}${mUploadable ? ` · ${mup} up · ${mpe} upload pending` : ""}</span>
         </div>
         <div class="rows ${isOpen ? "open" : ""}"></div>`;
       ybody.appendChild(box);
@@ -2990,20 +3251,21 @@ function render(): void {
         el.innerHTML = `
           <input type="checkbox" class="chk" data-key="${r.key}" ${selected.has(r.key) ? "checked" : ""}>
           <div class="rmain">
-            <div class="rtitle"><span class="rname"><span class="rtitle-text">${r.title || "Ride"}</span>${r.location ? `<span class="rtitle-loc">${r.location}</span>` : ""}</span> ${badge(r.status)} ${!beelineMode() && r.track ? gpsBadge() : ""} ${r.gpx_cached ? cachedBadge() : ""} ${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}</div>
-            <div class="rmeta">${r.key} · ${summaryDistance} · ${summaryDuration}
+            <div class="rtitle">${sourceMark(r.source, multiSource)}<span class="rname"><span class="rtitle-text">${r.title || "Ride"}</span>${r.location ? `<span class="rtitle-loc">${r.location}</span>` : ""}</span> ${r.source !== "gpx" && r.gpx_cached ? cachedBadge() : ""} ${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}</div>
+            <div class="rmeta">${r.date_key} · ${summaryDistance} · ${summaryDuration}
               <a href="#" data-stats="${r.key}">${so ? "hide" : "details"}</a></div>
             ${so ? detailsBlock(r) : ""}
           </div>
           <div class="rbtns${openMenu === `ovr-r:${r.key}` ? " open" : ""}">
-            <button class="small accent" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ' title="Upload to Strava"'}>${UPLOAD_ICON}<span class="btn-label">Upload to Strava</span></button>
+            ${r.can_upload ? `<button class="small accent" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ' title="Push to Strava (via Beeline)"'}>${UPLOAD_ICON}<span class="btn-label">Push to Strava</span></button>` : ""}
             <button class="small ghost ovr" data-splitmenu="ovr-r:${r.key}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-r:${r.key}`}" title="More ride actions">${KEBAB_ICON}</button>
             <span class="ovr-items">
               <button class="small ghost" data-act="gpx-save-one" data-key="${r.key}" title="Save the route-only GPX (the stored shape — no timestamps or elevation; instant, works offline)">Save route GPX</button>
               <button class="small ghost" data-act="gpx-save-full-one" data-key="${r.key}" title="Download the full recorded GPX (real timestamps + elevation) and save it to disk">Save full GPX</button>
               <button class="small ghost" data-act="gpx-fetch-one" data-key="${r.key}" title="${r.gpx_cached ? "Full GPX is cached — fetch again to refresh it (no file saved)" : "Fetch the full recorded GPX into the local cache without saving a file (pre-warms offline use + the map)"}">${r.gpx_cached ? "Fetch full GPX ✓" : "Fetch full GPX"}</button>
-              ${r.deleted ? "" : `<button class="small ghost" data-act="rename-one" data-key="${r.key}" title="Rename this ride on Beeline">Rename…</button>`}
-              ${r.deleted ? "" : `<button class="small danger" data-act="delete-one" data-key="${r.key}" title="Delete this ride from Beeline">Delete…</button>`}
+              ${r.deleted ? "" : `<button class="small ghost" data-act="rename-one" data-key="${r.key}" title="Rename this ride">Rename…</button>`}
+              ${r.deleted || r.source !== "gpx" ? "" : `<button class="small ghost" data-act="destination-one" data-key="${r.key}" title="Set or edit this ride's destination (the place it went to)">${r.location.trim() ? "Edit destination…" : "Set destination…"}</button>`}
+              ${r.deleted ? "" : `<button class="small danger" data-act="delete-one" data-key="${r.key}" title="Delete this ride">Delete…</button>`}
             </span>
           </div>`;
         rowsEl.appendChild(el);
@@ -3014,12 +3276,13 @@ function render(): void {
   if (activeView === "map") mountAllRidesMap();
   else if (activeView === "stats") mountStatsView();
   else mountMaps();
-  // The selection toolbar's split button lives in static markup (not rebuilt
-  // here), so sync its open state from the shared `openMenu` flag.
-  const selSplit = document.getElementById("selMenu")?.closest(".split");
-  selSplit?.classList.toggle("open", openMenu === "sel");
+  // The consolidated actions menu lives in static markup (not rebuilt here), so
+  // sync its open state from the shared `openMenu` flag.
   const stateSplit = document.getElementById("stateMenu")?.closest(".split");
   stateSplit?.classList.toggle("open", openMenu === "state");
+  // First paint is done with real state — drop the boot guard that kept the static
+  // header's Beeline connection chrome hidden, so it never flashed in then out.
+  document.body.classList.remove("booting");
   lastSig = stateSig();
 }
 
@@ -3223,18 +3486,8 @@ function pushError(title: string, full: string): void {
 
 const keysOfMonth = (m: string): string[] =>
   STATE.rides.filter((r) => r.month_key === m).map((r) => r.key);
-const pendingOfMonth = (m: string): string[] =>
-  STATE.rides
-    .filter((r) => r.month_key === m && r.status === "pending" && !r.deleted)
-    .map((r) => r.key);
 const keysOfYear = (y: string): string[] =>
   STATE.rides.filter((r) => (r.month_key || "").slice(0, 4) === y).map((r) => r.key);
-const pendingOfYear = (y: string): string[] =>
-  STATE.rides
-    .filter(
-      (r) => (r.month_key || "").slice(0, 4) === y && r.status === "pending" && !r.deleted,
-    )
-    .map((r) => r.key);
 
 function toggleGroup(keys: string[]): void {
   const allSel = keys.length > 0 && keys.every((k) => selected.has(k));
@@ -3406,22 +3659,6 @@ function run(fn: () => void): void {
   }
 }
 
-function doScan(): void {
-  // Beeline has no time-window scan — "Re-sync" always pulls the whole history.
-  // When signed out (cached-rides mode), this prompts for the password first, then
-  // runs the sync once authenticated (see withBeelineAccess).
-  if (beelineMode()) {
-    withBeelineAccess(() => run(() => controller.scan("all", null)));
-    return;
-  }
-  const days = parseInt(($("#days") as HTMLInputElement).value, 10);
-  if (days > 0) {
-    run(() => controller.scan("custom", days));
-    return;
-  }
-  run(() => controller.scan(preset, null));
-}
-
 // --------------------------------------------------------------------------- //
 // Import / export
 // --------------------------------------------------------------------------- //
@@ -3439,7 +3676,7 @@ function exportRides(): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "beeline-toolkit-state.json";
+  a.download = "gpx-toolkit-state.json";
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -3530,35 +3767,37 @@ async function resetEverything(): Promise<void> {
     return;
   }
   controller.reset(); // clear the active controller's cache (IndexedDB) + job queue
-  forgetProfile(); // forget the chosen source so the picker leads next time
-  await goBeelineOffline(); // rebuild a fresh controller over the now-empty cache
-  showPicker(); // start fresh: let the user pick a source again
+  forgetProfile(); // forget the chosen source so the dialog leads next time
+  await openApp(); // rebuild a fresh controller over the now-empty cache
+  showSources({ welcome: true }); // start fresh: let the user reconnect a source
   toast("Local data cleared.");
 }
 
 /**
- * Flush only the persistent full-GPX cache, leaving rides and settings intact. The
- * cache can grow large (one gzipped GPX per downloaded ride); this reclaims that
- * space. Cached rides are simply re-fetched the next time they're saved.
+ * Flush only the re-fetchable GPX **download cache** (Beeline full-GPX), leaving
+ * rides, settings AND imported GPX files intact. The cache can grow large (one
+ * gzipped GPX per downloaded ride); this reclaims that space, and cached rides are
+ * simply re-downloaded next time. Imported GPX originals live in a separate data
+ * store and are never touched here.
  */
 async function flushGpxCache(): Promise<void> {
   openMenu = null; // close the Data menu we were invoked from
   const n = controller.gpxCacheCount();
   if (n === 0) {
-    toast("No cached GPX downloads to clear.");
+    toast("No cached downloads to clear.");
     return;
   }
   if (
     !confirm(
       `Clear ${n} cached GPX download${n === 1 ? "" : "s"} (${fmtBytes(
         controller.gpxCacheBytes(),
-      )})? Your rides and settings are kept; cached rides are re-fetched next time you save them.`,
+      )})? Your rides, settings and imported GPX files are kept; cached rides are re-downloaded from Beeline next time you save them.`,
     )
   ) {
     return;
   }
   await controller.flushGpxCache();
-  toast("GPX cache cleared.");
+  toast("Download cache cleared.");
 }
 
 // --------------------------------------------------------------------------- //
@@ -3569,22 +3808,27 @@ document.addEventListener("click", (e) => {
   if (target && target.tagName === "INPUT") return; // checkboxes handled on 'change'
   const t = (target.closest("button, a, .mhead, .yhead") as HTMLElement) || target;
 
-  // Source picker actions (modal): handle before anything else.
+  // Sources dialog actions (modal): handle before anything else.
   if (t.id === "btnDemoBeeline") {
-    hidePicker();
+    hideSources();
     return void goDemoBeeline();
   }
-  if (t.id === "btnPickDismiss") {
-    hidePicker();
-    return;
+  if (t.id === "btnBeelinePull") {
+    return pullFromBeeline();
+  }
+  if (t.id === "btnBeelineDisconnect") {
+    return void controller.disconnect();
+  }
+  if (t.id === "btnGpxSource") {
+    return goGpx();
   }
   if (t.id === "btnPickClose") {
-    hidePicker();
+    hideSources();
     return;
   }
-  // Click on the picker backdrop (outside the card) dismisses it.
+  // Click on the dialog backdrop (outside the card) dismisses it.
   if (target.id === "srcPick") {
-    hidePicker();
+    hideSources();
     return;
   }
 
@@ -3622,17 +3866,14 @@ document.addEventListener("click", (e) => {
   if (openMenu?.startsWith("ovr-") && t.dataset?.act) {
     openMenu = null;
   }
-  // The Data and Selected menus' entries live inside `.split`, so the outside-click
+  // The consolidated actions menu's entries live inside `.split`, so the outside-click
   // guard below skips them — dismiss the open menu here once one of its items is picked.
-  if ((openMenu === "state" || openMenu === "sel") && target.closest("#stateMenu, #selMenu")) {
+  if (openMenu === "state" && target.closest("#stateMenu")) {
     openMenu = null;
     render();
     // fall through so the click still triggers the chosen action
   }
-  if (
-    openMenu !== null &&
-    !target.closest(".split, .yactions.open, .mactions.open, .rbtns.open")
-  ) {
+  if (openMenu !== null && !target.closest(".split, .rbtns.open")) {
     openMenu = null;
     render();
     // fall through so this same click can still trigger whatever it landed on
@@ -3658,14 +3899,16 @@ document.addEventListener("click", (e) => {
     heatAreaSelect.setMode(!heatAreaSelect.isArmed());
     return;
   }
-  if (t.dataset?.rangereset) {
-    resetRange(t.dataset.rangereset as RangeView);
+  if (t.id === "btnMapLocate") {
+    mapLocate.setActive(!mapLocate.isActive());
     return;
   }
-  if (t.dataset?.fstatus) {
-    filters.status = t.dataset.fstatus as Filters["status"];
-    saveFilters();
-    applyState();
+  if (t.id === "btnHeatLocate") {
+    heatLocate.setActive(!heatLocate.isActive());
+    return;
+  }
+  if (t.dataset?.rangereset) {
+    resetRange(t.dataset.rangereset as RangeView);
     return;
   }
   // Mobile: the "Filters" toggle expands/collapses the otherwise space-hungry
@@ -3690,13 +3933,27 @@ document.addEventListener("click", (e) => {
     applyState();
     return;
   }
-  if (t.dataset?.preset) {
-    preset = t.dataset.preset;
-    ($("#days") as HTMLInputElement).value = "";
-    syncDaysField();
-    document.querySelectorAll<HTMLButtonElement>("#presets button").forEach((b) => {
-      b.classList.toggle("active", b.dataset.preset === preset);
-    });
+  if (t.id === "emptyAddGpx") {
+    e.preventDefault();
+    openGpxFilePicker();
+    return;
+  }
+  if (t.id === "emptyConnect") {
+    e.preventDefault();
+    showSources();
+    return;
+  }
+  if (t.id === "emptyDemo") {
+    e.preventDefault();
+    hideSources();
+    return void goDemoBeeline();
+  }
+  // Generic "connect a source" affordance used by the secondary empty states (Map
+  // side panel, Stats) — opens the Sources dialog so every empty view leads to the
+  // same place to fill the library.
+  if (t.dataset?.act === "open-sources") {
+    e.preventDefault();
+    showSources();
     return;
   }
   if (t.dataset?.gran) {
@@ -3715,17 +3972,17 @@ document.addEventListener("click", (e) => {
     render();
     return;
   }
-  if (t.id === "btnSource") return showPicker();
+  if (t.id === "btnSource") return showSources();
   // The disconnect slot only shows for an offline Beeline session, where it's a
   // "Sign in" shortcut to the focused re-auth prompt (connected/demo hide it; the
   // password is never stored so there's no "Sign out" — refresh/"Change source"
   // handle leaving).
-  if (t.id === "btnDisconnect") return showPicker({ reauth: true });
+  if (t.id === "btnDisconnect") return showSources({ reauth: true });
   if (t.id === "btnImport") return void ($("#importFile") as HTMLInputElement).click();
   if (t.id === "btnExport") return exportRides();
   if (t.id === "btnFlushGpx") return void flushGpxCache();
   if (t.id === "btnReset") return void resetEverything();
-  if (t.id === "btnScan") return doScan();
+  if (t.id === "btnScan") return pullFromBeeline();
   if (t.id === "btnCancel") return run(() => controller.cancel(null));
   if (t.id === "btnClear") return run(() => controller.clear());
   if (t.id === "btnQueueToggle") {
@@ -3792,11 +4049,11 @@ document.addEventListener("click", (e) => {
     if (!keys.length) return toast("No known pending rides.");
     void (async () => {
       const ok = await confirmDialog({
-        title: "Upload all to Strava?",
-        body: `This will upload ${keys.length} pending ride${
+        title: "Push all to Strava?",
+        body: `This will push ${keys.length} pending ride${
           keys.length === 1 ? "" : "s"
         } to Strava. Already-uploaded rides are skipped.`,
-        confirmLabel: "Upload all",
+        confirmLabel: "Push all",
       });
       if (ok) withBeelineAccess(() => run(() => controller.upload(keys)));
     })();
@@ -3838,7 +4095,28 @@ document.addEventListener("click", (e) => {
       if (newName === null) return; // cancelled
       if (newName === "") return toast("Ride name can't be empty.", true);
       if (newName === (ride.title || "")) return; // unchanged
-      withBeelineAccess(() => run(() => controller.rename(key, newName)));
+      withRideAccess(ride.source, () => run(() => controller.rename(key, newName)));
+    })();
+    return;
+  }
+  if (act === "destination-one") {
+    const key = t.dataset.key!;
+    openMenu = null;
+    render();
+    const ride = STATE.rides.find((r) => r.key === key);
+    if (!ride || ride.source !== "gpx") return;
+    void (async () => {
+      // `location` carries the leading ", " separator; prompt with the bare place.
+      const current = ride.location.replace(/^[\s,]+/, "");
+      const next = await promptDialog({
+        title: current ? "Edit destination" : "Set destination",
+        body: `Where did ${rideShortLabel(key) || key} go? Leave blank to clear it.`,
+        value: current,
+        confirmLabel: "Save",
+      });
+      if (next === null) return; // cancelled
+      if (next.trim() === current) return; // unchanged
+      run(() => controller.setDestination(key, next));
     })();
     return;
   }
@@ -3849,26 +4127,21 @@ document.addEventListener("click", (e) => {
     const ride = STATE.rides.find((r) => r.key === key);
     if (!ride) return;
     void (async () => {
+      const label = `“${ride.title || "Ride"}” (${rideShortLabel(key) || key})`;
+      const body =
+        ride.source === "beeline"
+          ? `Permanently delete ${label} from your Beeline account? This can't be undone. ` +
+            `It stays listed here, marked as deleted.`
+          : `Delete the imported ride ${label}? This removes its GPX from this browser and ` +
+            `can't be undone. It stays listed here, marked as deleted.`;
       const ok = await confirmDialog({
         title: "Delete ride?",
-        body:
-          `Permanently delete “${ride.title || "Ride"}” (${rideShortLabel(key) || key}) ` +
-          `from your Beeline account? This can't be undone. It stays listed here, marked as deleted.`,
+        body,
         confirmLabel: "Delete",
       });
-      if (ok) withBeelineAccess(() => run(() => controller.deleteRide(key)));
+      if (ok) withRideAccess(ride.source, () => run(() => controller.deleteRide(key)));
     })();
     return;
-  }
-  if (act === "upload-month") {
-    const keys = pendingOfMonth(t.dataset.m!);
-    if (!keys.length) return toast("No known pending rides this month.");
-    return withBeelineAccess(() => run(() => controller.upload(keys)));
-  }
-  if (act === "upload-year") {
-    const keys = pendingOfYear(t.dataset.y!);
-    if (!keys.length) return toast("No known pending rides this year.");
-    return withBeelineAccess(() => run(() => controller.upload(keys)));
   }
 
   if (t.dataset?.stats) {
@@ -3922,7 +4195,7 @@ document.addEventListener("keydown", (e) => {
   }
   const picker = document.getElementById("srcPick");
   if (picker && !picker.classList.contains("hidden")) {
-    hidePicker();
+    hideSources();
     return;
   }
   if (openMenu !== null) {
@@ -3986,14 +4259,9 @@ document.addEventListener("change", (e) => {
     importRides(cb.files[0]);
     cb.value = "";
   }
-  if (cb.id === "trackPoints") {
-    const v = parseInt(cb.value, 10);
-    if (Number.isFinite(v)) run(() => controller.setTrackPointsPerKm(v));
-  }
-  if (cb.id === "fDevice") {
-    filters.device = cb.value;
-    saveFilters();
-    applyState();
+  if (cb.id === "gpxFile" && cb.files && cb.files.length) {
+    importGpxFiles([...cb.files]);
+    cb.value = "";
   }
 });
 
@@ -4002,6 +4270,31 @@ document.addEventListener("pointerdown", (e) => {
   const win = (e.target as HTMLElement).closest?.<HTMLElement>(".rf-window");
   const which = win?.dataset.rangewin;
   if (win && (which === "map" || which === "stats")) onWindowDrag(which, win, e);
+});
+
+// Drag-and-drop GPX import: dropping .gpx files (or .zip bundles of them) anywhere
+// on the app imports them as gpx-source rides. We only intercept drags that
+// actually carry files so normal in-page dragging is untouched.
+function dragHasFiles(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes("Files");
+}
+document.addEventListener("dragover", (e) => {
+  if (!dragHasFiles(e)) return;
+  e.preventDefault();
+  document.body.classList.add("dragging-files");
+});
+document.addEventListener("dragleave", (e) => {
+  // Only clear when the pointer actually leaves the window (relatedTarget null).
+  if (!e.relatedTarget) document.body.classList.remove("dragging-files");
+});
+document.addEventListener("drop", (e) => {
+  document.body.classList.remove("dragging-files");
+  if (!dragHasFiles(e)) return;
+  e.preventDefault();
+  const files = [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(gpx|zip)$/i.test(f.name));
+  if (files.length) importGpxFiles(files);
+  else if (e.dataTransfer?.files.length)
+    toast("Drop .gpx files or a .zip bundle to import.", true);
 });
 
 // Live outlier-trim sliders: update labels and recompute the speed view as they move.
@@ -4034,23 +4327,6 @@ document.addEventListener("input", (e) => {
   run(() => controller.setSpeedTrim(slow, fast));
 });
 
-/** Keep the custom "last N days" pill in sync: highlight when set, grow to fit. */
-function syncDaysField(): void {
-  const input = $("#days") as HTMLInputElement;
-  const pill = $("#customDays");
-  const v = input.value;
-  pill.classList.toggle("set", v.length > 0);
-  // Auto-size: "n" placeholder width up to the digits actually typed.
-  input.style.width = `${Math.max(1, v.length || 1) + 1.2}ch`;
-  if (v)
-    document.querySelectorAll<HTMLButtonElement>("#presets button").forEach((b) => {
-      b.classList.remove("active");
-    });
-}
-
-$("#days").addEventListener("input", syncDaysField);
-syncDaysField();
-
 // Elevation profile ↔ route map sync: hovering the full-screen ride map's profile
 // strip lights up the matching point on the route above it (and the readout). The
 // host persists in the DOM across opens, so wire it once here; the SVG inside is
@@ -4058,6 +4334,9 @@ syncDaysField();
 const rideProfileEl = document.getElementById("rideMapProfile");
 if (rideProfileEl) {
   rideProfileEl.addEventListener("pointermove", onRideProfileHover);
+  // A tap (pointerdown without a move) must also place the dot, and on touch the
+  // first event of a drag is pointerdown — bind it so scrubbing starts immediately.
+  rideProfileEl.addEventListener("pointerdown", onRideProfileHover);
   rideProfileEl.addEventListener("pointerleave", clearRideTrackPoint);
 }
 
@@ -4170,11 +4449,13 @@ function trackViewportInset(): void {
 }
 trackViewportInset();
 
-// Boot: pick the right starting mode. Either way we open over the cached Beeline
-// rides (we never store the password, so we can't silently re-sign-in):
-//  - A remembered Beeline account lands straight on its cached rides;
-//    "Change source"/"Re-sync" lead to sign-in.
-//  - Otherwise (no profile) we also show the source picker on top.
-void goBeelineOffline().then(() => {
-  if (rememberedProfile() !== "beeline") showPicker();
+// Boot: open the app over the unified cache (all sources' rides coexist; we never
+// store the password, so a connected account isn't silently restored). On the
+// first-ever launch we open the Sources dialog with the welcome intro to explain
+// where rides come from; afterwards the app just opens to its library.
+void openApp().then(() => {
+  if (!hasBeenWelcomed()) {
+    markWelcomed();
+    showSources({ welcome: true });
+  }
 });

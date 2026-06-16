@@ -97,9 +97,7 @@ function dedupeNames(entries: ZipEntry[]): string[] {
     if (count === 0) return e.name;
     const dot = e.name.lastIndexOf(".");
     const n = count + 1;
-    return dot > 0
-      ? `${e.name.slice(0, dot)} (${n})${e.name.slice(dot)}`
-      : `${e.name} (${n})`;
+    return dot > 0 ? `${e.name.slice(0, dot)} (${n})${e.name.slice(dot)}` : `${e.name} (${n})`;
   });
 }
 
@@ -205,8 +203,7 @@ export async function buildZip(entries: ZipEntry[]): Promise<Uint8Array> {
     ...u16(0), // comment length
   ]);
 
-  const total =
-    offset + centralSize + eocd.length;
+  const total = offset + centralSize + eocd.length;
   const out = new Uint8Array(total);
   let pos = 0;
   for (const c of localChunks) {
@@ -218,5 +215,66 @@ export async function buildZip(entries: ZipEntry[]): Promise<Uint8Array> {
     pos += c.length;
   }
   out.set(eocd, pos);
+  return out;
+}
+
+// -- ZIP reading -------------------------------------------------------------
+
+/**
+ * Inflate a raw DEFLATE stream (ZIP method 8) via the native
+ * `DecompressionStream("deflate-raw")` — the mirror of `rawDeflate`. Available in
+ * all evergreen browsers and Node 21.2+.
+ */
+async function rawInflate(bytes: Uint8Array): Promise<Uint8Array> {
+  const ds = new DecompressionStream("deflate-raw");
+  const writer = ds.writable.getWriter();
+  void writer.write(bytes as BufferSource);
+  void writer.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+
+/**
+ * Read the files out of a ZIP archive — the dependency-free counterpart to
+ * `buildZip`. Parses the central directory (the reliable size/offset source),
+ * then for each entry copies STORE (method 0) bytes or inflates DEFLATE (method 8).
+ * Directory entries and any other compression method are skipped. Throws when the
+ * bytes aren't a ZIP (no end-of-central-directory record).
+ */
+export async function unzip(bytes: Uint8Array): Promise<ZipEntry[]> {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // Locate the End Of Central Directory record (signature 0x06054b50) by scanning
+  // back from the end (it sits before an optional trailing comment).
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= 0; i--) {
+    if (view.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error("not a valid ZIP archive");
+  const count = view.getUint16(eocd + 10, true);
+  let p = view.getUint32(eocd + 16, true); // central directory offset
+  const out: ZipEntry[] = [];
+  const names = new TextDecoder();
+  for (let i = 0; i < count; i++) {
+    if (p + 46 > bytes.length || view.getUint32(p, true) !== 0x02014b50) break;
+    const method = view.getUint16(p + 10, true);
+    const compSize = view.getUint32(p + 20, true);
+    const nameLen = view.getUint16(p + 28, true);
+    const extraLen = view.getUint16(p + 30, true);
+    const commentLen = view.getUint16(p + 32, true);
+    const localOff = view.getUint32(p + 42, true);
+    const name = names.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+    p += 46 + nameLen + extraLen + commentLen;
+    if (name.endsWith("/")) continue; // directory entry — no data
+    // The local header repeats its own name/extra lengths; the data follows it.
+    const lNameLen = view.getUint16(localOff + 26, true);
+    const lExtraLen = view.getUint16(localOff + 28, true);
+    const dataStart = localOff + 30 + lNameLen + lExtraLen;
+    const comp = bytes.subarray(dataStart, dataStart + compSize);
+    if (method === 0) out.push({ name, bytes: comp.slice() });
+    else if (method === 8) out.push({ name, bytes: await rawInflate(comp) });
+    // else: unsupported method (e.g. ZIP64/encrypted) — skip.
+  }
   return out;
 }

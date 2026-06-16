@@ -17,6 +17,29 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Transition from a Beeline uploader to the generic GPX Toolkit
+- **What:** Reframed the app from a single-purpose **Beeline → Strava uploader** into a
+  generic, multi-source **ride library** ("GPX Toolkit"). Rides now come from any source and
+  coexist in one unified, uid-keyed store (`${source}::${datetime}`): a local **GPX import**
+  source (`.gpx`/`.zip`, parsed and stored in the browser, never uploaded) alongside the
+  **Beeline Velo account** (whole-history pull + server-side Strava push). The `RideSource`
+  seam carries per-source `capabilities`, and a Controller source registry dispatches each
+  ride's actions to its own source. There is no per-source "mode": the app boots into the one
+  library, a **Sources** dialog connects/manages sources, and every Beeline/Strava-specific
+  surface is gated on a real signal (capability/connection), never a flag — chrome, filters,
+  wording and per-ride actions all adapt to the source in front of the user (e.g. GPX
+  delete/rename stay local; destination is editable for GPX, read-only for Beeline). Imported
+  GPX lives in a separate **data vault** (never flushed by a cache clear) vs. the re-fetchable
+  Beeline **cache**. The whole UI was unified and decluttered around this: one click-through
+  filter-chip vocabulary, a consolidated `⋯` actions menu, per-ride source markers, a
+  source-neutral first-run/empty experience, and a versioned, future-proof state schema.
+- **Why:** Beeline is now *one optional source*, not the whole product — the same explore /
+  map / stats / export experience should work for any ride a user has as GPX, and the app must
+  stay fully functional with no account at all. Gating on real capability (not a mode) is what
+  lets sources coexist correctly in one list while keeping each source's actions and copy
+  truthful; the unified uid-keyed store + data/cache split is what makes that coexistence safe
+  and efficient.
+
 ## Single-ride map: start/finish markers + speed profile toggle
 - **What:** The full-screen ride map now draws persistent **Start** (green) and
   **Finish** (red) dots at the route ends — green/red is the universal convention,

@@ -7,8 +7,8 @@
  * "any" / null bound) is a no-op.
  */
 
-import { isSynthesizedRideName } from "./beeline-api";
 import type { RideView } from "./controller";
+import { isSynthesizedRideName } from "./parsing";
 
 export type TriState = "any" | "yes" | "no";
 
@@ -20,14 +20,14 @@ export interface Filters {
   gps: TriState;
   /** Full recorded GPX present in the local cache (real time + elevation). */
   cached: TriState;
-  /** Checked-details (stats) presence. */
-  details: TriState;
-  /** Routed-destination presence (Beeline rides that navigated somewhere). */
+  /** Routed-destination presence (a ride that navigated/was tagged with a place). */
   destination: TriState;
   /** Real user-given name vs the auto time-of-day fallback ("Morning ride"). */
   named: TriState;
   /** Deletion: only deleted, hide deleted, or don't care. */
   deleted: "any" | "only" | "none";
+  /** Which backend a ride came from: "all", or a specific source kind. */
+  source: "all" | "beeline" | "gpx";
   /** Source device: "all", "__none__" (no device recorded), or a device model name. */
   device: string;
   /** Inclusive distance bounds in km; null means unbounded on that side. */
@@ -41,10 +41,10 @@ export function emptyFilters(): Filters {
     status: "all",
     gps: "any",
     cached: "any",
-    details: "any",
     destination: "any",
     named: "any",
     deleted: "any",
+    source: "all",
     device: "all",
     distMin: null,
     distMax: null,
@@ -77,10 +77,10 @@ export function filterActiveCount(f: Filters): number {
   if (f.status !== "all") n++;
   if (f.gps !== "any") n++;
   if (f.cached !== "any") n++;
-  if (f.details !== "any") n++;
   if (f.destination !== "any") n++;
   if (f.named !== "any") n++;
   if (f.deleted !== "any") n++;
+  if (f.source !== "all") n++;
   if (f.device !== "all") n++;
   if (f.distMin !== null || f.distMax !== null) n++;
   return n;
@@ -107,20 +107,9 @@ export function matchesFilters(f: Filters, r: RideView): boolean {
   if (f.cached === "yes" && !r.gpx_cached) return false;
   if (f.cached === "no" && r.gpx_cached) return false;
 
-  // Checked-details presence. The detail sheet adds speeds / moving time /
-  // elevation that the list card never shows, so any of those being known means
-  // the ride has been Checked (or came from a source that fetches full records).
-  const hasDetails =
-    r.avg_speed_kmh != null ||
-    r.max_speed_kmh != null ||
-    r.moving_sec != null ||
-    r.elevation_gain_m != null ||
-    r.elevation_loss_m != null;
-  if (f.details === "yes" && !hasDetails) return false;
-  if (f.details === "no" && hasDetails) return false;
-
   // Routed-destination presence. The location suffix is set only when the ride
-  // navigated to a place, so it doubles as the "has destination" signal.
+  // navigated to a place (Beeline) or was tagged with one (imported GPX), so it
+  // doubles as the "has destination" signal.
   const hasDestination = r.location.trim().length > 0;
   if (f.destination === "yes" && !hasDestination) return false;
   if (f.destination === "no" && hasDestination) return false;
@@ -134,6 +123,9 @@ export function matchesFilters(f: Filters, r: RideView): boolean {
   // Deletion.
   if (f.deleted === "only" && !r.deleted) return false;
   if (f.deleted === "none" && r.deleted) return false;
+
+  // Which backend the ride came from.
+  if (f.source !== "all" && r.source !== f.source) return false;
 
   // Source device the ride was scanned from.
   if (f.device === "__none__" && r.device_model) return false;

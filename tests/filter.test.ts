@@ -18,7 +18,8 @@ import {
  */
 function ride(over: Partial<RideView> = {}): RideView {
   return {
-    key: "Sat Jun 13 2026 at 14:22",
+    key: "beeline::Sat Jun 13 2026 at 14:22",
+    date_key: "Sat Jun 13 2026 at 14:22",
     title: "Morning ride",
     location: "",
     status: "pending",
@@ -35,6 +36,8 @@ function ride(over: Partial<RideView> = {}): RideView {
     elevation_gain_m: null,
     elevation_loss_m: null,
     device_model: "Pixel 10 Pro",
+    source: "beeline",
+    can_upload: true,
     month_key: "2026-06",
     month_label: "June 2026",
     uploaded_at: "",
@@ -72,7 +75,7 @@ describe("filtersActive", () => {
   it("is true once any dimension is narrowed", () => {
     expect(filtersActive(f({ status: "uploaded" }))).toBe(true);
     expect(filtersActive(f({ gps: "yes" }))).toBe(true);
-    expect(filtersActive(f({ details: "no" }))).toBe(true);
+    expect(filtersActive(f({ destination: "no" }))).toBe(true);
     expect(filtersActive(f({ deleted: "only" }))).toBe(true);
     expect(filtersActive(f({ device: "Pixel 10 Pro" }))).toBe(true);
     expect(filtersActive(f({ distMin: 5 }))).toBe(true);
@@ -143,7 +146,7 @@ describe("matchesFilters — status", () => {
   });
 });
 
-describe("matchesFilters — gps / details tri-states", () => {
+describe("matchesFilters — gps / cached tri-states", () => {
   it("gps yes/no keys off track presence", () => {
     expect(matchesFilters(f({ gps: "yes" }), ride({ track: "abc" }))).toBe(true);
     expect(matchesFilters(f({ gps: "yes" }), ride({ track: "" }))).toBe(false);
@@ -165,13 +168,6 @@ describe("matchesFilters — gps / details tri-states", () => {
     expect(matchesFilters(f({ cached: "no" }), ride({ track: "abc", gpx_cached: true }))).toBe(
       false,
     );
-  });
-
-  it("details yes/no keys off the presence of checked stats", () => {
-    expect(matchesFilters(f({ details: "yes" }), ride({ avg_speed_kmh: 20 }))).toBe(true);
-    expect(matchesFilters(f({ details: "yes" }), ride({}))).toBe(false);
-    expect(matchesFilters(f({ details: "no" }), ride({}))).toBe(true);
-    expect(matchesFilters(f({ details: "no" }), ride({ avg_speed_kmh: 20 }))).toBe(false);
   });
 
   it("destination yes/no keys off the location (routed-destination) suffix", () => {

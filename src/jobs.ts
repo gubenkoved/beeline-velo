@@ -14,7 +14,7 @@ export type Runner = (task: Task, report: Report) => Promise<void>;
 
 const COALESCE_KINDS = new Set(["upload", "download-gpx"]);
 
-export type TaskKind = "scan" | "upload" | "download-gpx" | "rename" | "delete";
+export type TaskKind = "scan" | "import" | "upload" | "download-gpx" | "rename" | "delete";
 export type TaskStatus = "queued" | "running" | "done" | "error" | "cancelled";
 
 export interface TaskSnapshot {

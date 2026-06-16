@@ -13,12 +13,25 @@
  * result, the progress callback, and the injectable sleep used for pacing/tests).
  */
 
-import { type RideCard, type RideDetail, rideDatetime } from "./parsing";
+import { type RideCard, type RideDetail, rideDatetime, splitUid } from "./parsing";
 import type { UpsertFields } from "./store";
 import type { FullTrack } from "./track";
 
 /** Which backend a source talks to (mirrors RideRecord.source). */
-export type SourceKind = "beeline";
+export type SourceKind = "beeline" | "gpx";
+
+/**
+ * What a source can do beyond reading rides, so the UI and Controller can gate
+ * source-dependent actions per ride rather than assuming every source behaves like
+ * Beeline. `upload` = can push rides to Strava (Beeline only — it's a server-side
+ * cloud function); `import` = accepts user-supplied ride files (the GPX source).
+ */
+export interface SourceCapabilities {
+  /** Can push its rides to Strava (Beeline's server-side upload). */
+  readonly upload: boolean;
+  /** Accepts user-supplied GPX files to add rides (the GPX source). */
+  readonly import: boolean;
+}
 
 // -- shared, backend-neutral seam types --------------------------------------
 
@@ -57,6 +70,13 @@ export interface CatalogResult {
   complete: boolean;
 }
 
+/** Outcome of importing user-supplied ride files (the GPX source). */
+export interface ImportResult {
+  /** Human descriptions of files that couldn't be imported (unreadable/empty GPX,
+   *  no track points, etc.) — surfaced so the user knows what didn't land. */
+  skipped: string[];
+}
+
 // A callback the long-running passes call to report progress and check for cancel.
 // It receives a short status message; returning true asks the operation to stop.
 export type Progress = (msg: string) => boolean | Promise<boolean>;
@@ -67,13 +87,21 @@ export type Sleep = (seconds: number) => Promise<void>;
 export const realSleep: Sleep = (seconds) =>
   new Promise((resolve) => setTimeout(resolve, Math.max(0, seconds) * 1000));
 
+/** Per-source file-name prefix for exported/bundled GPX (functional, not branding —
+ *  keeps cross-source files with the same datetime from colliding in a ZIP). */
+const SOURCE_FILE_PREFIX: Record<string, string> = { beeline: "Beeline", gpx: "GPX" };
+
 /**
  * A deterministic, collision-free GPX filename derived from a ride's (unique)
- * datetime key, so two rides that share a title never clobber each other.
+ * uid, so two rides that share a datetime — even across sources — never clobber
+ * each other. The source supplies the prefix; the datetime supplies the slug.
+ * Tolerates a bare datetime key (treated as Beeline) via `splitUid`.
  */
-export function gpxFilename(key: string): string {
-  const slug = key.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  return `Beeline-${slug || "ride"}.gpx`;
+export function gpxFilename(uid: string): string {
+  const { source, dateKey } = splitUid(uid);
+  const slug = dateKey.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const prefix = SOURCE_FILE_PREFIX[source] ?? "Ride";
+  return `${prefix}-${slug || "ride"}.gpx`;
 }
 
 /**
@@ -82,11 +110,11 @@ export function gpxFilename(key: string): string {
  * chronologically, then appends the ride's own title. Colons are rendered as `-`
  * (illegal in filenames), and any path separators / control chars in the title
  * are stripped. Falls back to a stamp-only name when the title is empty, and to
- * the device filename when the key can't be parsed into a date.
+ * the device filename when the uid can't be parsed into a date.
  */
-export function gpxDownloadName(key: string, title: string): string {
-  const dt = rideDatetime(key);
-  if (dt === null) return gpxFilename(key);
+export function gpxDownloadName(uid: string, title: string): string {
+  const dt = rideDatetime(splitUid(uid).dateKey);
+  if (dt === null) return gpxFilename(uid);
   const p2 = (n: number) => String(n).padStart(2, "0");
   const stamp =
     `${dt.getFullYear()}-${p2(dt.getMonth() + 1)}-${p2(dt.getDate())} ` +
@@ -111,6 +139,9 @@ export interface RideSource {
   /** Which backend this is. */
   readonly kind: SourceKind;
 
+  /** What this source can do beyond reading rides (gates source-dependent UI/actions). */
+  readonly capabilities: SourceCapabilities;
+
   /** Human label for the connection (shown in the UI, e.g. "Pixel 10 Pro" / "Beeline (a@b)"). */
   label(): string;
 
@@ -127,6 +158,18 @@ export interface RideSource {
     since?: Date | null,
     onCards?: (cards: RideCard[]) => void,
   ): Promise<CatalogResult>;
+
+  /**
+   * Import user-supplied ride files into this source (the GPX source only). Streams
+   * each parsed ride via `onCard` and resolves with the files that were skipped.
+   * Optional — implemented only when `capabilities.import` is true; the Controller
+   * checks for it before dispatching an import task.
+   */
+  importFiles?(
+    files: File[],
+    onCard: (card: RideCard) => void,
+    progress?: Progress,
+  ): Promise<ImportResult>;
 
   /** Upload the given pending rides to Strava, streaming each result via `onDetail`. */
   processTargets(

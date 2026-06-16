@@ -21,7 +21,8 @@ import { encodePolyline, type LatLon } from "../src/track";
 /** Build a minimal RideView; only the fields the map cares about matter. */
 function ride(over: Partial<RideView> = {}): RideView {
   return {
-    key: "Sat Jun 13 2026 at 14:22",
+    key: "beeline::Sat Jun 13 2026 at 14:22",
+    date_key: "Sat Jun 13 2026 at 14:22",
     title: "Morning ride",
     location: "",
     status: "uploaded",
@@ -38,6 +39,8 @@ function ride(over: Partial<RideView> = {}): RideView {
     elevation_gain_m: null,
     elevation_loss_m: null,
     device_model: "",
+    source: "beeline",
+    can_upload: true,
     month_key: "2026-06",
     month_label: "June 2026",
     uploaded_at: "",

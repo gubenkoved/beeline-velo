@@ -16,22 +16,36 @@ import {
   rideDatetime,
   rideMonth,
   rideShortLabel,
+  rideUid,
   sinceFromPreset,
+  splitUid,
+  uidDateKey,
 } from "./parsing";
 import {
   type GpxFile,
   type GpxMode,
   gpxDownloadName,
   gpxFilename,
-  type RideSource,
+  type RideSource as RideSourceApi,
   type SourceFactory,
+  type SourceKind,
 } from "./source";
-import { monthKey, monthLabel, type Settings, type Store, type UpsertFields } from "./store";
+import {
+  monthKey,
+  monthLabel,
+  type RideSource,
+  type Settings,
+  type Store,
+  type UpsertFields,
+} from "./store";
 import { encodedTrackToGpx, extractFullTrack, type FullTrack, gpxToRoughTrack } from "./track";
 import { buildZip } from "./zip";
 
 export interface RideView extends RideMetrics {
   key: string;
+  /** The bare datetime portion of `key` (for date/month labels). `key` is the
+   *  cross-source uid `${source}::${datetime}`; this is the parseable datetime. */
+  date_key: string;
   title: string;
   /** Extra location suffix gathered at check time (e.g. ", Amstelveen"); "" when none. */
   location: string;
@@ -52,6 +66,12 @@ export interface RideView extends RideMetrics {
   // measured track length when no reported distance was captured (see state()).
   /** Source label this ride was last scanned from ("" when never recorded). */
   device_model: string;
+  /** Which backend this ride came from ("beeline" | "gpx"). Drives the source
+   *  filter, the per-ride source badge, and action gating. */
+  source: RideSource;
+  /** True when this ride's source can push it to Strava (Beeline only). Gates the
+   *  per-row Upload action and Strava status chrome. */
+  can_upload: boolean;
   month_key: string;
   month_label: string;
   uploaded_at: string;
@@ -67,6 +87,8 @@ export interface AppState {
   settings: Settings;
   connected: boolean;
   device: string;
+  /** Which sources are currently connected/registered (drives picker + capability UI). */
+  sources: SourceKind[];
 }
 
 export type Transport = SourceFactory;
@@ -78,7 +100,16 @@ export class Controller {
   readonly store: Store;
   readonly jobs: JobQueue;
 
-  private source: RideSource | null = null;
+  /**
+   * Connected sources, keyed by kind. Rides from every registered source coexist in
+   * one Store (tagged by `source`); actions are dispatched per ride to that ride's
+   * source. The Beeline source is connected lazily via `sourceFactory` (it needs
+   * sign-in); stateless sources like GPX import are added via `registerSource`.
+   */
+  private readonly sources = new Map<SourceKind, RideSourceApi>();
+  /** The kind connected via `sourceFactory` (Beeline). Drives the legacy `connected`
+   *  flag + header label; null when signed out. */
+  private primaryKind: SourceKind | null = null;
   private deviceLabel = "";
   private readonly listeners = new Set<() => void>();
   private readonly gpxListeners = new Set<GpxListener>();
@@ -93,15 +124,36 @@ export class Controller {
   constructor(
     private readonly sourceFactory: SourceFactory,
     store: Store,
-    /** Persistent compressed full-GPX cache. Defaults to an ephemeral in-memory
-     *  one (demo/tests that don't supply a durable backend). */
+    /**
+     * Re-fetchable **cache**: full-GPX downloads for sources that can re-produce them
+     * on demand (Beeline's cloud). Safe to flush to reclaim space — anything cleared
+     * is simply re-downloaded. Defaults to an ephemeral in-memory one (demo/tests).
+     */
     private readonly gpxCache: GpxCache = GpxCache.memory(),
+    /**
+     * Primary **data**: the original bytes of GPX rides imported from local files —
+     * the ONLY copy, not re-fetchable from anywhere. Kept strictly separate from the
+     * cache (Android's data-vs-cache split) so a cache flush can NEVER delete it; it
+     * goes only when the ride is deleted or on a full reset. Defaults to in-memory.
+     */
+    private readonly gpxData: GpxCache = GpxCache.memory(),
   ) {
     this.store = store;
     this.jobs = new JobQueue(
       (task, report) => this.runTask(task, report),
       () => this.notify(),
     );
+  }
+
+  /**
+   * The persistent blob store that holds (or should hold) a ride's full GPX, chosen
+   * by source: an imported `gpx` ride's original is primary **data** (the gpxData
+   * vault — not re-fetchable), while every other source's full GPX is a re-fetchable
+   * **cache** entry. Routing every per-ride read/write through here is what keeps
+   * imported originals out of the flushable cache.
+   */
+  private blobFor(uid: string): GpxCache {
+    return splitUid(uid).source === "gpx" ? this.gpxData : this.gpxCache;
   }
 
   // -- change notification ----------------------------------------------
@@ -132,16 +184,16 @@ export class Controller {
    * full-export fallback (when the export gateway is unreachable but we still hold
    * the route).
    */
-  private buildCachedLightGpx(key: string): GpxFile | null {
-    const rec = this.store.rides.get(key);
-    if (!(rec && rec.source === "beeline" && rec.track)) return null;
+  private buildCachedLightGpx(uid: string): GpxFile | null {
+    const rec = this.store.rides.get(uid);
+    if (!rec?.track) return null;
     const title = rec.title || rec.title_base || "";
-    const xml = encodedTrackToGpx(rec.track, title || rideShortLabel(key) || key);
+    const xml = encodedTrackToGpx(rec.track, title || rideShortLabel(rec.key) || rec.key);
     if (!xml) return null;
     return {
-      key,
-      filename: gpxFilename(key),
-      downloadName: gpxDownloadName(key, title),
+      key: uid,
+      filename: gpxFilename(uid),
+      downloadName: gpxDownloadName(uid, title),
       bytes: new TextEncoder().encode(xml),
     };
   }
@@ -152,22 +204,22 @@ export class Controller {
    * full track so the ride's map shows real data offline. No network — this is the
    * reuse path that lets a re-download/bundle skip re-fetching already-saved rides.
    */
-  private async buildCachedFullGpx(key: string): Promise<GpxFile | null> {
-    const bytes = await this.gpxCache.get(key);
+  private async buildCachedFullGpx(uid: string): Promise<GpxFile | null> {
+    const bytes = await this.blobFor(uid).get(uid);
     if (!bytes) return null;
-    const rec = this.store.rides.get(key);
+    const rec = this.store.rides.get(uid);
     const title = rec ? rec.title || rec.title_base || "" : "";
-    if (!this.fullTracks.has(key)) {
+    if (!this.fullTracks.has(uid)) {
       try {
-        this.fullTracks.set(key, extractFullTrack(new TextDecoder().decode(bytes)));
+        this.fullTracks.set(uid, extractFullTrack(new TextDecoder().decode(bytes)));
       } catch {
         // A corrupt cached GPX still downloads fine; only the map upgrade is skipped.
       }
     }
     return {
-      key,
-      filename: gpxFilename(key),
-      downloadName: gpxDownloadName(key, title),
+      key: uid,
+      filename: gpxFilename(uid),
+      downloadName: gpxDownloadName(uid, title),
       bytes,
     };
   }
@@ -187,7 +239,7 @@ export class Controller {
   async loadCachedFullTrack(key: string): Promise<FullTrack | null> {
     const existing = this.fullTracks.get(key);
     if (existing) return existing;
-    const bytes = await this.gpxCache.get(key);
+    const bytes = await this.blobFor(key).get(key);
     if (!bytes) return null;
     try {
       const ft = extractFullTrack(new TextDecoder().decode(bytes));
@@ -206,56 +258,104 @@ export class Controller {
    * cache (so it works offline), and only then hits the source. Throws when the
    * ride has no recorded track or — when nothing is cached — the source isn't connected.
    */
-  async fetchFullTrack(key: string): Promise<FullTrack> {
-    const cached = this.fullTracks.get(key);
+  async fetchFullTrack(uid: string): Promise<FullTrack> {
+    const cached = this.fullTracks.get(uid);
     if (cached) return cached;
-    const fromCache = await this.loadCachedFullTrack(key);
+    const fromCache = await this.loadCachedFullTrack(uid);
     if (fromCache) return fromCache;
-    const source = this.sourceFor();
-    const ft = await source.fetchFullTrack(key);
-    this.fullTracks.set(key, ft);
+    const { source: kind, dateKey } = splitUid(uid);
+    const source = this.requireSource(kind as SourceKind);
+    const ft = await source.fetchFullTrack(dateKey);
+    this.fullTracks.set(uid, ft);
     this.notify();
     return ft;
   }
 
-  // -- connection --------------------------------------------------------
+  // -- connection / source registry --------------------------------------
 
+  /** True when the Beeline source (connected via `sourceFactory`) is signed in. */
   get connected(): boolean {
-    return this.source !== null;
+    return this.primaryKind !== null;
   }
 
-  async connect(): Promise<void> {
-    if (this.source) return;
-    const source = await this.sourceFactory();
-    this.source = source;
+  /** Connect the Beeline source and register it for dispatch. Uses the given factory
+   *  when provided (sign-in supplies fresh credentials), else the constructor one. */
+  async connect(factory?: SourceFactory): Promise<void> {
+    if (this.primaryKind !== null) return;
+    const source = await (factory ?? this.sourceFactory)();
+    this.sources.set(source.kind, source);
+    this.primaryKind = source.kind;
     this.deviceLabel = source.label();
     this.notify();
   }
 
   async disconnect(): Promise<void> {
-    if (this.source) {
-      await this.source.close();
+    if (this.primaryKind !== null) {
+      const source = this.sources.get(this.primaryKind);
+      if (source) await source.close();
+      this.sources.delete(this.primaryKind);
     }
-    this.source = null;
+    this.primaryKind = null;
     this.deviceLabel = "";
     this.notify();
   }
 
-  /** The connected source, or throw if nothing is connected. */
-  private sourceFor(): RideSource {
-    if (!this.source) {
-      throw new Error("Not connected — sign in first.");
+  /** Register an additional, already-connected source (e.g. the stateless GPX
+   *  import source). Its rides coexist with every other source's in one Store. */
+  registerSource(source: RideSourceApi): void {
+    this.sources.set(source.kind, source);
+    this.notify();
+  }
+
+  /** True when a source of the given kind is currently registered. */
+  hasSource(kind: SourceKind): boolean {
+    return this.sources.has(kind);
+  }
+
+  /** The registered source for a kind, or throw a clear, source-specific error. */
+  private requireSource(kind: SourceKind): RideSourceApi {
+    const source = this.sources.get(kind);
+    if (!source) {
+      throw new Error(
+        kind === "beeline" ? "Not connected — sign in first." : `No ${kind} source available.`,
+      );
     }
-    return this.source;
+    return source;
   }
 
   /**
-   * Per-ride attribution stamped onto every record we write while connected, so
-   * the cache records which source the info came from. Empty fields are omitted
-   * so they never overwrite a known value.
+   * Per-ride attribution stamped onto every record we write for a given source, so
+   * the cache records which source the info came from. Empty fields are omitted so
+   * they never overwrite a known value.
    */
-  private deviceFields(): UpsertFields {
-    return this.source ? this.source.deviceFields() : {};
+  private deviceFieldsFor(kind: SourceKind): UpsertFields {
+    return this.sources.get(kind)?.deviceFields() ?? {};
+  }
+
+  /** Whether a ride from this source can be pushed to Strava (capability, not
+   *  connection — the action itself re-auths if needed). */
+  private canUpload(source: RideSource): boolean {
+    return this.sources.get(source)?.capabilities.upload ?? source === "beeline";
+  }
+
+  /** Group ride uids by their source kind, mapping each to its bare datetime key
+   *  (the per-source namespace the seam speaks). */
+  private groupBySource(uids: string[]): Map<SourceKind, string[]> {
+    const groups = new Map<SourceKind, string[]>();
+    for (const uid of uids) {
+      const { source, dateKey } = splitUid(uid);
+      const kind = source as SourceKind;
+      const list = groups.get(kind) ?? [];
+      list.push(dateKey);
+      groups.set(kind, list);
+    }
+    return groups;
+  }
+
+  /** Normalize an incoming ride identity: a bare datetime key (legacy / single-source
+   *  callers) is treated as a Beeline uid; a real uid passes through. */
+  private normalizeUid(key: string): string {
+    return key.includes("::") ? key : rideUid("beeline", key);
   }
 
   // -- state for the UI --------------------------------------------------
@@ -263,6 +363,9 @@ export class Controller {
   state(): AppState {
     const records = [...this.store.rides.values()].sort((a, b) => a.key.localeCompare(b.key));
     const rides: RideView[] = records.map((r) => {
+      // The cross-source identity is the (source, datetime) uid; `r.key` is the bare
+      // datetime kept for date/month bucketing.
+      const uid = rideUid(r.source, r.key);
       // Split the fuller checked title into the scan name + colored location suffix.
       const base = r.title_base;
       const full = r.title;
@@ -277,7 +380,8 @@ export class Controller {
             ? r.track_km
             : null;
       return {
-        key: r.key,
+        key: uid,
+        date_key: r.key,
         title: hasSuffix ? base : full,
         location: hasSuffix ? full.slice(base.length) : "",
         status: r.strava_status,
@@ -294,12 +398,15 @@ export class Controller {
         elevation_gain_m: r.elevation_gain_m,
         elevation_loss_m: r.elevation_loss_m,
         device_model: r.device_model,
+        source: r.source,
+        can_upload: this.canUpload(r.source),
         month_key: monthKey(r),
         month_label: monthLabel(r),
         uploaded_at: r.uploaded_at,
         deleted: r.deleted,
         deleted_at: r.deleted_at,
-        gpx_cached: this.gpxCache.has(r.key),
+        // Full GPX present locally — in the cache (Beeline) OR the data vault (import).
+        gpx_cached: this.blobFor(uid).has(uid),
       };
     });
     return {
@@ -308,6 +415,7 @@ export class Controller {
       settings: { ...this.store.settings },
       connected: this.connected,
       device: this.deviceLabel,
+      sources: [...this.sources.keys()],
     };
   }
 
@@ -315,6 +423,7 @@ export class Controller {
 
   private async runTask(task: Task, report: Report): Promise<void> {
     if (task.kind === "scan") await this.doScan(task, report);
+    else if (task.kind === "import") await this.doImport(task, report);
     else if (task.kind === "upload") await this.doUpload(task, report);
     else if (task.kind === "download-gpx") await this.doDownloadGpx(task, report);
     else if (task.kind === "rename") await this.doRename(task, report);
@@ -326,7 +435,10 @@ export class Controller {
     const days = (task.payload.days as number | null) ?? null;
     const since = sinceFromPreset(preset, days);
     const label = preset !== "custom" ? preset : `last ${days}d`;
-    const source = this.sourceFor();
+    // Scanning is a Beeline concept (enumerate the cloud account); the GPX source
+    // is populated by import, not scan.
+    const kind: SourceKind = "beeline";
+    const source = this.requireSource(kind);
     let cancelled = false;
     const rep = (msg: string): boolean => {
       const c = report(msg);
@@ -338,9 +450,10 @@ export class Controller {
     const { cards, complete } = await source.enumerateCatalog(rep, since, (fresh) => {
       // Persist and surface each page of rides the moment they are found.
       for (const c of fresh) {
-        seen.add(c.key);
-        this.store.upsert(c.key, {
-          ...this.deviceFields(),
+        const uid = rideUid(kind, c.key);
+        seen.add(uid);
+        this.store.upsert(uid, {
+          ...this.deviceFieldsFor(kind),
           title_base: c.title,
           distance_km: c.distance_km,
           elapsed_sec: c.elapsed_sec,
@@ -357,15 +470,18 @@ export class Controller {
     // reconcile when the scan both ran to completion AND was verified to have read
     // the list end-to-end (`complete`). A cancelled scan is partial, and an
     // incomplete scan is unreliable — in either case treating unseen rides as
-    // deleted would be wrong.
+    // deleted would be wrong. Only THIS source's rides are reconciled — a Beeline
+    // scan must never tombstone an imported GPX ride.
     let removed = 0;
     if (!cancelled && complete) {
       for (const r of this.store.rides.values()) {
-        if (r.deleted || seen.has(r.key)) continue;
+        if (r.source !== kind) continue;
+        const uid = rideUid(r.source, r.key);
+        if (r.deleted || seen.has(uid)) continue;
         const dt = rideDatetime(r.key);
         if (dt === null) continue; // can't place it in the window — leave it be
         if (since !== null && dt < since) continue; // outside the scanned window
-        if (this.store.markDeleted(r.key)) removed++;
+        if (this.store.markDeleted(uid)) removed++;
       }
       if (removed) {
         this.store.save();
@@ -376,40 +492,101 @@ export class Controller {
     report(`scan done (${label}): ${cards.length} rides${suffix}`);
   }
 
+  /**
+   * Import user-supplied GPX files into the cache as `gpx`-source rides. Streams
+   * each parsed ride into the Store as it's read (mirrors a scan's persistence),
+   * but never reconciles deletions — an import only ADDS rides. The original GPX
+   * bytes are stashed in the GPX cache by the source so a later full export / map
+   * upgrade is served locally.
+   */
+  private async doImport(task: Task, report: Report): Promise<void> {
+    const kind: SourceKind = "gpx";
+    const source = this.requireSource(kind);
+    if (!source.importFiles) throw new Error("This source does not support importing files.");
+    const files = (task.payload.files as File[]) ?? [];
+    task.progress = { done: 0, total: files.length };
+    let added = 0;
+    const result = await source.importFiles(
+      files,
+      (card) => {
+        const uid = rideUid(kind, card.key);
+        this.store.upsert(uid, {
+          ...this.deviceFieldsFor(kind),
+          title_base: card.title,
+          distance_km: card.distance_km,
+          elapsed_sec: card.elapsed_sec,
+          ...(card.fields ?? {}),
+        });
+        this.store.save();
+        this.notify();
+        added++;
+        if (task.progress) task.progress.done++;
+      },
+      (msg) => report(msg),
+    );
+    const skipped = result.skipped ?? [];
+    const suffix = skipped.length ? `, ${skipped.length} skipped` : "";
+    report(`imported ${added} ride${added === 1 ? "" : "s"}${suffix}`);
+    if (skipped.length) {
+      const header = `${skipped.length} file${skipped.length === 1 ? "" : "s"} skipped:`;
+      throw new Error([header, ...skipped.map((s) => `  • ${s}`)].join("\n"));
+    }
+  }
+
   private async doUpload(task: Task, report: Report): Promise<void> {
-    const source = this.sourceFor();
     let uploaded = 0;
     let removed = 0;
+    let processed = 0;
     const failures: string[] = [];
-    // Seed live progress so the queue panel shows "0 of N" the moment work starts;
-    // each processed ride bumps `done` below.
+    // Seed live progress so the queue panel shows "0 of N" the moment work starts.
     task.progress = { done: 0, total: task.keys.length };
-    const details = await source.processTargets(
-      new Set(task.keys),
-      (msg) => report(msg),
-      (d) => {
-        // Persist and surface each ride's status the moment it is read/uploaded.
-        this.persistDetail(d);
-        if (d.stravaStatus === "uploaded") uploaded++;
-        if (task.progress) task.progress.done++;
-      },
-      (missing) => {
-        // Searched the whole list and never found these → deleted from the source.
-        for (const key of missing) if (this.store.markDeleted(key)) removed++;
-        if (removed) {
-          this.store.save();
-          this.notify();
-        }
-      },
-      (key, reason) => {
-        // One ride threw mid-sweep: it was isolated and skipped so the rest still
-        // ran. Collect it and surface every failure as one persistent error below.
-        failures.push(`${rideShortLabel(key) || key}: ${reason}`);
-        if (task.progress) task.progress.done++;
-      },
+
+    // Group the selected rides by source. Only upload-capable sources (Beeline) run;
+    // rides from any other source are reported as skipped so a mixed selection does
+    // the right thing instead of silently dropping or erroring on GPX rides.
+    const groups = this.groupBySource(task.keys);
+    const skipped: string[] = [];
+    for (const [kind, dateKeys] of groups) {
+      const source = this.sources.get(kind);
+      if (!source?.capabilities.upload) {
+        for (const dk of dateKeys) skipped.push(rideShortLabel(dk) || dk);
+        if (task.progress) task.progress.done += dateKeys.length;
+        continue;
+      }
+      const details = await source.processTargets(
+        new Set(dateKeys),
+        (msg) => report(msg),
+        (d) => {
+          // Persist and surface each ride's status the moment it is read/uploaded.
+          this.persistDetail(d, kind);
+          if (d.stravaStatus === "uploaded") uploaded++;
+          if (task.progress) task.progress.done++;
+        },
+        (missing) => {
+          // Searched the whole list and never found these → deleted from the source.
+          for (const dk of missing) if (this.store.markDeleted(rideUid(kind, dk))) removed++;
+          if (removed) {
+            this.store.save();
+            this.notify();
+          }
+        },
+        (dk, reason) => {
+          // One ride threw mid-sweep: it was isolated and skipped so the rest still
+          // ran. Collect it and surface every failure as one persistent error below.
+          failures.push(`${rideShortLabel(dk) || dk}: ${reason}`);
+          if (task.progress) task.progress.done++;
+        },
+      );
+      processed += details.length;
+    }
+
+    const delSuffix = removed ? `, ${removed} deleted` : "";
+    const skipSuffix = skipped.length
+      ? `, ${skipped.length} skipped (only Beeline rides upload to Strava)`
+      : "";
+    report(
+      `done: ${uploaded} now on Strava (${processed} processed)${delSuffix}${skipSuffix}`,
     );
-    const suffix = removed ? `, ${removed} deleted` : "";
-    report(`done: ${uploaded} now on Strava (${details.length} processed)${suffix}`);
 
     if (failures.length) {
       // Fail the task so the UI shows a persistent, acknowledgeable error with full
@@ -417,7 +594,7 @@ export class Controller {
       // did succeed are already persisted above; this only reports the ones that didn't.
       const header = `${failures.length} of ${task.keys.length} ride${
         task.keys.length === 1 ? "" : "s"
-      } failed to upload (${details.length} succeeded):`;
+      } failed to upload (${processed} succeeded):`;
       throw new Error([header, ...failures.map((f) => `  • ${f}`)].join("\n"));
     }
   }
@@ -427,10 +604,11 @@ export class Controller {
    * it. The detail's normalized numbers flow straight in via upsert, which only
    * overwrites a metric when the new figure is known — so a Check fills in the
    * fuller stats without clobbering anything an earlier pass already captured.
+   * `kind` is the source the detail came from, used to build the cross-source uid.
    */
-  private persistDetail(d: RideDetail): void {
-    this.store.upsert(d.key, {
-      ...this.deviceFields(),
+  private persistDetail(d: RideDetail, kind: SourceKind): void {
+    this.store.upsert(rideUid(kind, d.key), {
+      ...this.deviceFieldsFor(kind),
       title: d.title,
       strava_status: d.stravaStatus,
       ...d.metrics,
@@ -467,136 +645,144 @@ export class Controller {
     // bytes here — important at the thousands-of-rides scale.
     const bundle: GpxFile[] = [];
 
-    // In LIGHT mode, rides that already carry their route in the cache (Beeline-
-    // sourced) can be exported entirely locally — no device, no network, no sign-in.
-    // Split those out and synthesize their GPX from the stored track; only the rest
-    // need the source. (This is why light GPX export works in the offline, cached-
-    // rides mode.) In FULL mode every ride must be fetched from the cloud render,
-    // EXCEPT rides whose full GPX we already downloaded once and cached on disk —
-    // those are served straight from the gzip cache (instant, offline), so only the
-    // rest hit the source.
+    // In LIGHT mode, rides that already carry their route in the cache can be
+    // exported entirely locally — no device, no network, no sign-in — regardless of
+    // source. Split those out and synthesize their GPX from the stored track; only
+    // the rest need a source. In FULL mode every ride must be fetched from the cloud
+    // render, EXCEPT rides whose full GPX we already downloaded once and cached on
+    // disk (Beeline) or stored at import (GPX) — those are served straight from the
+    // gzip cache (instant, offline), so only the rest hit a source.
     const remote: string[] = [];
     if (mode === "full") {
-      for (const key of task.keys) {
-        // Fetch-only: a ride already in the cache needs no work at all — count it
+      for (const uid of task.keys) {
+        // Fetch-only: a ride already cached locally needs no work at all — count it
         // done without reading/gunzipping the blob.
-        if (!save && this.gpxCache.has(key)) {
+        if (!save && this.blobFor(uid).has(uid)) {
           succeeded++;
           if (task.progress) task.progress.done++;
           continue;
         }
-        const file = save ? await this.buildCachedFullGpx(key) : null;
+        const file = save ? await this.buildCachedFullGpx(uid) : null;
         if (file) {
           bundle.push(file);
           succeeded++;
           if (task.progress) task.progress.done++;
         } else {
-          remote.push(key);
+          remote.push(uid);
         }
       }
     } else {
-      for (const key of task.keys) {
-        const rec = this.store.rides.get(key);
-        if (rec && rec.source === "beeline" && rec.track) {
-          const file = this.buildCachedLightGpx(key);
+      for (const uid of task.keys) {
+        const rec = this.store.rides.get(uid);
+        if (rec?.track) {
+          const file = this.buildCachedLightGpx(uid);
           if (file) {
             bundle.push(file);
             succeeded++;
           } else {
-            failures.push(`${rideShortLabel(key) || key}: no route track to export`);
+            failures.push(
+              `${rideShortLabel(uidDateKey(uid)) || uid}: no route track to export`,
+            );
           }
           if (task.progress) task.progress.done++;
         } else {
-          remote.push(key);
+          remote.push(uid);
         }
       }
     }
 
-    // Only touch the source for rides that still need a real download (rides
-    // without a cached full track). When every requested ride was handled locally,
-    // we never call sourceFor() — so no spurious "Not connected" in a source-less
-    // mode.
+    // Only touch a source for rides that still need a real download (rides without a
+    // cached full track). Group the remainder by source so each ride is fetched from
+    // its own backend; when every requested ride was handled locally, no source is
+    // touched — so no spurious "Not connected" in an offline mode.
     if (remote.length) {
-      const source = this.sourceFor();
-      const files = await source.downloadGpx(
-        new Set(remote),
-        (msg) => report(msg),
-        (file) => {
-          // Keep only a rough, compressed sketch of the route in the cache — never the
-          // full GPX. In full mode we ALSO parse the real track into the in-memory
-          // session cache so the ride's map can use its real time + elevation at once.
-          if (mode === "full") {
-            try {
-              this.fullTracks.set(
-                file.key,
-                extractFullTrack(new TextDecoder().decode(file.bytes)),
+      for (const [kind, dateKeys] of this.groupBySource(remote)) {
+        const source = this.requireSource(kind);
+        const files = await source.downloadGpx(
+          new Set(dateKeys),
+          (msg) => report(msg),
+          (file) => {
+            const uid = rideUid(kind, file.key);
+            // Keep only a rough, compressed sketch of the route in the cache — never the
+            // full GPX. In full mode we ALSO parse the real track into the in-memory
+            // session cache so the ride's map can use its real time + elevation at once.
+            if (mode === "full") {
+              try {
+                this.fullTracks.set(
+                  uid,
+                  extractFullTrack(new TextDecoder().decode(file.bytes)),
+                );
+              } catch {
+                // A malformed GPX shouldn't sink the download; the rough sketch below
+                // still drives the display map.
+              }
+              // Persist the full GPX (gzipped) so a later save/bundle of this ride is
+              // instant and works offline. Fire-and-forget: caching is best-effort and
+              // must never delay or fail the download itself (quota errors surface via
+              // the cache's own onError). The bytes are only read, never mutated. A
+              // remote download is always a re-fetchable source, so this is the cache.
+              void this.blobFor(uid).put(uid, file.bytes).then((ok) => {
+                if (ok) this.notify();
+              });
+            }
+            const rough = gpxToRoughTrack(file.bytes, this.store.settings.trackPointsPerKm);
+            if (rough.polyline) {
+              this.store.upsert(uid, {
+                ...this.deviceFieldsFor(kind),
+                track: rough.polyline,
+                track_src_points: rough.srcPoints,
+                track_points: rough.keptPoints,
+                track_km: rough.km,
+                track_bytes: file.bytes.length,
+              });
+              this.store.save();
+              this.notify();
+            } else {
+              // We pulled the file but couldn't read a GPS track out of it. Don't store a
+              // bogus empty track; record it so the task surfaces a real, persistent error.
+              failures.push(
+                `${rideShortLabel(file.key) || file.key}: couldn't extract a GPS track from the downloaded GPX`,
               );
-            } catch {
-              // A malformed GPX shouldn't sink the download; the rough sketch below
-              // still drives the display map.
             }
-            // Persist the full GPX (gzipped) so a later save/bundle of this ride is
-            // instant and works offline. Fire-and-forget: caching is best-effort and
-            // must never delay or fail the download itself (quota errors surface via
-            // the cache's own onError). The bytes are only read, never mutated.
-            void this.gpxCache.put(file.key, file.bytes).then((ok) => {
-              if (ok) this.notify();
-            });
-          }
-          const rough = gpxToRoughTrack(file.bytes, this.store.settings.trackPointsPerKm);
-          if (rough.polyline) {
-            this.store.upsert(file.key, {
-              ...this.deviceFields(),
-              track: rough.polyline,
-              track_src_points: rough.srcPoints,
-              track_points: rough.keptPoints,
-              track_km: rough.km,
-              track_bytes: file.bytes.length,
-            });
-            this.store.save();
-            this.notify();
-          } else {
-            // We pulled the file but couldn't read a GPS track out of it. Don't store a
-            // bogus empty track; record it so the task surfaces a real, persistent error.
-            failures.push(`${file.key}: couldn't extract a GPS track from the downloaded GPX`);
-          }
-          // Only retain bytes for delivery when actually saving; fetch-only has
-          // already cached them above and discards the bytes here.
-          if (save) bundle.push(file);
-          if (task.progress) task.progress.done++;
-        },
-        (missing) => {
-          for (const key of missing) if (this.store.markDeleted(key)) removed++;
-          if (removed) {
-            this.store.save();
-            this.notify();
-          }
-        },
-        (key, reason, retryable) => {
-          // When the full export gateway is unreachable but the ride still carries a
-          // cached route, hand the user a route-only GPX instead of failing — so a
-          // gateway outage mid-batch never breaks the download. Genuine "no track"
-          // failures (not retryable) stay real errors. Skipped in fetch-only mode:
-          // there's no file to hand over and a route-only sketch is nothing to cache,
-          // so an unreachable full export is reported as a real failure instead.
-          if (save && mode === "full" && retryable) {
-            const fallback = this.buildCachedLightGpx(key);
-            if (fallback) {
-              bundle.push(fallback);
-              succeeded++;
-              degraded.push(rideShortLabel(key) || key);
-              if (task.progress) task.progress.done++;
-              return;
+            // Only retain bytes for delivery when actually saving; fetch-only has
+            // already cached them above and discards the bytes here. Re-key the file
+            // to its cross-source uid so the bundle's identities are uniform.
+            if (save) bundle.push({ ...file, key: uid });
+            if (task.progress) task.progress.done++;
+          },
+          (missing) => {
+            for (const dk of missing) if (this.store.markDeleted(rideUid(kind, dk))) removed++;
+            if (removed) {
+              this.store.save();
+              this.notify();
             }
-          }
-          failures.push(`${key}: ${reason}`);
-        },
-        // Capture the ride's detail read during the export so a GPX download on a
-        // ride we never opened still records its title/stats/Strava status.
-        (detail) => this.persistDetail(detail),
-        mode,
-      );
-      succeeded += files.length;
+          },
+          (dk, reason, retryable) => {
+            // When the full export gateway is unreachable but the ride still carries a
+            // cached route, hand the user a route-only GPX instead of failing — so a
+            // gateway outage mid-batch never breaks the download. Genuine "no track"
+            // failures (not retryable) stay real errors. Skipped in fetch-only mode:
+            // there's no file to hand over and a route-only sketch is nothing to cache,
+            // so an unreachable full export is reported as a real failure instead.
+            if (save && mode === "full" && retryable) {
+              const fallback = this.buildCachedLightGpx(rideUid(kind, dk));
+              if (fallback) {
+                bundle.push(fallback);
+                succeeded++;
+                degraded.push(rideShortLabel(dk) || dk);
+                if (task.progress) task.progress.done++;
+                return;
+              }
+            }
+            failures.push(`${rideShortLabel(dk) || dk}: ${reason}`);
+          },
+          // Capture the ride's detail read during the export so a GPX download on a
+          // ride we never opened still records its title/stats/Strava status.
+          (detail) => this.persistDetail(detail, kind),
+          mode,
+        );
+        succeeded += files.length;
+      }
     }
 
     // Deliver the produced files. One file → a plain GPX (unchanged behaviour); more
@@ -645,15 +831,15 @@ export class Controller {
   }
 
   /**
-   * Name a multi-ride ZIP bundle: `Beeline routes 2026-01-03 to 2026-12-28 (123).zip`
-   * (or `Beeline GPX …` in full mode). The date range is derived from the rides in
-   * the bundle so the file is self-describing and sorts chronologically; it collapses
+   * Name a multi-ride ZIP bundle: `Routes 2026-01-03 to 2026-12-28 (123).zip`
+   * (or `GPX …` in full mode). The date range is derived from the rides in the
+   * bundle so the file is self-describing and sorts chronologically; it collapses
    * to a single date when every ride falls on the same day.
    */
   private bundleZipName(files: GpxFile[], mode: GpxMode): string {
-    const kind = mode === "full" ? "GPX" : "routes";
+    const kind = mode === "full" ? "GPX" : "Routes";
     const dates = files
-      .map((f) => rideDatetime(f.key))
+      .map((f) => rideDatetime(uidDateKey(f.key)))
       .filter((d): d is Date => d !== null)
       .sort((a, b) => a.getTime() - b.getTime());
     const p2 = (n: number) => String(n).padStart(2, "0");
@@ -664,29 +850,30 @@ export class Controller {
       const hi = iso(dates[dates.length - 1]);
       range = lo === hi ? ` ${lo}` : ` ${lo} to ${hi}`;
     }
-    return `Beeline ${kind}${range} (${files.length}).zip`;
+    return `${kind}${range} (${files.length}).zip`;
   }
 
   /**
-   * Rename a ride on the backend, then mirror the new name locally. The cloud is
-   * the source of truth (the name lives on the Beeline ride node); we only update
+   * Rename a ride on its source, then mirror the new name locally. The source is
+   * the authority (Beeline's ride node; a GPX ride renames in place); we only update
    * the cache once the write succeeds. The fuller `title` keeps any location suffix
    * the ride already carried, so only the user-facing name part changes.
    */
   private async doRename(task: Task, report: Report): Promise<void> {
-    const key = task.keys[0];
+    const uid = task.keys[0];
     const newTitle = ((task.payload.title as string) ?? "").trim();
-    if (!key) return;
-    const source = this.sourceFor();
-    const detail = await source.renameRide(key, newTitle, (msg) => report(msg));
+    if (!uid) return;
+    const { source: kind, dateKey } = splitUid(uid);
+    const source = this.requireSource(kind as SourceKind);
+    const detail = await source.renameRide(dateKey, newTitle, (msg) => report(msg));
     // Preserve any ", <place>" suffix the existing title carried beyond the base.
-    const rec = this.store.rides.get(key);
+    const rec = this.store.rides.get(uid);
     const suffix =
-      rec && rec.title.startsWith(rec.title_base) && rec.title.length > rec.title_base.length
+      rec?.title.startsWith(rec.title_base) && rec.title.length > rec.title_base.length
         ? rec.title.slice(rec.title_base.length)
         : "";
-    this.store.upsert(key, {
-      ...this.deviceFields(),
+    this.store.upsert(uid, {
+      ...this.deviceFieldsFor(kind as SourceKind),
       title_base: detail.title,
       title: detail.title + suffix,
     });
@@ -701,14 +888,15 @@ export class Controller {
    * as “deleted” and a later complete scan won't resurrect it (it's gone upstream).
    */
   private async doDelete(task: Task, report: Report): Promise<void> {
-    const key = task.keys[0];
-    if (!key) return;
-    const source = this.sourceFor();
-    await source.deleteRide(key, (msg) => report(msg));
-    this.store.markDeleted(key);
+    const uid = task.keys[0];
+    if (!uid) return;
+    const { source: kind, dateKey } = splitUid(uid);
+    const source = this.requireSource(kind as SourceKind);
+    await source.deleteRide(dateKey, (msg) => report(msg));
+    this.store.markDeleted(uid);
     this.store.save();
     this.notify();
-    report(`deleted ${rideShortLabel(key) || key}`);
+    report(`deleted ${rideShortLabel(dateKey) || dateKey}`);
   }
 
   // -- enqueue helpers / API surface ------------------------------------
@@ -718,11 +906,23 @@ export class Controller {
     return this.jobs.submit("scan", { label, payload: { preset, days } });
   }
 
+  /** Import user-supplied GPX files (and/or .zip bundles of them) as `gpx`-source
+   *  rides. One queued pass; never coalesced. */
+  importGpx(files: File[], label = ""): TaskSnapshotResult {
+    return this.jobs.submit("import", {
+      label: label || `${files.length} file${files.length === 1 ? "" : "s"}`,
+      payload: { files },
+    });
+  }
+
   upload(keys: string[], label = ""): TaskSnapshotResult {
     // Never re-upload a ride that's already on Strava: filter out uploaded keys at the
     // single choke point every caller funnels through (per-ride, selection, month, year,
-    // all-pending), so no UI path can submit a duplicate upload.
-    const fresh = keys.filter((k) => this.store.rides.get(k)?.strava_status !== "uploaded");
+    // all-pending), so no UI path can submit a duplicate upload. Bare datetime keys
+    // (legacy callers) are normalized to a Beeline uid.
+    const fresh = keys
+      .map((k) => this.normalizeUid(k))
+      .filter((uid) => this.store.rides.get(uid)?.strava_status !== "uploaded");
     return this.jobs.submit("upload", {
       label: label || `${fresh.length} rides`,
       keys: fresh,
@@ -733,9 +933,10 @@ export class Controller {
    *  `mode` selects the lightweight stored-shape GPX (default, local) or the full
    *  recorded track fetched from the cloud (see `GpxMode`). */
   downloadGpx(keys: string[], label = "", mode: GpxMode = "light"): TaskSnapshotResult {
+    const uids = keys.map((k) => this.normalizeUid(k));
     return this.jobs.submit("download-gpx", {
-      label: label || `${keys.length} rides`,
-      keys,
+      label: label || `${uids.length} rides`,
+      keys: uids,
       payload: { mode, save: true },
     });
   }
@@ -749,28 +950,54 @@ export class Controller {
    * coalescing with a real save-download (see JobQueue).
    */
   fetchFullGpx(keys: string[], label = ""): TaskSnapshotResult {
+    const uids = keys.map((k) => this.normalizeUid(k));
     return this.jobs.submit("download-gpx", {
-      label: label || `${keys.length} rides`,
-      keys,
+      label: label || `${uids.length} rides`,
+      keys: uids,
       payload: { mode: "full", save: false },
     });
   }
 
-  /** Rename a ride (on the backend, then locally). One ride per task; not coalesced. */
+  /** Rename a ride (on its source, then locally). One ride per task; not coalesced. */
   rename(key: string, newTitle: string): TaskSnapshotResult {
+    const uid = this.normalizeUid(key);
     return this.jobs.submit("rename", {
-      label: rideShortLabel(key) || key,
-      keys: [key],
+      label: rideShortLabel(uidDateKey(uid)) || uid,
+      keys: [uid],
       payload: { title: newTitle },
     });
   }
 
-  /** Delete a ride (on the backend, then tombstoned locally). One ride per task. */
+  /** Delete a ride (on its source, then tombstoned locally). One ride per task. */
   deleteRide(key: string): TaskSnapshotResult {
+    const uid = this.normalizeUid(key);
     return this.jobs.submit("delete", {
-      label: rideShortLabel(key) || key,
-      keys: [key],
+      label: rideShortLabel(uidDateKey(uid)) || uid,
+      keys: [uid],
     });
+  }
+
+  /**
+   * Set (or clear) an imported GPX ride's destination — stored as the title's
+   * location suffix ("<name>, <place>"), mirroring the shape Beeline uses for a
+   * routed destination so the Destination filter and the title-row suffix work
+   * identically across sources. This is purely-local metadata with no backend, so
+   * (unlike rename) it writes the Store directly rather than queueing a task.
+   * GPX-only: Beeline destinations are read-only cloud data, so a non-GPX ride is a
+   * no-op. Pass "" to clear the destination.
+   */
+  setDestination(key: string, destination: string): void {
+    const uid = this.normalizeUid(key);
+    const rec = this.store.rides.get(uid);
+    if (!rec || rec.source !== "gpx") return;
+    const base = rec.title_base || rec.title;
+    const place = destination.trim();
+    this.store.upsert(uid, {
+      title_base: base,
+      title: place ? `${base}, ${place}` : base,
+    });
+    this.store.save();
+    this.notify();
   }
 
   /** Update the rough-track density (points/km, persisted). Returns the clamped value. */
@@ -812,40 +1039,56 @@ export class Controller {
 
   /**
    * Wipe all local state: cancel/clear the job queue and empty the ride cache. Also
-   * flushes the persistent full-GPX cache (a reset is "erase everything local").
-   * Destroys browser-side data only; nothing in your Beeline account is affected.
+   * flushes BOTH GPX stores — the re-fetchable cache AND the imported-GPX data vault
+   * (a reset is "erase everything local", the nuclear option). Destroys browser-side
+   * data only; nothing in your Beeline account is affected.
    */
   reset(): void {
     this.jobs.cancelAll();
     this.jobs.clear();
     this.store.clear();
     void this.gpxCache.clear();
+    void this.gpxData.clear();
     this.notify();
   }
 
   /**
-   * Flush ONLY the persistent full-GPX cache, leaving rides and settings intact.
-   * Separate from `reset()` so the user can reclaim the (potentially large) GPX
-   * cache without losing their ride history.
+   * Flush ONLY the re-fetchable GPX **cache** (Beeline downloads), leaving rides,
+   * settings, AND the imported-GPX data vault intact. Separate from `reset()` so the
+   * user can reclaim the (potentially large) cache without losing ride history; and
+   * separate from the data vault so an imported GPX's only copy is never touched by a
+   * cache flush.
    */
   async flushGpxCache(): Promise<void> {
     await this.gpxCache.clear();
     this.notify();
   }
 
-  /** Total on-disk (compressed) size of the cached full-GPX files, in bytes. */
+  /** Total on-disk (compressed) size of the re-fetchable GPX cache, in bytes. */
   gpxCacheBytes(): number {
     return this.gpxCache.totalBytes();
   }
 
-  /** Number of rides with a cached full GPX. */
+  /** Number of rides with a cached (re-fetchable) full GPX. */
   gpxCacheCount(): number {
     return this.gpxCache.count;
   }
 
-  /** The set of ride keys whose full GPX is cached on disk. */
+  /** Total on-disk (compressed) size of the imported-GPX data vault, in bytes. */
+  gpxDataBytes(): number {
+    return this.gpxData.totalBytes();
+  }
+
+  /** Number of imported GPX rides whose original is stored in the data vault. */
+  gpxDataCount(): number {
+    return this.gpxData.count;
+  }
+
+  /** The set of ride uids whose full GPX is present locally — in EITHER the cache
+   *  (Beeline) or the data vault (imported). This is availability, not provenance,
+   *  so callers deciding "can I serve this without a fetch?" see both. */
   gpxCachedKeys(): Set<string> {
-    return this.gpxCache.cachedKeys();
+    return new Set([...this.gpxCache.cachedKeys(), ...this.gpxData.cachedKeys()]);
   }
 
   // -- import / export ---------------------------------------------------

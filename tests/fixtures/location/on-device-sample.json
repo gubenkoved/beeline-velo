@@ -1,0 +1,581 @@
+{
+  "semanticSegments": [
+    {
+      "startTime": "2015-05-14T12:00:00.000+02:00",
+      "endTime": "2015-05-14T14:00:00.000+02:00",
+      "timelinePath": [
+        {
+          "point": "51.5403834°, 46.0242612°",
+          "time": "2015-05-14T12:29:00.000+02:00"
+        },
+        {
+          "point": "51.5420614°, 46.019781°",
+          "time": "2015-05-14T13:25:00.000+02:00"
+        }
+      ]
+    },
+    {
+      "startTime": "2015-05-14T12:29:18.000+02:00",
+      "endTime": "2015-05-14T19:20:08.000+02:00",
+      "startTimeTimezoneUtcOffsetMinutes": 180,
+      "endTimeTimezoneUtcOffsetMinutes": 180,
+      "visit": {
+        "hierarchyLevel": 0,
+        "probability": 0.6399999856948853,
+        "topCandidate": {
+          "placeId": "ChIJ1QEIXMnHFEERPgXQzOFHOzM",
+          "semanticType": "WORK",
+          "probability": 0.9986308217048645,
+          "placeLocation": {
+            "latLng": "51.5417992°, 46.019505°"
+          }
+        }
+      }
+    },
+    {
+      "startTime": "2015-05-14T19:59:02.000+02:00",
+      "endTime": "2015-05-15T07:51:48.000+02:00",
+      "startTimeTimezoneUtcOffsetMinutes": 180,
+      "endTimeTimezoneUtcOffsetMinutes": 180,
+      "visit": {
+        "hierarchyLevel": 0,
+        "probability": 0.6399999856948853,
+        "topCandidate": {
+          "placeId": "ChIJj9pbfw3HFEERd7uuRp5Bhes",
+          "semanticType": "HOME",
+          "probability": 0.9998478889465332,
+          "placeLocation": {
+            "latLng": "51.5116902°, 45.9892902°"
+          }
+        }
+      }
+    },
+    {
+      "startTime": "2015-05-14T19:20:08.000+02:00",
+      "endTime": "2015-05-14T19:59:02.000+02:00",
+      "startTimeTimezoneUtcOffsetMinutes": 180,
+      "endTimeTimezoneUtcOffsetMinutes": 180,
+      "activity": {
+        "start": {
+          "latLng": "51.5414384°, 46.0210043°"
+        },
+        "end": {
+          "latLng": "51.5096942°, 45.9915304°"
+        },
+        "distanceMeters": 4076.423828125,
+        "topCandidate": {
+          "type": "UNKNOWN_ACTIVITY_TYPE",
+          "probability": 0
+        }
+      }
+    },
+    {
+      "startTime": "2015-05-15T18:31:25.000+02:00",
+      "endTime": "2015-05-15T18:53:31.000+02:00",
+      "startTimeTimezoneUtcOffsetMinutes": 180,
+      "endTimeTimezoneUtcOffsetMinutes": 180,
+      "activity": {
+        "start": {
+          "latLng": "51.5405233°, 46.0236667°"
+        },
+        "end": {
+          "latLng": "51.5097183°, 45.9915529°"
+        },
+        "distanceMeters": 4082.78369140625,
+        "topCandidate": {
+          "type": "UNKNOWN_ACTIVITY_TYPE",
+          "probability": 0
+        }
+      }
+    },
+    {
+      "startTime": "2024-12-26T14:05:48.000+01:00",
+      "endTime": "2024-12-26T14:59:35.000+01:00",
+      "startTimeTimezoneUtcOffsetMinutes": 330,
+      "endTimeTimezoneUtcOffsetMinutes": 330,
+      "activity": {
+        "start": {
+          "latLng": "7.1748638°, 79.8885419°"
+        },
+        "end": {
+          "latLng": "6.9102194°, 79.8486289°"
+        },
+        "distanceMeters": 35309.296875,
+        "probability": 0.987908661365509,
+        "topCandidate": {
+          "type": "IN_PASSENGER_VEHICLE",
+          "probability": 0.8568465709686279
+        },
+        "parking": {
+          "location": {
+            "latLng": "6.9102194°, 79.8486289°"
+          },
+          "startTime": "2024-12-26T14:59:35.000+01:00"
+        }
+      }
+    },
+    {
+      "startTime": "2015-07-24T19:40:15.000+02:00",
+      "endTime": "2015-09-06T19:23:24.000+02:00",
+      "startTimeTimezoneUtcOffsetMinutes": 180,
+      "endTimeTimezoneUtcOffsetMinutes": 180,
+      "timelineMemory": {
+        "trip": {
+          "distanceFromOriginKms": 8246,
+          "destinations": [
+            {
+              "identifier": {
+                "placeId": "ChIJOwg_06VPwokRYv534QaPC8g"
+              }
+            },
+            {
+              "identifier": {
+                "placeId": "ChIJQ3hnZZC-wokRolCWmWgAOxU"
+              }
+            },
+            {
+              "identifier": {
+                "placeId": "ChIJ0TMVjWBXwokRh783EWrKtkQ"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "rawSignals": [
+    {
+      "position": {
+        "LatLng": "52.2887728°, 4.8390689°",
+        "accuracyMeters": 19,
+        "altitudeMeters": 41.5,
+        "source": "WIFI",
+        "timestamp": "2026-05-17T21:49:10.000+02:00",
+        "speedMetersPerSecond": 0
+      }
+    },
+    {
+      "position": {
+        "LatLng": "52.2888374°, 4.8391279°",
+        "accuracyMeters": 17,
+        "source": "WIFI_ONLY",
+        "timestamp": "2026-05-17T21:49:56.000+02:00"
+      }
+    },
+    {
+      "activityRecord": {
+        "probableActivities": [
+          {
+            "type": "ON_FOOT",
+            "confidence": 0.9599999785423279
+          },
+          {
+            "type": "WALKING",
+            "confidence": 0.9599999785423279
+          },
+          {
+            "type": "IN_VEHICLE",
+            "confidence": 0.019999999552965164
+          },
+          {
+            "type": "IN_RAIL_VEHICLE",
+            "confidence": 0.019999999552965164
+          },
+          {
+            "type": "RUNNING",
+            "confidence": 0.009999999776482582
+          },
+          {
+            "type": "IN_ROAD_VEHICLE",
+            "confidence": 0.009999999776482582
+          },
+          {
+            "type": "ON_BICYCLE",
+            "confidence": 0
+          },
+          {
+            "type": "UNKNOWN",
+            "confidence": 0
+          }
+        ],
+        "timestamp": "2026-05-17T21:48:03.000+02:00"
+      }
+    },
+    {
+      "wifiScan": {
+        "deliveryTime": "2026-05-17T21:49:10.000+02:00",
+        "devicesRecords": [
+          {
+            "mac": 132479670656212,
+            "rawRssi": -57
+          },
+          {
+            "mac": 132479670656213,
+            "rawRssi": -57
+          },
+          {
+            "mac": 132479670656214,
+            "rawRssi": -57
+          },
+          {
+            "mac": 132479670650132,
+            "rawRssi": -71
+          },
+          {
+            "mac": 132479670650134,
+            "rawRssi": -71
+          },
+          {
+            "mac": 132479670650133,
+            "rawRssi": -71
+          },
+          {
+            "mac": 132479667222452,
+            "rawRssi": -72
+          },
+          {
+            "mac": 132479670650517,
+            "rawRssi": -72
+          },
+          {
+            "mac": 132479670650518,
+            "rawRssi": -72
+          },
+          {
+            "mac": 132479670650519,
+            "rawRssi": -72
+          },
+          {
+            "mac": 132479670650135,
+            "rawRssi": -72
+          },
+          {
+            "mac": 132479670650516,
+            "rawRssi": -73
+          },
+          {
+            "mac": 132479667205396,
+            "rawRssi": -75
+          },
+          {
+            "mac": 132479667205397,
+            "rawRssi": -75
+          },
+          {
+            "mac": 132479667205398,
+            "rawRssi": -75
+          },
+          {
+            "mac": 132479670658644,
+            "rawRssi": -75
+          },
+          {
+            "mac": 132479670658645,
+            "rawRssi": -76
+          },
+          {
+            "mac": 132479670650532,
+            "rawRssi": -76
+          },
+          {
+            "mac": 132479667206166,
+            "rawRssi": -77
+          },
+          {
+            "mac": 132479670658660,
+            "rawRssi": -77
+          },
+          {
+            "mac": 132479670658646,
+            "rawRssi": -78
+          },
+          {
+            "mac": 132479670658647,
+            "rawRssi": -78
+          },
+          {
+            "mac": 132479667222420,
+            "rawRssi": -79
+          },
+          {
+            "mac": 35833572169787,
+            "rawRssi": -79
+          },
+          {
+            "mac": 42430641936443,
+            "rawRssi": -80
+          },
+          {
+            "mac": 132479667222421,
+            "rawRssi": -80
+          },
+          {
+            "mac": 132479667222422,
+            "rawRssi": -80
+          },
+          {
+            "mac": 132479667205428,
+            "rawRssi": -81
+          },
+          {
+            "mac": 132479670649252,
+            "rawRssi": -81
+          },
+          {
+            "mac": 132479670649173,
+            "rawRssi": -82
+          },
+          {
+            "mac": 132479670649174,
+            "rawRssi": -82
+          },
+          {
+            "mac": 132479670649175,
+            "rawRssi": -82
+          },
+          {
+            "mac": 132479670649188,
+            "rawRssi": -89
+          }
+        ]
+      }
+    }
+  ],
+  "userLocationProfile": {
+    "frequentPlaces": [
+      {
+        "placeId": "ChIJAAAAAAAAAAARykZqoWmg4k8",
+        "placeLocation": "52.2828123°, 4.846405°",
+        "label": "HOME"
+      },
+      {
+        "placeId": "ChIJAAAAAAAAAAARxXBbS5HbtLE",
+        "placeLocation": "52.2774342°, 4.754225°"
+      },
+      {
+        "placeId": "ChIJAAAAAAAAAAARvJfk8Fzhk1M",
+        "placeLocation": "52.2787062°, 4.7644738°",
+        "label": "WORK"
+      },
+      {
+        "placeId": "ChIJAAAAAAAAAAARPchhWvXDZQE",
+        "placeLocation": "52.2888863°, 4.8395562°"
+      },
+      {
+        "placeId": "ChIJAAAAAAAAAAARc7siIxffT-4",
+        "placeLocation": "52.3020945°, 4.8415328°"
+      },
+      {
+        "placeId": "ChIJAAAAAAAAAAAR6JtI04mSmVA",
+        "placeLocation": "52.2813048°, 4.851815°"
+      },
+      {
+        "placeId": "ChIJAAAAAAAAAAARHi2_FmhMJro",
+        "placeLocation": "52.2812683°, 4.8515101°"
+      },
+      {
+        "placeId": "ChIJAAAAAAAAAAARtlrEKyr4to8",
+        "placeLocation": "52.3149817°, 4.832342°"
+      },
+      {
+        "placeId": "ChIJAAAAAAAAAAARjiL8jgWx6Y8",
+        "placeLocation": "52.2017083°, 5.23245°"
+      },
+      {
+        "placeId": "ChIJAAAAAAAAAAARQtHfOo0b58o",
+        "placeLocation": "52.3791283°, 4.900272°"
+      }
+    ],
+    "frequentTrips": [
+      {
+        "waypointIds": [
+          "ChIJAAAAAAAAAAARxXBbS5HbtLE",
+          "ChIJAAAAAAAAAAARPchhWvXDZQE",
+          "ChIJAAAAAAAAAAARtlrEKyr4to8",
+          "ChIJAAAAAAAAAAARc7siIxffT-4",
+          "ChIJAAAAAAAAAAARykZqoWmg4k8"
+        ],
+        "modeDistribution": [
+          {
+            "mode": "CYCLING",
+            "rate": 1
+          }
+        ],
+        "startTimeMinutes": 1154,
+        "endTimeMinutes": 1189,
+        "durationMinutes": 35,
+        "confidence": 0.8007537722587585,
+        "commuteDirection": "COMMUTE_DIRECTION_WORK_TO_HOME"
+      },
+      {
+        "waypointIds": [
+          "ChIJAAAAAAAAAAARxXBbS5HbtLE",
+          "ChIJAAAAAAAAAAARc7siIxffT-4",
+          "ChIJAAAAAAAAAAARtlrEKyr4to8",
+          "ChIJAAAAAAAAAAARykZqoWmg4k8"
+        ],
+        "modeDistribution": [
+          {
+            "mode": "CYCLING",
+            "rate": 1
+          }
+        ],
+        "startTimeMinutes": 2549,
+        "endTimeMinutes": 2591,
+        "durationMinutes": 42,
+        "confidence": 0.8955550193786621,
+        "commuteDirection": "COMMUTE_DIRECTION_WORK_TO_HOME"
+      },
+      {
+        "waypointIds": [
+          "ChIJAAAAAAAAAAARxXBbS5HbtLE",
+          "ChIJAAAAAAAAAAARPchhWvXDZQE",
+          "ChIJAAAAAAAAAAARykZqoWmg4k8"
+        ],
+        "modeDistribution": [
+          {
+            "mode": "CYCLING",
+            "rate": 1
+          }
+        ],
+        "startTimeMinutes": 4040,
+        "endTimeMinutes": 4100,
+        "durationMinutes": 60,
+        "confidence": 0.853919506072998,
+        "commuteDirection": "COMMUTE_DIRECTION_WORK_TO_HOME"
+      },
+      {
+        "waypointIds": [
+          "ChIJAAAAAAAAAAARxXBbS5HbtLE",
+          "ChIJAAAAAAAAAAARc7siIxffT-4",
+          "ChIJAAAAAAAAAAARykZqoWmg4k8"
+        ],
+        "modeDistribution": [
+          {
+            "mode": "CYCLING",
+            "rate": 1
+          }
+        ],
+        "startTimeMinutes": 5457,
+        "endTimeMinutes": 5510,
+        "durationMinutes": 53,
+        "confidence": 0.6599056124687195,
+        "commuteDirection": "COMMUTE_DIRECTION_WORK_TO_HOME"
+      },
+      {
+        "waypointIds": [
+          "ChIJAAAAAAAAAAARykZqoWmg4k8",
+          "ChIJAAAAAAAAAAARHi2_FmhMJro",
+          "ChIJAAAAAAAAAAARvJfk8Fzhk1M",
+          "ChIJAAAAAAAAAAAR6JtI04mSmVA",
+          "ChIJAAAAAAAAAAARxXBbS5HbtLE"
+        ],
+        "modeDistribution": [
+          {
+            "mode": "CYCLING",
+            "rate": 1
+          }
+        ],
+        "startTimeMinutes": 600,
+        "endTimeMinutes": 629,
+        "durationMinutes": 29,
+        "confidence": 0.9463062882423401,
+        "commuteDirection": "COMMUTE_DIRECTION_HOME_TO_WORK"
+      },
+      {
+        "waypointIds": [
+          "ChIJAAAAAAAAAAARykZqoWmg4k8",
+          "ChIJAAAAAAAAAAARvJfk8Fzhk1M",
+          "ChIJAAAAAAAAAAARxXBbS5HbtLE"
+        ],
+        "modeDistribution": [
+          {
+            "mode": "CYCLING",
+            "rate": 1
+          }
+        ],
+        "startTimeMinutes": 2046,
+        "endTimeMinutes": 2074,
+        "durationMinutes": 28,
+        "confidence": 0.9308788180351257,
+        "commuteDirection": "COMMUTE_DIRECTION_HOME_TO_WORK"
+      },
+      {
+        "waypointIds": [
+          "ChIJAAAAAAAAAAARykZqoWmg4k8",
+          "ChIJAAAAAAAAAAARvJfk8Fzhk1M",
+          "ChIJAAAAAAAAAAARxXBbS5HbtLE"
+        ],
+        "modeDistribution": [
+          {
+            "mode": "CYCLING",
+            "rate": 1
+          }
+        ],
+        "startTimeMinutes": 3481,
+        "endTimeMinutes": 3510,
+        "durationMinutes": 29,
+        "confidence": 0.9352025985717773,
+        "commuteDirection": "COMMUTE_DIRECTION_HOME_TO_WORK"
+      },
+      {
+        "waypointIds": [
+          "ChIJAAAAAAAAAAARykZqoWmg4k8",
+          "ChIJAAAAAAAAAAARvJfk8Fzhk1M",
+          "ChIJAAAAAAAAAAARxXBbS5HbtLE"
+        ],
+        "modeDistribution": [
+          {
+            "mode": "CYCLING",
+            "rate": 1
+          }
+        ],
+        "startTimeMinutes": 4916,
+        "endTimeMinutes": 4944,
+        "durationMinutes": 28,
+        "confidence": 0.9083302021026611,
+        "commuteDirection": "COMMUTE_DIRECTION_HOME_TO_WORK"
+      }
+    ],
+    "persona": {
+      "travelModeAffinities": [
+        {
+          "mode": "CYCLING",
+          "affinity": 0.671999990940094
+        },
+        {
+          "mode": "WALKING",
+          "affinity": 0.2680000066757202
+        },
+        {
+          "mode": "IN_PASSENGER_VEHICLE",
+          "affinity": 0.08799999952316284
+        },
+        {
+          "mode": "IN_BUS",
+          "affinity": 0.019999999552965164
+        },
+        {
+          "mode": "IN_TRAIN",
+          "affinity": 0.01600000075995922
+        },
+        {
+          "mode": "IN_FERRY",
+          "affinity": 0.012000000104308128
+        },
+        {
+          "mode": "IN_TRAM",
+          "affinity": 0.012000000104308128
+        },
+        {
+          "mode": "SKIING",
+          "affinity": 0.004000000189989805
+        },
+        {
+          "mode": "SAILING",
+          "affinity": 0.004000000189989805
+        }
+      ]
+    }
+  }
+}

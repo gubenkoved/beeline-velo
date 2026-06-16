@@ -1,33 +1,57 @@
 /**
- * Local persistent state: which rides we know about and their Strava status.
+ * Local persistent state: the rides we know about plus user settings.
  *
- * The Beeline account is authoritative, but caching lets us list rides quickly
- * without re-fetching the whole history on each visit.
+ * Storage: a single serialized JSON blob under one key in a KeyValueStore (IndexedDB
+ * in production, an in-memory Map in demo/tests). The blob is **versioned** (`schema`)
+ * so its shape can evolve safely — see `SCHEMA_VERSION` / `migrate()`. Ride metrics
+ * are NORMALIZED numbers (distance_km, moving_sec, …; null = unknown), parsed once on
+ * the ingestion boundary, never localized strings.
  *
- * Storage: a single serialized blob under one key in a KeyValueStore (IndexedDB
- * in production, an in-memory Map in demo/tests). Ride metrics are stored as
- * NORMALIZED numbers (distance_km, moving_sec, …; null = unknown) rather than
- * localized strings; legacy string blobs are migrated on load.
+ * Extending the format (keep these the single source of truth):
+ *  - **A new setting** → add ONE entry to `SETTINGS_SPEC`; its default, the `Settings`
+ *    type, and load-time sanitation all derive from it.
+ *  - **A new ride field** → add it to `RideRecord` + `blankRecord`; ingest's spread
+ *    picks it up, and unknown fields written by a newer build round-trip untouched.
+ *  - **A new source** → it's already source-agnostic: rides key by uid `${source}::…`
+ *    and carry a `source` tag; no format change needed.
+ *  - **A breaking shape change** → bump `SCHEMA_VERSION` and add a `migrate()` case.
  */
 
 import type { KeyValueStore } from "./kv";
 import {
   looksLikeStat,
-  metricsFromStatStrings,
   type RideMetrics,
   rideMonth,
+  rideUid,
   type StravaStatus,
+  splitUid,
 } from "./parsing";
 
-/** Key under which the single serialized cache blob is stored in the backend. */
-export const STORAGE_KEY = "beeline-toolkit-state";
+/** Key under which the single serialized state blob is stored in the backend. */
+export const STORAGE_KEY = "gpx-toolkit-state";
 
-/** Where a ride's data originated. Only the Beeline cloud account today. */
-export type RideSource = "beeline";
+/**
+ * Format version of the persisted blob. Bump on any BREAKING shape change, and add a
+ * matching `migrate()` case. v1 is the first explicitly-versioned format; earlier,
+ * unversioned blobs are intentionally discarded (clean slate) rather than guessed.
+ */
+export const SCHEMA_VERSION = 1;
+
+/** Where a ride's data originated: the Beeline cloud account, or imported GPX files. */
+export type RideSource = "beeline" | "gpx";
 
 /** UTF-8 byte length of a string (so multi-byte ride titles count their real size). */
 function byteLength(s: string): number {
   return new TextEncoder().encode(s).length;
+}
+
+/** Normalize a ride identity to the map's cross-source uid form. A value already
+ *  carrying a `source::` prefix passes through; a bare datetime key (legacy /
+ *  single-source caller) is treated as a Beeline ride. Keeps the map consistently
+ *  uid-keyed no matter which caller (controller passes uids, older callers/tests
+ *  pass bare keys) and matches the re-keying ingest does on load. */
+function toUid(key: string): string {
+  return key.includes("::") ? key : rideUid("beeline", key);
 }
 
 /** Default rough-track density: points kept per kilometre of route. */
@@ -71,27 +95,52 @@ function clampConcurrency(n: number): number {
   return Math.max(BEELINE_CONCURRENCY_MIN, Math.min(BEELINE_CONCURRENCY_MAX, Math.round(n)));
 }
 
-export interface Settings {
-  /** Points kept per kilometre when simplifying a downloaded GPX into a rough track. */
-  trackPointsPerKm: number;
-  /** Share of slowest distance (%) to drop from the average-speed view. */
-  speedTrimSlowPct: number;
-  /** Share of fastest distance (%) to drop from the average-speed view. */
-  speedTrimFastPct: number;
-  /** Heatmap glow radius (px) — how thick each track renders on the route-frequency map. */
-  heatRadius: number;
-  /** How many Beeline Strava uploads run at once. */
-  beelineUploadConcurrency: number;
+/**
+ * One persisted, user-tunable setting: its default and a `clamp` that sanitizes an
+ * untrusted loaded value back into range. Declaring settings here (rather than as a
+ * hand-maintained interface + defaults + per-field load branches) keeps the three in
+ * lockstep — adding a setting is ONE entry, and `Settings`/`defaultSettings`/ingest
+ * all derive from it, so they can never drift.
+ */
+interface SettingSpec<T> {
+  readonly default: T;
+  readonly clamp: (raw: unknown) => T;
 }
 
+const SETTINGS_SPEC = {
+  /** Points kept per kilometre when simplifying a downloaded GPX into a rough track. */
+  trackPointsPerKm: {
+    default: DEFAULT_TRACK_POINTS_PER_KM,
+    clamp: (v: unknown) => clampPointsPerKm(Number(v)),
+  },
+  /** Share of slowest distance (%) to drop from the average-speed view. */
+  speedTrimSlowPct: { default: 0, clamp: (v: unknown) => clampTrimPct(Number(v)) },
+  /** Share of fastest distance (%) to drop from the average-speed view. */
+  speedTrimFastPct: { default: 0, clamp: (v: unknown) => clampTrimPct(Number(v)) },
+  /** Heatmap glow radius (px) — how thick each track renders on the route-frequency map. */
+  heatRadius: {
+    default: DEFAULT_HEAT_RADIUS,
+    clamp: (v: unknown) => clampHeatRadius(Number(v)),
+  },
+  /** How many Beeline Strava uploads run at once. */
+  beelineUploadConcurrency: {
+    default: DEFAULT_BEELINE_CONCURRENCY,
+    clamp: (v: unknown) => clampConcurrency(Number(v)),
+  },
+} satisfies Record<string, SettingSpec<unknown>>;
+
+/** The user-settings shape, derived from `SETTINGS_SPEC` (each field's type is its
+ *  clamp's return type) so the interface can't drift from the loader. */
+export type Settings = {
+  -readonly [K in keyof typeof SETTINGS_SPEC]: ReturnType<(typeof SETTINGS_SPEC)[K]["clamp"]>;
+};
+
+const SETTING_KEYS = Object.keys(SETTINGS_SPEC) as (keyof Settings)[];
+
 function defaultSettings(): Settings {
-  return {
-    trackPointsPerKm: DEFAULT_TRACK_POINTS_PER_KM,
-    speedTrimSlowPct: 0,
-    speedTrimFastPct: 0,
-    heatRadius: DEFAULT_HEAT_RADIUS,
-    beelineUploadConcurrency: DEFAULT_BEELINE_CONCURRENCY,
-  };
+  const s = {} as Record<string, unknown>;
+  for (const key of SETTING_KEYS) s[key] = SETTINGS_SPEC[key].default;
+  return s as Settings;
 }
 
 // UI chrome labels that must never be stored as a ride title.
@@ -110,6 +159,14 @@ function nowIso(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "+00:00");
 }
 
+/**
+ * One ride's persisted record. Embeds the normalized `RideMetrics` numbers plus
+ * identity, display, route-sketch and Strava bookkeeping. To extend: add a field
+ * here AND its default to `blankRecord` — ingest's `{...blankRecord, ...raw}` spread
+ * then loads it, and (because the spread preserves unknown keys) a field written by a
+ * newer build survives a round-trip through an older one untouched. Source-specific
+ * bookkeeping (e.g. `strava_status`/`uploaded_at`) lives flat with a clear prefix.
+ */
 export interface RideRecord extends RideMetrics {
   key: string;
   /** Richest title seen (the detail-sheet heading, e.g. "Morning ride, Amstelveen"). */
@@ -129,9 +186,9 @@ export interface RideRecord extends RideMetrics {
   track_bytes: number;
   /** Source label this ride was last read from (e.g. "Beeline (a@b)"). Empty when unknown. */
   device_model: string;
-  /** Where this ride came from. "beeline" today. */
+  /** Where this ride came from: the Beeline cloud account, or imported GPX files. */
   source: RideSource;
-  /** Source-native id: the Beeline push-id (needed for upload/status). */
+  /** Source-native id: the Beeline push-id, or an imported GPX's content hash. */
   source_id: string;
   last_seen: string;
   uploaded_at: string;
@@ -140,9 +197,16 @@ export interface RideRecord extends RideMetrics {
   deleted_at: string;
 }
 
-function blankRecord(key: string): RideRecord {
+/**
+ * A fresh, empty record for a ride uid (`${source}::${datetime}`). The record's
+ * own `key` stays a bare parseable datetime and `source` is taken from the uid, so
+ * date bucketing and per-source routing both work. Tolerates a legacy bare
+ * datetime (treated as a Beeline ride) via `splitUid`.
+ */
+function blankRecord(uid: string): RideRecord {
+  const { source, dateKey } = splitUid(uid);
   return {
-    key,
+    key: dateKey,
     title: "",
     title_base: "",
     strava_status: "unknown",
@@ -159,7 +223,7 @@ function blankRecord(key: string): RideRecord {
     track_km: 0,
     track_bytes: 0,
     device_model: "",
-    source: "beeline",
+    source: source as RideSource,
     source_id: "",
     last_seen: "",
     uploaded_at: "",
@@ -168,7 +232,7 @@ function blankRecord(key: string): RideRecord {
   };
 }
 
-/** The numeric metric fields, used to detect already-normalized persisted records. */
+/** The numeric metric fields carried on a persisted record. */
 const METRIC_KEYS: ReadonlyArray<keyof RideMetrics> = [
   "distance_km",
   "moving_sec",
@@ -179,41 +243,16 @@ const METRIC_KEYS: ReadonlyArray<keyof RideMetrics> = [
   "elevation_loss_m",
 ];
 
-/**
- * Derive normalized numeric metrics for a persisted ride, accepting BOTH the
- * current numeric shape and the legacy string shape (top-level `distance`/`duration`
- * plus a `stats` label→string map — the pre-normalization format, also produced by
- * the Python tool). Legacy strings are parsed once here via the canonical
- * locale-aware parsers; already-numeric records pass through. One-way + idempotent.
- */
-function metricsFromPersisted(raw: Record<string, unknown>): RideMetrics {
-  const isNumeric = METRIC_KEYS.some((k) => typeof raw[k] === "number");
-  if (isNumeric) {
-    const num = (k: keyof RideMetrics): number | null => {
-      const v = raw[k];
-      return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
-    };
-    return {
-      distance_km: num("distance_km"),
-      moving_sec: num("moving_sec"),
-      elapsed_sec: num("elapsed_sec"),
-      avg_speed_kmh: num("avg_speed_kmh"),
-      max_speed_kmh: num("max_speed_kmh"),
-      elevation_gain_m: num("elevation_gain_m"),
-      elevation_loss_m: num("elevation_loss_m"),
-    };
+/** Read a persisted record's normalized metric numbers, treating any non-positive or
+ *  non-finite value as unknown (null). Metrics are already normalized on the
+ *  ingestion boundary, so this is a plain numeric read — no string parsing. */
+function metricsFromRecord(raw: Record<string, unknown>): RideMetrics {
+  const out = {} as Record<keyof RideMetrics, number | null>;
+  for (const k of METRIC_KEYS) {
+    const v = raw[k];
+    out[k] = typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
   }
-  // Legacy: parse the `stats` map, folding the top-level summary strings in as
-  // fallbacks for Distance / Elapsed time when the map lacked them.
-  const stats =
-    raw.stats && typeof raw.stats === "object" ? (raw.stats as Record<string, string>) : {};
-  const distStr = typeof raw.distance === "string" ? raw.distance : "";
-  const durStr = typeof raw.duration === "string" ? raw.duration : "";
-  return metricsFromStatStrings({
-    ...stats,
-    Distance: stats.Distance || distStr,
-    "Elapsed time": stats["Elapsed time"] || durStr,
-  });
+  return out as RideMetrics;
 }
 
 export function monthKey(rec: RideRecord): string {
@@ -225,9 +264,29 @@ export function monthLabel(rec: RideRecord): string {
 }
 
 interface Persisted {
+  /** Format version of this blob (see SCHEMA_VERSION / migrate). */
+  schema: number;
   updated_at: string;
   settings: Settings;
   rides: Record<string, RideRecord>;
+}
+
+/**
+ * Bring a parsed persisted blob up to the CURRENT schema, or return null to discard
+ * it (start fresh). The single place that knows about old shapes:
+ *  - current version → use as-is.
+ *  - an older version → add a `case` that upgrades it step-by-step (none yet — v1 is
+ *    the first versioned format).
+ *  - missing / newer / unknown → discard. An unversioned legacy blob, or one written
+ *    by a newer build we can't safely read, is dropped rather than guessed at.
+ */
+function migrate(data: unknown): Persisted | null {
+  if (!data || typeof data !== "object") return null;
+  const schema = (data as { schema?: unknown }).schema;
+  if (schema === SCHEMA_VERSION) return data as Persisted;
+  // Future migrations slot in here, e.g.:
+  //   if (schema === 1) return migrate(upgradeV1toV2(data));
+  return null;
 }
 
 export interface UpsertFields extends Partial<RideMetrics> {
@@ -288,7 +347,8 @@ export class Store {
     }
     if (raw) {
       try {
-        store.ingest(JSON.parse(raw));
+        const migrated = migrate(JSON.parse(raw));
+        if (migrated) store.ingest(migrated);
       } catch {
         /* corrupt cache — start fresh */
       }
@@ -297,42 +357,33 @@ export class Store {
     return store;
   }
 
-  /** Merge a persisted payload (from storage or an imported file) into memory. */
-  private ingest(data: unknown): void {
-    const settings = (data as Partial<Persisted>)?.settings;
-    if (settings && typeof settings === "object") {
-      if ("trackPointsPerKm" in settings) {
-        this.settings.trackPointsPerKm = clampPointsPerKm(Number(settings.trackPointsPerKm));
-      }
-      if ("speedTrimSlowPct" in settings) {
-        this.settings.speedTrimSlowPct = clampTrimPct(Number(settings.speedTrimSlowPct));
-      }
-      if ("speedTrimFastPct" in settings) {
-        this.settings.speedTrimFastPct = clampTrimPct(Number(settings.speedTrimFastPct));
-      }
-      if ("heatRadius" in settings) {
-        this.settings.heatRadius = clampHeatRadius(Number(settings.heatRadius));
-      }
-      if ("beelineUploadConcurrency" in settings) {
-        this.settings.beelineUploadConcurrency = clampConcurrency(
-          Number(settings.beelineUploadConcurrency),
-        );
+  /** Merge a (current-schema) persisted payload into memory. */
+  private ingest(data: Persisted): void {
+    const rawSettings = data.settings as Record<string, unknown> | undefined;
+    if (rawSettings && typeof rawSettings === "object") {
+      const settings = this.settings as Record<string, unknown>;
+      for (const key of SETTING_KEYS) {
+        if (key in rawSettings) settings[key] = SETTINGS_SPEC[key].clamp(rawSettings[key]);
       }
     }
-    const rides = (data as Partial<Persisted>)?.rides;
+    const rides = data.rides;
     if (!rides || typeof rides !== "object") return;
-    for (const [key, raw] of Object.entries(
+    for (const [uid, raw] of Object.entries(
       rides as unknown as Record<string, Record<string, unknown>>,
     )) {
-      const rec: RideRecord = { ...blankRecord(key), ...(raw as Partial<RideRecord>), key };
-      // Normalize numeric metrics from EITHER the current numeric shape or the
-      // legacy string shape, then drop any legacy string fields the spread carried
-      // over so they never linger in the re-serialized blob.
-      Object.assign(rec, metricsFromPersisted(raw));
-      const legacy = rec as unknown as Record<string, unknown>;
-      delete legacy.distance;
-      delete legacy.duration;
-      delete legacy.stats;
+      // The map keys by the (source, datetime) uid; a record's own `key` stays the
+      // bare datetime and `source` comes from the uid, so date bucketing and per-
+      // source routing both work. Derive both from the uid so they can't disagree
+      // with a corrupt stored value. The `...raw` spread also carries through any
+      // unknown fields a newer build wrote, so they survive a round-trip untouched.
+      const { source, dateKey } = splitUid(uid);
+      const rec: RideRecord = {
+        ...blankRecord(uid),
+        ...(raw as Partial<RideRecord>),
+        key: dateKey,
+        source: source as RideSource,
+      };
+      Object.assign(rec, metricsFromRecord(raw));
       // Scrub stale mis-parsed titles: UI chrome (Heatmap/Journeys/…) and stat
       // values/labels (e.g. "20,0km/h" captured when the detail heading scrolled
       // off-screen during a Check). Clearing lets the next scan/check reseed a
@@ -345,17 +396,21 @@ export class Store {
       rec.track_km = Number(rec.track_km) || 0;
       rec.track_bytes = Number(rec.track_bytes) || 0;
       if (typeof rec.device_model !== "string") rec.device_model = "";
-      rec.source = "beeline";
       if (typeof rec.source_id !== "string") rec.source_id = "";
       rec.deleted = rec.deleted === true; // coerce missing/odd values to a real boolean
-      this.rides.set(key, rec);
+      this.rides.set(uid, rec);
     }
   }
 
   private serialize(): Persisted {
     const rides: Record<string, RideRecord> = {};
     for (const [k, v] of this.rides) rides[k] = v;
-    return { updated_at: nowIso(), settings: { ...this.settings }, rides };
+    return {
+      schema: SCHEMA_VERSION,
+      updated_at: nowIso(),
+      settings: { ...this.settings },
+      rides,
+    };
   }
 
   /**
@@ -407,7 +462,8 @@ export class Store {
   }
 
   upsert(key: string, fields: UpsertFields = {}): RideRecord {
-    const rec = this.rides.get(key) ?? blankRecord(key);
+    const uid = toUid(key);
+    const rec = this.rides.get(uid) ?? blankRecord(uid);
     if (fields.title) rec.title = fields.title;
     if (fields.title_base) {
       rec.title_base = fields.title_base;
@@ -442,7 +498,7 @@ export class Store {
     rec.deleted = false;
     rec.deleted_at = "";
     rec.last_seen = nowIso();
-    this.rides.set(key, rec);
+    this.rides.set(uid, rec);
     return rec;
   }
 
@@ -452,11 +508,11 @@ export class Store {
    * true when this call newly flagged the ride.
    */
   markDeleted(key: string): boolean {
-    const rec = this.rides.get(key);
+    const rec = this.rides.get(toUid(key));
     if (!rec || rec.deleted) return false;
     rec.deleted = true;
     rec.deleted_at = nowIso();
-    this.rides.set(key, rec);
+    this.rides.set(toUid(key), rec);
     return true;
   }
 
@@ -537,10 +593,15 @@ export class Store {
     return JSON.stringify({ ...meta, ...this.serialize() }, null, 2);
   }
 
-  /** Merge an exported state JSON into the store and persist. Returns count merged. */
+  /** Merge an exported state JSON into the store and persist. Returns count merged.
+   *  A blob that isn't the current schema is rejected (nothing merged) — exports
+   *  carry their `schema`, so a current export round-trips and a foreign/old file
+   *  is cleanly ignored rather than half-imported. */
   importJson(text: string): number {
+    const migrated = migrate(JSON.parse(text));
+    if (!migrated) return 0;
     const before = this.rides.size;
-    this.ingest(JSON.parse(text));
+    this.ingest(migrated);
     this.save();
     this.refreshSize();
     return this.rides.size - before;

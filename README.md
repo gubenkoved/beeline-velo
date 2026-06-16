@@ -1,15 +1,33 @@
-# Beeline Toolkit
+# GPX Toolkit
 
-A **backend-free** browser companion for the **Beeline Velo 2** that batch-uploads your
-rides to **Strava**. Beeline only lets you upload rides one-by-one; this app lists your
-rides with their upload status, lets you select them, and uploads in a batch.
+A **backend-free** browser app to explore, map, analyze and export your bike rides. Bring
+your rides in as plain **GPX files** — no account, no sign-up, nothing to install — and the
+app gives you an interactive library: a distance/speed chart with KPIs, year/month grouping,
+per-ride maps and elevation, a route-frequency heatmap, rich filters, and re-export. That's
+the whole app, and it works entirely on its own.
 
-The app uses the **Beeline account** source: sign in with your Beeline email/password and the
-app downloads your **entire** ride history — routes, stats and Strava status — in a single
-request from Beeline's own cloud backend, then uploads to Strava server-side (fast, and
-several rides at once). No cable, works in any modern browser.
+On top of that, it has a first-class **Beeline Velo 2** integration: connect your Beeline
+account and it pulls your **entire** ride history in one shot and batch-uploads rides to
+**Strava** server-side. Beeline is a *great optional source*, not a requirement — every
+feature except the Beeline-specific ones (history pull, Strava upload) works with GPX files
+alone.
 
-There's also a **demo** so you can explore with no account and no data of your own.
+Rides from every source **coexist in one unified library** — each tagged by its source, with
+a source filter — and source-dependent actions are gated per ride (e.g. *Push to Strava*
+shows only on Beeline rides). Two sources today:
+
+- **GPX files** *(no account needed)* — drag-and-drop `.gpx` files (or a `.zip` bundle)
+  recorded by any device or app. They're parsed **locally**, metrics derived from the
+  recorded track, and stored in your browser. Explore, map, analyze and re-export them — the
+  app is fully functional with just this source.
+- **Beeline account** *(optional)* — sign in with your Beeline email/password and the app
+  downloads your **entire** ride history (routes, stats, Strava status) in a single request
+  from Beeline's own cloud backend, then uploads to Strava server-side (fast, several rides
+  at once). Beeline only lets you upload one-by-one; this lists your rides with their upload
+  status, lets you select them, and uploads in a batch. No cable, any modern browser.
+
+There's also a **demo** so you can explore the Beeline experience with no account and no data
+of your own.
 
 > **Your Beeline password is never stored.** Sign-in uses it once to obtain a short-lived
 > token held only in memory; nothing is written to disk. On reload (or whenever an action
@@ -20,17 +38,19 @@ There's also a **demo** so you can explore with no account and no data of your o
 > **Vibe coded.** This project is almost entirely "vibe coded" — developed with the help of
 > LLM coding agents. Review accordingly and expect the occasional rough edge.
 
-Everything runs **in the browser**: the Beeline-account source talks to Beeline's Firebase
-backend over `fetch` (CORS-friendly, no proxy). There is no server and no rooting. State is
-kept per-source in the browser (IndexedDB).
+Everything runs **in the browser**: GPX files are parsed locally, and the optional
+Beeline-account source talks to Beeline's Firebase backend over `fetch` (CORS-friendly, no
+proxy). There is no server and no rooting. State is kept in the browser (IndexedDB), with all
+sources' rides in one unified store.
 
-![Beeline Toolkit listing scanned rides with a distance chart, KPIs, and month groups, ready to batch-upload to Strava](docs/screenshot.png)
+![GPX Toolkit listing rides from Beeline and imported GPX with a distance chart, KPIs, and month groups, ready to batch-upload to Strava](docs/screenshot.png)
 
 ## Requirements
 
-- A **Beeline account** with **Strava already connected** (in the Beeline app:
-  Settings → Integrations → Strava).
-- Any modern browser; the page served over `localhost` or HTTPS.
+- Any modern browser; the page served over `localhost` or HTTPS. **That's it** to use the
+  app with your own GPX files.
+- *Only for the optional Beeline source:* a **Beeline account**, with **Strava already
+  connected** if you want to upload (in the Beeline app: Settings → Integrations → Strava).
 - For development: Node.js 20+ and npm.
 
 ## Quick start
@@ -40,10 +60,10 @@ npm install
 npm run dev          # open the printed http://localhost:… URL
 ```
 
-On first run the app shows a **source picker** — sign in to your **Beeline account** (or try
-its **demo**). Your choice is remembered, so later visits go straight back into that mode (a
-Beeline account opens on your cached rides and asks for the password only when you sync). Use
-**Change source** in the header to switch.
+The app boots straight into your (initially empty) **ride library**. On the very first launch
+a short **Sources** dialog explains the model and lets you fill it: **Add GPX files** to start
+with no account, or **connect Beeline** (or try its **demo**). You can open **Sources** from
+the header any time to connect or manage sources — there's no per-source "mode" to switch.
 
 ## Beeline account & your password
 
@@ -56,8 +76,8 @@ The design goal is to **never store your Beeline password in clear** (or at all)
   prefill and re-open the sign-in.
 - On reload, the app enters an **offline, cached-rides** mode (everything you already
   downloaded is fully browsable). The moment you do something that needs the account —
-  **Re-sync** or **Upload to Strava** — it asks you to sign in again, which is exactly when
-  your **password manager** can autofill it. The action you triggered then runs.
+  **Pull from Beeline** or **Push to Strava** — it asks you to sign in again, which is exactly
+  when your **password manager** can autofill it. The action you triggered then runs.
 
 This keeps the app autonomous offline and leaves password custody entirely to your browser /
 password manager.
@@ -84,21 +104,28 @@ See [`infra/gpx-relay/README.md`](infra/gpx-relay/README.md) for the AWS deploy 
 
 ## Usage
 
-- **Get your rides** — press **Re-sync** to download your whole history in one shot.
-- See a **distance-per-month chart** with quick KPIs (total km, ride count, averages).
-- Rides are grouped by **year → month** with a green/amber bar showing uploaded vs pending.
-  Each year and month has a **select-all checkbox** plus batch actions, so you can upload a
-  whole month or year at once.
+- **Fill your library** — **Add GPX files** (drag-and-drop or pick `.gpx`/`.zip`), and/or
+  open **Sources** to connect Beeline and **Pull from Beeline** to download your whole
+  history in one shot.
+- See a **distance/speed chart** with quick KPIs (total km, ride count, averages), bucketed
+  by day / week / month / year.
+- Rides are grouped by **year → month**, each header showing a riding-volume bar (its
+  distance vs the busiest sibling) and a **select-all checkbox** for batch actions.
 - Expand any ride to see full details (distance, avg/max speed, moving / elapsed time,
-  elevation) and its **full** GPS route on a map.
-- **Filter** by **Strava status** (Pending / Uploaded / Other), route presence, destination,
-  whether you've given the ride a real name, and distance.
-- **Upload** one ride, a month, a year, the current selection, or *all* known pending — with
-  a live progress indicator. Uploads run **concurrently**, server-side.
+  elevation) and its GPS route on a map.
+- **Map** view plots every ride's track as an overlapping heatmap; a **Stats** view adds a
+  route-frequency heatmap and lifetime totals/records. Both have a *locate me* toggle and a
+  rubber-band area filter.
+- **Filter** by source, route presence, distance, whether you've named the ride — plus, for
+  Beeline rides, **Strava status** (Pending / Uploaded / Other) and destination.
+- **Push to Strava** *(Beeline rides only)* — upload one ride, the current selection, or
+  *all* pending, with a live progress indicator. Uploads run **concurrently**, server-side.
+  A bulk action over a mixed selection acts on the upload-capable subset and reports the rest
+  as skipped.
 - **Download GPX** for any ride (synthesized from the stored track — works offline too).
 - **Queue work freely** — requests line up and drain in order, coalescing consecutive
-  sweeps. Use **Clear queue** and **Stop** to manage it. Local data can be exported/imported
-  as JSON from the **Data** menu.
+  sweeps. Use **Stop** to manage it. Local data can be exported/imported as JSON, and the
+  re-fetchable download cache flushed, from the **Data** menu.
 
 ## Scripts
 
@@ -114,16 +141,17 @@ npm run test:watch   # watch mode
 
 | Path | Responsibility |
 |------|----------------|
-| [index.html](index.html) | App shell, styles, and markup |
-| [src/main.ts](src/main.ts) | UI entry point — rendering, DOM wiring, source picker |
-| [src/controller.ts](src/controller.ts) | App state + scan/check/upload orchestration |
-| [src/source.ts](src/source.ts) | `RideSource` seam + shared GPX/catalog types |
+| [index.html](index.html) | App shell, styles, markup, and the Sources dialog |
+| [src/main.ts](src/main.ts) | UI entry point — rendering, DOM wiring, Sources dialog, GPX import |
+| [src/controller.ts](src/controller.ts) | App state + source registry + per-ride dispatch |
+| [src/source.ts](src/source.ts) | `RideSource` seam + capabilities + shared GPX/catalog types |
+| [src/gpx-source.ts](src/gpx-source.ts) | `GpxRideSource` — import `.gpx`/`.zip`, local metrics/export |
 | [src/beeline-api.ts](src/beeline-api.ts) | Beeline cloud backend client (auth, rides, upload) |
 | [src/beeline-source.ts](src/beeline-source.ts) | `BeelineRideSource` — the account source over the API |
 | [src/beeline-demo.ts](src/beeline-demo.ts) | Simulated Beeline backend for the account demo |
-| [src/parsing.ts](src/parsing.ts) | Normalized metrics + ride-key/date helpers |
+| [src/parsing.ts](src/parsing.ts) | Normalized metrics + ride-key/date + uid helpers |
 | [src/jobs.ts](src/jobs.ts) | Single-worker background job queue |
-| [src/store.ts](src/store.ts) | Per-source IndexedDB-backed status cache |
+| [src/store.ts](src/store.ts) | Unified, versioned IndexedDB ride store |
 | [src/track.ts](src/track.ts) | Decode/render ride GPS tracks |
 
 ## Tests

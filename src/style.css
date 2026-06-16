@@ -290,21 +290,6 @@ button.small {
   background: #2a1117;
 }
 
-.scanbar {
-  margin-top: 11px;
-  gap: 8px;
-}
-/* Each scanbar label ("Scan") is glued to the segmented
-   control it describes by wrapping the pair in a group, so a wrap can never
-   leave the label on one line and its buttons on another. The group is a
-   transparent flex box that wraps as a single unit. */
-.ctlgroup {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
 .seg {
   display: inline-flex;
   background: var(--panel2);
@@ -424,6 +409,12 @@ button.small {
   color: var(--text);
   font-weight: 600;
 }
+/* A chip JS-gated out of the bar (a Beeline-only dimension in a GPX-only library).
+   Like `#fClear.hidden`, the `.hidden` class needs an explicit backing rule — the
+   button's default `display` would otherwise keep it visible. */
+.fchip.hidden {
+  display: none;
+}
 /* The "Filters" disclosure toggle collapses the whole filter bar on narrow
    screens (revealed by the ≤560px block); on desktop the bar is always open with
    room to spare, so the toggle stays hidden. */
@@ -462,55 +453,6 @@ button.small {
 .ffilters-toggle.on {
   border-color: var(--accent);
   color: var(--text);
-}
-/* The Source dropdown reads as a pill, not a text field: pointer cursor, a
-   CSS-drawn chevron (same two-border recipe as .menubtn) instead of the native
-   off-baseline glyph, and the accent "on" state shared with the tri-state chips
-   so an active device filter looks active like everything else in the bar. */
-.fdevice {
-  cursor: pointer;
-}
-.fdevice:focus-within {
-  /* native focus-within accent (from .custom) is for editable fields; a select
-     isn't being typed into, so keep the idle look and let .on signal activity. */
-  color: var(--muted);
-}
-.fdevice select {
-  appearance: none;
-  -webkit-appearance: none;
-  background: transparent;
-  color: inherit;
-  border: 0;
-  /* room on the right so the label text never collides with the drawn chevron */
-  padding: 0 2px 0 0;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  outline: none;
-  max-width: 16ch;
-  text-overflow: ellipsis;
-}
-.fdevice select option {
-  background: var(--panel2);
-  color: var(--text);
-}
-.fdevice::after {
-  content: "";
-  width: 6px;
-  height: 6px;
-  margin-left: 1px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  color: var(--muted);
-  transform: translateY(-2px) rotate(45deg);
-}
-.fdevice.on {
-  border-color: var(--accent);
-  background: rgba(252, 82, 0, 0.1);
-  color: var(--text);
-}
-.fdevice.on::after {
-  color: var(--accent);
 }
 .fdist input {
   width: 3.6ch;
@@ -991,11 +933,6 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
   color: var(--muted);
   font-size: 12.5px;
 }
-.yactions {
-  margin-left: auto;
-  display: flex;
-  gap: 7px;
-}
 .selall {
   width: 16px;
   height: 16px;
@@ -1064,11 +1001,6 @@ span.caret.open::before {
   color: var(--muted);
   font-size: 12.5px;
 }
-.mactions {
-  margin-left: auto;
-  display: flex;
-  gap: 7px;
-}
 .bars {
   display: inline-flex;
   height: 6px;
@@ -1082,11 +1014,11 @@ span.caret.open::before {
   display: block;
   height: 100%;
 }
-.bars > .up {
-  background: var(--green);
-}
-.bars > .pe {
-  background: var(--amber);
+/* Riding-volume fill: this group's distance vs the busiest sibling. Source-agnostic
+   (replaced the old green/amber Strava upload-progress segments). */
+.bars > .vol {
+  background: var(--accent);
+  opacity: 0.85;
 }
 
 /* stats panel */
@@ -1244,21 +1176,6 @@ span.caret.open::before {
   color: var(--muted);
   white-space: nowrap;
 }
-.badge.pending {
-  color: var(--amber);
-  border-color: #4a3a12;
-  background: #251d08;
-}
-.badge.uploaded {
-  color: var(--green);
-  border-color: #1c3d24;
-  background: #0e2014;
-}
-.badge.processing {
-  color: var(--blue);
-  border-color: #16324a;
-  background: #0c1d2e;
-}
 .badge.queued {
   color: var(--blue);
   border-color: #2a3550;
@@ -1269,10 +1186,25 @@ span.caret.open::before {
   border-color: #5a2420;
   background: #2a1513;
 }
-.badge.gps {
-  color: #36c2b4;
-  border-color: #1c4742;
-  background: #0c211f;
+/* Per-ride source marker — a tiny icon at the start of the ride title (cloud =
+   Beeline, file = GPX) so the source reads at a glance. Icon-only and source-tinted;
+   only rendered when the library mixes sources (see sourceMark). */
+.src-mark {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  margin-right: -2px; /* trim the .rtitle gap a touch so it hugs the name */
+}
+.src-mark svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+.src-mark.src-gpx {
+  color: #d8a657;
+}
+.src-mark.src-beeline {
+  color: #6aa3d8;
 }
 /* "Full GPX cached" — deliberately quiet: muted text + a small green "ready
    offline" dot, so it reads as a subtle availability hint rather than another loud
@@ -1479,8 +1411,7 @@ span.caret.open::before {
 /* Ride-row actions: keep only the primary (Upload to Strava) inline and tuck the
    rest (Save .gpx / Rename / Delete) behind the "⋯" overflow at EVERY width, so a
    row never becomes a wall of buttons on desktop or mobile. Scoped to `.rbtns`
-   (the per-ride cluster) so the single-action group headers (.yactions/.mactions)
-   keep their inline-on-desktop behavior. These two-class rules win over the
+   (the per-ride cluster). These two-class rules win over the
    `.ovr`/`.ovr-items` base above by specificity. */
 .rbtns {
   position: relative;
@@ -1562,7 +1493,7 @@ span.caret.open::before {
    bypasses the header rule that hides collapsible `.mi` icons, so it always shows. */
 .split > button.iconmenu {
   width: 32px;
-  padding: 0;
+  padding: 4px 0;
   gap: 0;
   justify-content: center;
 }
@@ -1647,6 +1578,55 @@ span.caret.open::before {
 }
 .splitmenu button.danger:hover:not(:disabled) {
   background: #2a1413;
+}
+/* The one primary action that lives inside the consolidated ⋯ menu (Push all to
+   Strava): tint it accent so it reads as the menu's CTA, not just another row. */
+.splitmenu button.menu-accent {
+  color: #ff7a33;
+  font-weight: 600;
+}
+.splitmenu button.menu-accent:hover:not(:disabled) {
+  background: #221308;
+}
+/* Section caption inside the consolidated ⋯ menu ("Selected", "App data"): a small
+   muted uppercase label that groups the rows beneath it without heavy divider lines. */
+.splitmenu .menu-section {
+  display: block;
+  padding: 4px 11px 3px;
+  margin-top: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+/* The selected-ride section is shown only when something is selected. */
+.menu-group {
+  display: contents;
+}
+.menu-group.hidden {
+  display: none;
+}
+/* Storage breakdown at the top of the Data menu: a small, non-interactive caption
+   spelling out the cache-vs-data split (so "Clear download cache" is unambiguous). */
+.menu-storage {
+  display: block;
+  padding: 4px 11px 6px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.menu-storage.hidden {
+  display: none;
+}
+.menu-storage .ms-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+}
+.menu-storage .ms-row span:last-child {
+  font-variant-numeric: tabular-nums;
 }
 
 .rmap {
@@ -1826,6 +1806,10 @@ body.ridemap-open {
   border-top: 1px solid var(--line);
   padding: 6px 12px 10px;
   box-sizing: border-box;
+  /* Scrubbing is a horizontal pointer drag; without this the browser claims the
+     touch gesture for scroll/zoom and cancels our pointermove, so touch-drag
+     scrubbing (and the route-map dot sync it drives) silently dies on mobile. */
+  touch-action: none;
 }
 .ridemap-profile.hidden {
   display: none;
@@ -1936,9 +1920,6 @@ body.ridemap-open {
 #mapView.hidden,
 #exploreView.hidden,
 #statsView.hidden {
-  display: none;
-}
-#scanbar.hidden {
   display: none;
 }
 
@@ -2220,6 +2201,43 @@ body.ridemap-open {
   background: var(--accent);
   border-color: var(--accent);
   color: #1a1206;
+}
+/* "Locate me" toggle: third floating button, stacked under Expand + Select. Shares
+   the same floating-square look; lights up blue (a location/GPS hue, distinct from
+   the accent-orange selection state) while it's actively watching the device position. */
+.map-locate {
+  position: absolute;
+  top: 90px;
+  right: 10px;
+  z-index: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  background: rgba(20, 23, 29, 0.92);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.map-locate:hover {
+  background: #222732;
+  border-color: #333b48;
+}
+.map-locate.active {
+  background: #2b8cff;
+  border-color: #2b8cff;
+  color: #fff;
+}
+.map-locate .mi {
+  width: 17px;
+  height: 17px;
+  display: block;
+  pointer-events: none;
 }
 /* Crisp inline-SVG glyphs (no fragile Unicode); icons swap on state so the
    buttons stay icon-only. Expand shows the maximize frame, flips to minimize
@@ -2528,6 +2546,29 @@ body.heat-expanded {
   line-height: 1.6;
   padding: 8px 2px;
 }
+/* Empty-state CTA links (Map side panel, Stats, Explore filter-clear): accent-tinted
+   so the "connect a source" / "clear filters" affordance reads as a clear action,
+   not default-blue browser link chrome on the dark theme. `.linkbtn` is a real
+   <button> (correct semantics for an action) drawn to read as an inline text link. */
+.map-side .ms-empty a,
+.stats-empty a,
+.empty a,
+.linkbtn {
+  color: var(--accent);
+  font-weight: 500;
+}
+.linkbtn {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.linkbtn:hover {
+  text-decoration: none;
+}
 .ms-list {
   display: flex;
   flex-direction: column;
@@ -2681,16 +2722,43 @@ body.heat-expanded {
 .ms-item.pinned {
   border-color: var(--accent-dim);
 }
-#trackPointsBox input {
-  width: 4ch;
-  min-width: 3.4ch;
-}
 
 .empty {
   color: var(--muted);
   text-align: center;
   padding: 56px 20px;
   line-height: 1.7;
+}
+/* First-run onboarding inside the empty state — deliberately minimal: a heading,
+   one explanatory line, two CTAs and a demo link. */
+.onb {
+  max-width: 420px;
+  margin: 0 auto;
+}
+.onb-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 6px;
+}
+.onb-lede {
+  margin: 0 0 18px;
+}
+.onb-lede b {
+  color: var(--text);
+}
+.onb-cta {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.onb-foot {
+  margin: 16px 0 0;
+  font-size: 13px;
+}
+.onb-foot a {
+  color: var(--accent);
 }
 .toast {
   position: fixed;
@@ -2741,7 +2809,6 @@ body.job-active .toast {
   header button.small {
     padding: 4px 9px;
   }
-  .scanbar,
   .filterbar {
     gap: 7px;
   }
@@ -2822,33 +2889,23 @@ body.job-active .toast {
     display: none; /* build hash is desktop-only chrome */
   }
   /* …except in the source picker, where the version is worth keeping even on
-     narrow screens — only the cute tagline drops out there. */
+     narrow screens. */
   .srcpick-head .brand .ver {
     display: inline;
-  }
-  .srcpick-head .brand .tagline {
-    display: none;
   }
   .totals {
     font-size: 11.5px;
   }
-  /* The flexible spacer separates info from bulk-actions (header) and the Scan
-     group from the Track-detail group (scanbar). At full width it grows and
-     shoves a lone label to the far edge while its segment wraps below it. On
-     mobile force it to a zero-height full-width break instead, so each labelled
-     group starts a fresh line with its label still attached to its controls. */
+  /* The flexible spacer separates info from bulk-actions in the header. At full
+     width it grows and shoves a lone label to the far edge while its segment wraps
+     below it. On mobile force it to a zero-height full-width break instead, so each
+     labelled group starts a fresh line with its label still attached to its controls. */
   .row .spacer {
     flex-basis: 100%;
     height: 0;
   }
-  .scanbar,
   .filterbar {
     gap: 6px;
-  }
-  /* Scan / Track-detail labels are verbose; the segmented
-     controls below them already imply the meaning, so shrink the labels. */
-  .scanbar .totals {
-    font-size: 11px;
   }
   .custom {
     padding: 5px 10px;
@@ -2929,8 +2986,6 @@ body.job-active .toast {
   .ovr {
     display: inline-flex;
   }
-  .yactions,
-  .mactions,
   .rbtns {
     position: relative;
   }
@@ -2951,8 +3006,6 @@ body.job-active .toast {
     border-radius: 9px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   }
-  .yactions.open .ovr-items,
-  .mactions.open .ovr-items,
   .rbtns.open .ovr-items {
     display: flex;
   }
@@ -3025,8 +3078,7 @@ body.job-active .toast {
     width: 16px;
     height: 16px;
   }
-  #btnSource,
-  #btnUploadPending {
+  #btnSource {
     display: inline-flex;
     align-items: center;
     padding: 6px;
@@ -3187,6 +3239,61 @@ body.job-active .toast {
   color: var(--muted);
   margin: 8px 0 18px;
 }
+/* The welcome intro explains what sources are; shown only on first-ever launch
+   (the dialog carries `.welcome`), hidden when the dialog is opened later as the
+   subtle Sources config from the header. */
+.srcpick-welcome {
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.55;
+  margin: 10px 0 18px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius);
+}
+.srcpick:not(.welcome) .srcpick-welcome {
+  display: none;
+}
+/* In welcome mode the intro paragraph carries the explanation, so drop the shorter
+   sub-line (it only leads the dialog when re-opened later from the header). */
+.srcpick.welcome .srcpick-sub {
+  display: none;
+}
+/* Connected-state block of the Beeline card: shown (and the sign-in form hidden)
+   once the account is connected — so the card flips between "sign in" and
+   "connected: pull / disconnect". */
+.srcopt-connected {
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+#srcBeeline.connected .srcopt-form {
+  display: none;
+}
+#srcBeeline.connected .srcopt-connected {
+  display: flex;
+}
+.srcopt-status {
+  color: var(--green);
+  font-size: 13px;
+}
+.srcopt-status::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  vertical-align: middle;
+}
+.srcopt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .srcpick-options {
   display: flex;
   flex-direction: column;
@@ -3212,19 +3319,32 @@ body.job-active .toast {
   align-items: center;
   gap: 8px;
 }
-.srcopt-tag {
-  font-size: 11px;
-  font-weight: 500;
-  white-space: nowrap;
+/* A small "proud to support" sparkle beside a first-class source's title — icon
+   only (the meaning lives in title/aria), drawn in the accent colour so it reads
+   as a celebratory mark, not a "recommended" label. */
+.srcopt-mark {
+  display: inline-flex;
+  flex: 0 0 auto;
   color: var(--accent);
-  border: 1px solid var(--accent-dim);
-  border-radius: 999px;
-  padding: 1px 8px;
+}
+.srcopt-mark svg {
+  width: 16px;
+  height: 16px;
 }
 .srcopt-desc {
   color: var(--muted);
   font-size: 13px;
   margin-top: 4px;
+}
+/* Subtle inline link to the Beeline Velo site from the source description. Takes a
+   restrained accent tint (not full button chrome) and only underlines on hover, so
+   it reads as a quiet "learn more" rather than competing with the sign-in CTA. */
+.srcopt-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+.srcopt-link:hover {
+  text-decoration: underline;
 }
 /* The Beeline option stacks its description above an inline sign-in form. Reset
    .srcopt-main's row flex-basis (260px) here: in this column it would otherwise
@@ -3289,10 +3409,6 @@ body.job-active .toast {
 .srcopt-note a {
   color: var(--accent);
 }
-.srcpick-dismiss {
-  display: block;
-  margin: 16px auto 0;
-}
 /* Close affordance (top-right of the card) so the picker is always escapable. */
 .srcpick-card {
   position: relative;
@@ -3323,13 +3439,29 @@ body.job-active .toast {
 /* Re-auth mode: the user already has a Beeline profile and only needs to re-enter
    their password (which a password manager can inject), so collapse the picker to
    just the Beeline sign-in — hide the other sources, the in-card demo shortcut, and
-   the "recommended" tag (pointless when it's the only option shown). */
+   the support mark (pointless when it's the only option shown). */
 .srcpick.reauth .srcopt:not(#srcBeeline),
 .srcpick.reauth #btnDemoBeeline,
-.srcpick.reauth #srcBeeline .srcopt-tag,
-.srcpick.reauth #srcBeeline .srcopt-note,
-.srcpick.reauth .srcpick-dismiss {
+.srcpick.reauth #srcBeeline .srcopt-mark,
+.srcpick.reauth #srcBeeline .srcopt-note {
   display: none;
+}
+
+/* Drag-and-drop GPX import: a subtle full-window accent outline while files are
+   dragged over the app, so it's clear the page accepts a drop. */
+body.dragging-files::after {
+  content: "Drop .gpx files or a .zip bundle to import";
+  position: fixed;
+  inset: 8px;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 2px dashed var(--accent);
+  border-radius: 14px;
+  pointer-events: none;
 }
 
 /* --- Confirm dialog -------------------------------------------------------
@@ -3415,45 +3547,26 @@ body.job-active .toast {
   gap: 8px;
 }
 
-/* --- Beeline (account) mode chrome ----------------------------------------
-   The cloud source has no time-window scan, a single account, and full (not
-   simplified) tracks, so hide the controls that don't apply when a Beeline
-   account is the source: the scan presets/custom-days (only a full "Re-sync"
-   applies), the "Source" ride filter, the "Track detail" density control (the
-   downloaded polyline is kept verbatim, nothing to thin), and the "Details"
-   filter (every Beeline ride arrives fully detailed, so it never narrows). */
-body[data-src="beeline"] #scanPresets,
-body[data-src="beeline"] #trackPointsBox,
-body[data-src="beeline"] #fDetails,
-body[data-src="beeline"] .fdevice {
-  display: none;
-}
-/* With the presets/speed gone, the scan bar's only control is "Re-sync", which we
-   hoist into the header's connection cluster (see placeScanButton) — so a lone
-   button no longer claims its own second row. Drop the now-empty bar, and shrink
-   the hoisted Re-sync to sit among the small header controls. */
-body[data-src="beeline"] #scanbar {
-  display: none;
-}
-body[data-src="beeline"] #btnScan {
+/* The "Pull from Beeline" sync button lives in the header connection cluster and is
+   shown only when Beeline is connected (renderConn). Size it to sit among the other
+   small header controls; #fDestination / #fNamed are Beeline-centric filter chips
+   that default hidden and are JS-shown only when Beeline rides are present. */
+.conn #btnScan {
   padding: 4px 11px;
   font-size: 12.5px;
   border-radius: 7px;
 }
-body[data-src="beeline"] #btnScan svg {
+.conn #btnScan svg {
   width: 14px;
   height: 14px;
 }
-/* The "Destination" filter is the inverse: a routed destination is a Beeline-only
-   concept, so the chip is hidden everywhere except Beeline mode, where filtering
-   routed vs. free rides is genuinely useful. The "Named" filter is likewise
-   Beeline-only: only there do we synthesize the auto "<time> ride" names, so
-   "named vs unnamed" is a meaningful, unambiguous split. */
+/* #fDestination / #fNamed are Beeline-centric chips: default hidden, JS shows them
+   (drops `.hidden`) only when the library has Beeline rides. */
 #fDestination,
 #fNamed {
   display: none;
 }
-body[data-src="beeline"] #fDestination,
-body[data-src="beeline"] #fNamed {
+#fDestination:not(.hidden),
+#fNamed:not(.hidden) {
   display: inline-block;
 }

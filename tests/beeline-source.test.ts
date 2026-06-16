@@ -9,9 +9,14 @@ import { BeelineRideSource } from "../src/beeline-source";
 import { Controller } from "../src/controller";
 import { GpxCache } from "../src/gpxcache";
 import { memoryBackend, memoryBlobBackend } from "../src/kv";
-import { beelineRideKey } from "../src/parsing";
+import { beelineRideKey as rawRideKey, rideUid } from "../src/parsing";
 import type { Sleep } from "../src/source";
 import { Store } from "../src/store";
+
+// In these tests a ride "key" is the cross-source uid the Store, GPX cache and
+// Controller all work in (`beeline::<datetime>`). `beelineRideKey` is shadowed to
+// return that uid so every lookup + dispatch uses the canonical identity.
+const beelineRideKey = (startMs: number): string => rideUid("beeline", rawRideKey(startMs));
 
 const FIXTURE = JSON.parse(
   readFileSync(

@@ -12,11 +12,25 @@
 
 export type LatLon = [number, number]; // [lat, lon]
 
+/**
+ * Collect elements by local tag name, tolerant of a default XML namespace. Real-
+ * world GPX files almost always declare `xmlns="http://www.topografix.com/GPX/1/1"`,
+ * and some parsers (notably jsdom) won't match a default-namespaced `<trkpt>` via
+ * `getElementsByTagName`. Fall back to a namespace-wildcard lookup so namespaced
+ * and bare GPX both yield their points — ingestion correctness must not hinge on
+ * whether the file declared a namespace.
+ */
+function byTag(doc: Document, tag: string): Element[] {
+  const direct = doc.getElementsByTagName(tag);
+  if (direct.length > 0) return Array.from(direct);
+  return Array.from(doc.getElementsByTagNameNS("*", tag));
+}
+
 /** Parse `<trkpt>`/`<rtept>` lat/lon pairs out of a GPX document. */
 export function extractTrack(gpx: string): LatLon[] {
   const doc = new DOMParser().parseFromString(gpx, "text/xml");
-  let pts = Array.from(doc.getElementsByTagName("trkpt"));
-  if (pts.length === 0) pts = Array.from(doc.getElementsByTagName("rtept"));
+  let pts = byTag(doc, "trkpt");
+  if (pts.length === 0) pts = byTag(doc, "rtept");
   const out: LatLon[] = [];
   for (const p of pts) {
     const lat = Number(p.getAttribute("lat"));
@@ -48,8 +62,13 @@ export interface FullTrack {
  */
 export function extractFullTrack(gpx: string): FullTrack {
   const doc = new DOMParser().parseFromString(gpx, "text/xml");
-  let nodes = Array.from(doc.getElementsByTagName("trkpt"));
-  if (nodes.length === 0) nodes = Array.from(doc.getElementsByTagName("rtept"));
+  let nodes = byTag(doc, "trkpt");
+  if (nodes.length === 0) nodes = byTag(doc, "rtept");
+  const childText = (p: Element, tag: string): string | null => {
+    let el = p.getElementsByTagName(tag)[0];
+    if (!el) el = p.getElementsByTagNameNS("*", tag)[0];
+    return el ? (el.textContent ?? null) : null;
+  };
   const points: LatLon[] = [];
   const eles: (number | null)[] = [];
   const times: (number | null)[] = [];
@@ -58,11 +77,11 @@ export function extractFullTrack(gpx: string): FullTrack {
     const lon = Number(p.getAttribute("lon"));
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
     points.push([lat, lon]);
-    const eleEl = p.getElementsByTagName("ele")[0];
-    const ele = eleEl ? Number(eleEl.textContent) : Number.NaN;
+    const eleText = childText(p, "ele");
+    const ele = eleText != null ? Number(eleText) : Number.NaN;
     eles.push(Number.isFinite(ele) ? ele : null);
-    const timeEl = p.getElementsByTagName("time")[0];
-    const t = timeEl ? Date.parse(timeEl.textContent ?? "") : Number.NaN;
+    const timeText = childText(p, "time");
+    const t = timeText != null ? Date.parse(timeText) : Number.NaN;
     times.push(Number.isFinite(t) ? t : null);
   }
   return { points, eles, times };
@@ -349,7 +368,7 @@ export function encodedTrackToGpx(encoded: string, name: string): string | null 
   const trkpts = pts.map(([lat, lon]) => `<trkpt lat="${lat}" lon="${lon}"></trkpt>`).join("");
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
-    `<gpx version="1.1" creator="Beeline Toolkit" xmlns="http://www.topografix.com/GPX/1/1">` +
+    `<gpx version="1.1" creator="GPX Toolkit" xmlns="http://www.topografix.com/GPX/1/1">` +
     `<trk><name>${esc(name)}</name><trkseg>${trkpts}</trkseg></trk></gpx>`
   );
 }

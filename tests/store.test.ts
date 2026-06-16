@@ -1,7 +1,19 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { type KeyValueStore, memoryBackend } from "../src/kv";
-import { DEFAULT_TRACK_POINTS_PER_KM, STORAGE_KEY, Store } from "../src/store";
+import { rideUid } from "../src/parsing";
+import { DEFAULT_TRACK_POINTS_PER_KM, SCHEMA_VERSION, STORAGE_KEY, Store } from "../src/store";
+
+/** A current-schema persisted blob wrapping the given ride records (keyed by uid). */
+function blob(rides: Record<string, Record<string, unknown>>): string {
+  return JSON.stringify({ schema: SCHEMA_VERSION, updated_at: "x", rides });
+}
+
+/** Look a record up by its datetime key. The map is keyed by the cross-source uid
+ *  (`${source}::${datetime}`), but a record's own `key` stays the bare datetime. */
+function byKey(s: Store, key: string) {
+  return s.rides.get(rideUid("beeline", key));
+}
 
 describe("Store", () => {
   let map: Map<string, string>;
@@ -22,7 +34,7 @@ describe("Store", () => {
     await s.flush();
 
     const reloaded = await Store.load(backend);
-    const rec = reloaded.rides.get("Sat Jun 13 2026 at 14:22")!;
+    const rec = byKey(reloaded, "Sat Jun 13 2026 at 14:22")!;
     expect(rec.title).toBe("Afternoon ride");
     expect(rec.distance_km).toBeCloseTo(22.6);
     expect(rec.elapsed_sec).toBe(5872);
@@ -32,20 +44,17 @@ describe("Store", () => {
   it("stamps uploaded_at only on the transition to uploaded", async () => {
     const s = await Store.load(backend);
     s.upsert("k", { strava_status: "pending" });
-    expect(s.rides.get("k")!.uploaded_at).toBe("");
+    expect(byKey(s, "k")!.uploaded_at).toBe("");
     s.upsert("k", { strava_status: "uploaded" });
-    const at = s.rides.get("k")!.uploaded_at;
+    const at = byKey(s, "k")!.uploaded_at;
     expect(at).not.toBe("");
     s.upsert("k", { strava_status: "uploaded" }); // no second stamp
-    expect(s.rides.get("k")!.uploaded_at).toBe(at);
+    expect(byKey(s, "k")!.uploaded_at).toBe(at);
   });
 
   it("scrubs known bad titles on load", async () => {
-    map.set(
-      STORAGE_KEY,
-      JSON.stringify({ updated_at: "x", rides: { k: { key: "k", title: "Heatmap" } } }),
-    );
-    expect((await Store.load(backend)).rides.get("k")!.title).toBe("");
+    map.set(STORAGE_KEY, blob({ "beeline::k": { key: "k", title: "Heatmap" } }));
+    expect(byKey(await Store.load(backend), "k")!.title).toBe("");
   });
 
   it("scrubs stat-shaped titles persisted by an earlier parsing bug", async () => {
@@ -54,12 +63,9 @@ describe("Store", () => {
     // so a re-scan/check reseeds a real title.
     map.set(
       STORAGE_KEY,
-      JSON.stringify({
-        updated_at: "x",
-        rides: { k: { key: "k", title: "20,0km/h", title_base: "209m" } },
-      }),
+      blob({ "beeline::k": { key: "k", title: "20,0km/h", title_base: "209m" } }),
     );
-    const rec = (await Store.load(backend)).rides.get("k")!;
+    const rec = byKey(await Store.load(backend), "k")!;
     expect(rec.title).toBe("");
     expect(rec.title_base).toBe("");
   });
@@ -71,16 +77,13 @@ describe("Store", () => {
     await s.flush();
 
     const reloaded = await Store.load(backend);
-    const rec = reloaded.rides.get("k")!;
+    const rec = byKey(reloaded, "k")!;
     expect(rec.device_model).toBe("Beeline (rider@example.com)");
   });
 
-  it("defaults the device fields to empty for legacy records without them", async () => {
-    map.set(
-      STORAGE_KEY,
-      JSON.stringify({ updated_at: "x", rides: { k: { key: "k", title: "Ride" } } }),
-    );
-    const rec = (await Store.load(backend)).rides.get("k")!;
+  it("defaults the device fields to empty for records without them", async () => {
+    map.set(STORAGE_KEY, blob({ "beeline::k": { key: "k", title: "Ride" } }));
+    const rec = byKey(await Store.load(backend), "k")!;
     expect(rec.device_model).toBe("");
   });
 
@@ -88,37 +91,35 @@ describe("Store", () => {
     const s = await Store.load(backend);
     // Scan writes only the short list name.
     s.upsert("k", { title_base: "Morning ride" });
-    expect(s.rides.get("k")!.title_base).toBe("Morning ride");
-    expect(s.rides.get("k")!.title).toBe("Morning ride"); // seeded so it renders before check
+    expect(byKey(s, "k")!.title_base).toBe("Morning ride");
+    expect(byKey(s, "k")!.title).toBe("Morning ride"); // seeded so it renders before check
 
     // Check writes the fuller heading; the short name is preserved separately.
     s.upsert("k", { title: "Morning ride, Amstelveen" });
-    expect(s.rides.get("k")!.title).toBe("Morning ride, Amstelveen");
-    expect(s.rides.get("k")!.title_base).toBe("Morning ride");
+    expect(byKey(s, "k")!.title).toBe("Morning ride, Amstelveen");
+    expect(byKey(s, "k")!.title_base).toBe("Morning ride");
 
     // A later scan must not clobber the fuller checked title.
     s.upsert("k", { title_base: "Morning ride" });
-    expect(s.rides.get("k")!.title).toBe("Morning ride, Amstelveen");
+    expect(byKey(s, "k")!.title).toBe("Morning ride, Amstelveen");
   });
 
   it("scrubs known bad title_base on load", async () => {
-    map.set(
-      STORAGE_KEY,
-      JSON.stringify({ updated_at: "x", rides: { k: { key: "k", title_base: "Journeys" } } }),
-    );
-    expect((await Store.load(backend)).rides.get("k")!.title_base).toBe("");
+    map.set(STORAGE_KEY, blob({ "beeline::k": { key: "k", title_base: "Journeys" } }));
+    expect(byKey(await Store.load(backend), "k")!.title_base).toBe("");
   });
 
-  it("export shape matches the Python rides.json (updated_at + rides map)", async () => {
+  it("export shape carries the schema version + updated_at + rides map", async () => {
     const s = await Store.load(backend);
     s.upsert("Sat Jun 13 2026 at 14:22", {
       title: "Afternoon ride",
       strava_status: "uploaded",
     });
     const parsed = JSON.parse(s.exportJson());
+    expect(parsed.schema).toBe(SCHEMA_VERSION);
     expect(typeof parsed.updated_at).toBe("string");
-    expect(Object.keys(parsed.rides)).toContain("Sat Jun 13 2026 at 14:22");
-    const rec = parsed.rides["Sat Jun 13 2026 at 14:22"];
+    expect(Object.keys(parsed.rides)).toContain("beeline::Sat Jun 13 2026 at 14:22");
+    const rec = parsed.rides["beeline::Sat Jun 13 2026 at 14:22"];
     expect(rec).toMatchObject({
       key: "Sat Jun 13 2026 at 14:22",
       title: "Afternoon ride",
@@ -128,48 +129,50 @@ describe("Store", () => {
     expect(rec).toHaveProperty("last_seen");
   });
 
-  it("migrates a legacy string-schema rides.json on import (and drops the strings)", async () => {
+  it("round-trips an exported state file through import (schema-gated)", async () => {
     const s = await Store.load(backend);
     s.upsert("existing", { title: "Old" });
-    // The pre-normalization shape (also produced by the old Python tool): localized
-    // distance/duration strings plus a `stats` label→string map.
-    const legacy = JSON.stringify({
-      updated_at: "2026-06-13T20:30:45+00:00",
-      rides: {
-        "Sat Jun 13 2026 at 14:22": {
-          key: "Sat Jun 13 2026 at 14:22",
-          title: "Afternoon ride",
-          distance: "22.6km",
-          duration: "1:37:52",
-          strava_status: "uploaded",
-          stats: {
-            Distance: "22.6km",
-            "Average speed": "20,0km/h",
-            "Moving time": "1:07:42",
-            "Elapsed time": "1:37:52",
-            "Elevation gain": "25m",
-          },
-          last_seen: "2026-06-13T20:30:45+00:00",
-          uploaded_at: "2026-06-13T19:15:22+00:00",
-        },
-      },
+    s.upsert("Sat Jun 13 2026 at 14:22", {
+      title: "Afternoon ride",
+      distance_km: 22.6,
+      avg_speed_kmh: 20.0,
+      moving_sec: 1 * 3600 + 7 * 60 + 42,
+      elapsed_sec: 1 * 3600 + 37 * 60 + 52,
+      elevation_gain_m: 25,
+      strava_status: "uploaded",
     });
-    const n = s.importJson(legacy);
-    expect(n).toBe(1);
-    const rec = s.rides.get("Sat Jun 13 2026 at 14:22")!;
+    const exported = s.exportJson();
+
+    const fresh = await Store.load(memoryBackend());
+    expect(fresh.importJson(exported)).toBe(2);
+    const rec = byKey(fresh, "Sat Jun 13 2026 at 14:22")!;
     expect(rec.strava_status).toBe("uploaded");
-    // Migrated to numbers (comma-decimal "20,0km/h" → 20.0, not 200).
     expect(rec.distance_km).toBeCloseTo(22.6);
     expect(rec.avg_speed_kmh).toBeCloseTo(20.0);
     expect(rec.moving_sec).toBe(1 * 3600 + 7 * 60 + 42);
-    expect(rec.elapsed_sec).toBe(1 * 3600 + 37 * 60 + 52);
     expect(rec.elevation_gain_m).toBeCloseTo(25);
-    // …and the legacy string fields are gone from the record.
-    const raw = rec as unknown as Record<string, unknown>;
-    expect(raw.distance).toBeUndefined();
-    expect(raw.duration).toBeUndefined();
-    expect(raw.stats).toBeUndefined();
-    expect(s.rides.get("existing")).toBeDefined();
+    expect(byKey(fresh, "existing")).toBeDefined();
+  });
+
+  it("rejects an unversioned or wrong-schema blob (clean slate, no half-load)", async () => {
+    // A pre-versioning blob (no `schema`) is discarded on load, not guessed at.
+    map.set(
+      STORAGE_KEY,
+      JSON.stringify({
+        updated_at: "x",
+        rides: { "beeline::k": { key: "k", title: "Ride" } },
+      }),
+    );
+    expect((await Store.load(backend)).rides.size).toBe(0);
+
+    // And importing one merges nothing rather than half-loading it.
+    const s = await Store.load(memoryBackend());
+    expect(
+      s.importJson(
+        JSON.stringify({ schema: 999, rides: { "beeline::k": { key: "k", title: "Ride" } } }),
+      ),
+    ).toBe(0);
+    expect(s.rides.size).toBe(0);
   });
 
   it("defaults, clamps, and round-trips the track-detail setting", async () => {
@@ -187,7 +190,7 @@ describe("Store", () => {
     s.upsert("k", { track: "abc123" });
     s.save();
     await s.flush();
-    expect((await Store.load(backend)).rides.get("k")!.track).toBe("abc123");
+    expect(byKey(await Store.load(backend), "k")!.track).toBe("abc123");
   });
 
   it("persists per-ride GPX capture metadata", async () => {
@@ -201,7 +204,7 @@ describe("Store", () => {
     });
     s.save();
     await s.flush();
-    const rec = (await Store.load(backend)).rides.get("k")!;
+    const rec = byKey(await Store.load(backend), "k")!;
     expect(rec.track_src_points).toBe(1432);
     expect(rec.track_points).toBe(87);
     expect(rec.track_km).toBe(12.3);
@@ -237,9 +240,7 @@ describe("Store", () => {
     expect(withRide).toBeGreaterThan(empty);
 
     // Importing more rides keeps the size in step without an explicit save/flush.
-    s.importJson(
-      JSON.stringify({ updated_at: "x", rides: { k2: { key: "k2", title: "Another" } } }),
-    );
+    s.importJson(blob({ "beeline::k2": { key: "k2", title: "Another" } }));
     expect(s.byteSize()).toBeGreaterThan(withRide);
 
     s.clear();

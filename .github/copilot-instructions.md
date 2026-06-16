@@ -1,18 +1,53 @@
-# Beeline Toolkit — Copilot instructions
+# GPX Toolkit — Copilot instructions
 
-A **backend-free**, framework-free browser SPA (vanilla TypeScript + DOM) that batch-uploads
-**Beeline Velo 2** rides to **Strava**. It reads rides from the **Beeline account** source
-behind a `RideSource` seam ([src/source.ts](../src/source.ts)):
+A **backend-free**, framework-free browser SPA (vanilla TypeScript + DOM) to explore, map,
+analyze and export bike rides from multiple **sources**, and batch-upload **Beeline Velo 2**
+rides to **Strava**. Sources sit behind a `RideSource` seam ([src/source.ts](../src/source.ts))
+and their rides **coexist in one unified store**:
 
-- **Beeline account** — talks to Beeline's own Firebase cloud backend over `fetch`
-  ([src/beeline-api.ts](../src/beeline-api.ts) + [src/beeline-source.ts](../src/beeline-source.ts)):
-  one request returns the **whole** history (routes, stats, Strava status); uploads run
-  server-side and **concurrently**. CORS-friendly, no proxy, any modern browser.
+- **Beeline account** ([src/beeline-api.ts](../src/beeline-api.ts) +
+  [src/beeline-source.ts](../src/beeline-source.ts)) — talks to Beeline's own Firebase cloud
+  backend over `fetch`: one request returns the **whole** history (routes, stats, Strava
+  status); uploads run server-side and **concurrently**. CORS-friendly, no proxy.
+  `capabilities = { upload: true, import: false }`.
+- **GPX files** ([src/gpx-source.ts](../src/gpx-source.ts)) — imports user-supplied `.gpx`
+  files and `.zip` bundles (drag-and-drop or picker) as rides, deriving metrics from the
+  recorded track locally. No account, no upload. `capabilities = { upload: false, import: true }`.
 
-The source has a demo ([src/beeline-demo.ts](../src/beeline-demo.ts)) for exploring without an
-account. Everything runs in the browser; ride state is cached **per source** in IndexedDB (a
-separate `Store` key per profile). There is no server. The `RideSource` seam is kept so a
-second source could be added later, but Beeline is the only implementation today.
+The Beeline source has a demo ([src/beeline-demo.ts](../src/beeline-demo.ts)) for exploring
+without an account. Everything runs in the browser; ride state is cached in **one unified**,
+**versioned** IndexedDB blob (`gpx-toolkit-state:all`, `schema` + `migrate()` in
+[src/store.ts](../src/store.ts)), each ride tagged by `source`. There is no server.
+
+**Data vs cache (Android-style):** full-GPX blobs live in two physically separate
+[`GpxCache`](../src/gpxcache.ts) stores — a re-fetchable **cache** (`cache` prefix: Beeline
+downloads, safe to flush) and a primary **data vault** (`data` prefix: imported GPX
+originals, the only copy). The Controller routes every per-ride GPX read/write through
+`blobFor(uid)` (gpx-source rides → data vault, else → cache); `flushGpxCache()` clears the
+cache ONLY, so an imported GPX's bytes can never be destroyed by a cache flush (only by
+deleting the ride or a full `reset()`). Don't store re-derivable data in the data vault, or
+irreplaceable data in the cache.
+
+**Multi-source identity:** a ride's cross-source identity is the uid `${source}::${datetime}`
+([`rideUid`/`splitUid`](../src/parsing.ts)); the Store, GPX cache and UI `data-key` work in
+uids, while a record's own `key` stays the bare datetime so all date/month bucketing is
+unchanged (`rideDatetime` tolerates uids). The `RideSource` seam still speaks **bare datetime
+keys** in each source's own namespace; the Controller translates uid↔datetime at the boundary
+and dispatches each ride's action to that ride's source (grouping by `splitUid(uid).source`).
+Source-dependent actions are gated per ride by `capabilities` (e.g. Upload to Strava shows
+only on Beeline rides; a bulk upload over a mixed selection acts on the upload-capable subset
+and reports the rest as skipped). Storage-key strings and internal `beeline-*` module names are
+kept stable (persistence ids) despite the "GPX Toolkit" product framing.
+
+**No source "mode".** The app is ONE library over the unified store; there is no per-source
+mode. It boots straight into the library (`openApp()`); a first-ever launch shows the **Sources**
+dialog (`showSources({welcome:true})`, once, gated by `WELCOMED_KEY`) with an onboarding intro,
+and the same dialog is re-openable any time from the header **Sources** button to connect/manage
+sources. All Beeline/Strava chrome is driven off **real signals**, never a mode flag: connection
+state + "Pull from Beeline" show when Beeline is in use (`usesBeeline` = connected/demo/has-
+Beeline-rides/remembered-profile); upload chrome + Strava-status filter show when any ride is
+`can_upload`; the Destination/Named filter chips show only when Beeline rides exist. Don't
+reintroduce a `currentSource`/`beelineMode` switch — gate UI on capabilities/connection instead.
 
 ### Beeline credentials — never store the password
 
@@ -55,11 +90,44 @@ out when a request pushes against them (see *Review & challenge the request*).
   Two copies means two behaviours means a bug; duplication is a smell, not a shortcut.
 - **One unified design language.** The app should look and behave like one product, not a pile of
   screens. Reuse the established visual vocabulary — the dark desaturated basemap treatment,
-  the `.ms-matched`/`.ms-item` ride cards, the segmented `.seg` toggles, the shared range slider,
-  accent colours and spacing — rather than inventing a one-off style. The same interaction
-  (selecting, filtering, listing rides) should work the same way everywhere it appears. When you
-  add a surface, first ask which existing component or class already expresses it; introduce new
-  styling only when nothing fits, and then make it reusable.
+  the `.ms-matched`/`.ms-item` ride cards, the click-through `.fchip` filters, the shared range
+  slider, accent colours and spacing — rather than inventing a one-off style. The same
+  interaction (selecting, filtering, listing rides) should work the same way everywhere it
+  appears. When you add a surface, first ask which existing component or class already expresses
+  it; introduce new styling only when nothing fits, and then make it reusable.
+- **Proactively keep the UI aligned with itself.** Consistency is an active duty, not a one-off.
+  When you touch one surface, look at its siblings and bring them along: if one filter becomes a
+  click-through chip, the rest should be chips too (the Strava + Source filters were converted
+  from segmented `.seg` controls to match the chip row); if one button loses its label or gains
+  an icon, its row-mates should match. Don't leave a half-migrated bar where one control is the
+  odd one out. When you're unsure whether a change fits the established language, ask before
+  inventing — a quick question beats a one-off that someone later has to reconcile.
+- **No redundancy.** Say each thing once. Don't show the same information twice (the selection
+  count lives in one place, not a header chip *and* a dropdown label), don't offer the same
+  action by two routes (one "Sources" entry point, not a duplicate "Add GPX files" button), and
+  don't stack competing CTAs (one primary action visible at a time). A label that merely repeats
+  what a filter, badge, or icon already conveys is clutter — cut it. Two affordances for one
+  outcome is a smell, just like two copies of one function.
+- **Simplify by consolidating, never by amputating.** Removing chrome must not remove capability.
+  When you drop a control, make sure the same outcome is still reachable a cleaner way: the
+  per-row Strava-status badge went away but the Strava-status *filter* still surfaces it; the
+  per-group "Push pending" buttons went away but selecting the group + the bulk push still does
+  it; the header buttons collapsed into one `⋯` menu but every action is still there. Lighter UI,
+  identical power. If a simplification would actually lose a capability, call it out instead of
+  silently dropping it.
+- **Show only what applies (context-aware, gated on real signals).** Surface a control only when
+  it can act on the rides in front of the user, and gate it on a real signal — never a mode flag.
+  Beeline-only filters (Strava status, route/full-GPX presence, destination, named, deleted) hide
+  in a GPX-only library; the Source chip appears only when >1 source coexists; the per-ride source
+  marker shows only when the library mixes sources; "Push to Strava" shows only on upload-capable
+  rides. Critically, this extends to **behaviour and copy**, not just visibility: a per-ride action
+  must do the right thing *and say the right thing* for that ride's source — a GPX ride's delete
+  must not claim to touch "your Beeline account" or demand a Beeline sign-in (gate per-ride via
+  `withRideAccess(source, …)`, not a blanket `withBeelineAccess`). A control that's shown but
+  inapplicable, or whose wording assumes the wrong source, is a bug.
+- **Guide without overwhelming.** A first-time / empty state should orient the user (what sources
+  are, the two ways in, a demo) in a few quiet lines — not a wall of text or a nag. Lead them to
+  the next step, then get out of the way. Density is for the working surfaces, not the welcome.
 
 ## Data ingestion integrity (read this first)
 
@@ -92,7 +160,7 @@ Hard rules:
 
 - **TypeScript 5.6** (strict), **Vite 6** (`base: "./"`, `target: "esnext"`), **Vitest 2** + **jsdom**, **leaflet** for maps.
 - Beeline-account source: plain `fetch` to Beeline's Firebase backend (CORS-friendly, no proxy).
-- `npm run dev` — Vite dev server (boots into the source picker; the source has a demo).
+- `npm run dev` — Vite dev server (boots straight into the library; a first-launch welcome explains sources, and the Beeline source has a demo).
 - `npm run build` — `tsc --noEmit` type-check **then** `vite build`. Always type-check before considering a change done.
 - `npm test` / `npm run test:watch` — Vitest.
 
@@ -129,23 +197,27 @@ green, CHANGELOG updated), **offer to commit it yourself** rather than leaving i
 
 ## Architecture / module map
 
-UI → Controller → RideSource → BeelineApi ; + JobQueue · Store.
-The Controller is source-agnostic: it drives a `RideSource` (scan/check/upload/GPX) and
-never touches a concrete backend. `main.ts` wires the source (Beeline account / demo).
+UI → Controller → RideSource (registry) → BeelineApi / local GPX ; + JobQueue · Store.
+The Controller is source-agnostic: it holds a `Map<SourceKind, RideSource>`, dispatches each
+ride's action to that ride's source (via `splitUid`), and never touches a concrete backend.
+`main.ts` builds one shared multi-source controller (GPX always registered; Beeline on sign-in).
 
 | File | Responsibility | Key symbols |
 |------|----------------|-------------|
-| [index.html](../index.html) | App shell, markup, styles, source picker | — |
-| [src/main.ts](../src/main.ts) | UI entry: render + wiring, source picker, re-auth gating | `activate()`, `goBeeline()`, `goBeelineOffline()`, `goDemoBeeline()`, `withBeelineAccess()`, `showPicker()` |
-| [src/controller.ts](../src/controller.ts) | Orchestration + app state; scan/check/upload/cancel | `Controller`, `state()`, `onChange()`, `runTask()` |
-| [src/source.ts](../src/source.ts) | `RideSource` seam + shared GPX/catalog types | `RideSource`, `SourceFactory`, `GpxFile`, `CatalogResult`, `gpxFilename()` |
+| [index.html](../index.html) | App shell, markup, styles, Sources dialog (Beeline + GPX) | — |
+| [src/main.ts](../src/main.ts) | UI entry: render + wiring, Sources dialog, re-auth gating, GPX import | `activate()`, `getRealController()`, `openApp()`, `goBeeline()`, `goGpx()`, `pullFromBeeline()`, `importGpxFiles()`, `withBeelineAccess()`, `showSources()` |
+| [src/controller.ts](../src/controller.ts) | Orchestration + app state; source registry; per-ride dispatch | `Controller`, `registerSource()`, `state()`, `runTask()`, `importGpx()` |
+| [src/source.ts](../src/source.ts) | `RideSource` seam + capabilities + shared GPX/catalog types | `RideSource`, `SourceCapabilities`, `SourceKind`, `GpxFile`, `ImportResult`, `gpxFilename()` |
+| [src/gpx-source.ts](../src/gpx-source.ts) | Pure-GPX `RideSource`: import `.gpx`/`.zip`, local metrics/export | `GpxRideSource`, `importFiles()`, `parseGpxFilename()`, `extractGpxName()` |
 | [src/beeline-api.ts](../src/beeline-api.ts) | Beeline cloud backend client + ride mapping | `signIn()`, `fetchRides()`, `uploadRideToStrava()`, `mapBeelineRide()`, `BeelineSession` |
 | [src/beeline-source.ts](../src/beeline-source.ts) | Account `RideSource` over the API (concurrent uploads) | `BeelineRideSource`, `BeelineApi`, `runPool()` |
 | [src/beeline-demo.ts](../src/beeline-demo.ts) | Simulated Beeline backend for the account demo | `demoBeelineDeps()`, `DEMO_BEELINE_EMAIL` |
-| [src/parsing.ts](../src/parsing.ts) | Normalized metrics + ride-key/date helpers | `metricsFromStatStrings()`, `rideDatetime()`, `beelineRideKey()`, `bucketRide()` |
+| [src/parsing.ts](../src/parsing.ts) | Normalized metrics + ride-key/date + uid helpers | `metricsFromStatStrings()`, `rideDatetime()`, `beelineRideKey()`, `rideUid()`/`splitUid()`, `timeOfDayName()`, `bucketRide()` |
 | [src/jobs.ts](../src/jobs.ts) | Single-worker background queue with coalescing | `JobQueue`, `Task`, `TaskSnapshot` |
-| [src/store.ts](../src/store.ts) | Per-source IndexedDB cache | `Store` (keyed per profile), `RideRecord` (`source`/`source_id`), `upsert()` |
-| [src/track.ts](../src/track.ts) | GPS track decode/simplify/render | `extractTrack()`, `simplify()` (Douglas–Peucker), encoded polylines |
+| [src/store.ts](../src/store.ts) | Unified, versioned IndexedDB blob, keyed by ride uid | `Store`, `SCHEMA_VERSION`/`migrate()`, `SETTINGS_SPEC`, `RideRecord`, `upsert()` (uid-normalized) |
+| [src/track.ts](../src/track.ts) | GPS track decode/simplify/render (namespace-robust GPX parse) | `extractTrack()`, `extractFullTrack()`, `fullTrackSummary()`, `simplify()` |
+| [src/zip.ts](../src/zip.ts) | Dependency-free ZIP build + read | `buildZip()`, `unzip()` |
+| [src/filter.ts](../src/filter.ts) | Explore-list filters (incl. `source` dimension) | `matchesFilters()`, `emptyFilters()`, `Filters` |
 | [src/mapview.ts](../src/mapview.ts) | Map-view geometry: pick drawable tracks + hover/overlap hit-testing | `ridesWithTracks()`, `nearestRides()`, `RideTrack`, `ProjectedTrack` |
 
 ## Conventions

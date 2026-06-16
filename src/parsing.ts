@@ -136,6 +136,65 @@ export interface RideDetail {
   stravaStatus: StravaStatus;
 }
 
+// --- ride identity (multi-source) --------------------------------------------
+
+/**
+ * A ride's stable, cross-source identity. The datetime `key` alone is NOT unique
+ * once rides from several sources coexist (e.g. importing a Beeline ride's own
+ * exported GPX yields the same minute), so the canonical map / cache / UI identity
+ * is the (source, datetime) pair encoded as `${source}::${dateKey}`. The datetime
+ * is kept verbatim as the suffix so it round-trips, and a record's own `key` stays
+ * a plain parseable datetime for all date/month bucketing.
+ *
+ * The seam (RideSource) still speaks bare datetime keys in each source's own
+ * namespace; only the Store, the GPX cache and the Controller (which spans
+ * sources) work in uids, translating at the boundary.
+ */
+export function rideUid(source: string, dateKey: string): string {
+  return `${source}::${dateKey}`;
+}
+
+/**
+ * Split a ride uid back into its source + datetime parts. Tolerates a legacy bare
+ * datetime key (no `::`) by treating it as a Beeline ride, so pre-multi-source data
+ * and any datetime-only call site keep working unchanged.
+ */
+export function splitUid(uid: string): { source: string; dateKey: string } {
+  const i = uid.indexOf("::");
+  if (i === -1) return { source: "beeline", dateKey: uid };
+  return { source: uid.slice(0, i), dateKey: uid.slice(i + 2) };
+}
+
+/** The datetime portion of a ride uid (or the key itself when it's already bare). */
+export function uidDateKey(uid: string): string {
+  return splitUid(uid).dateKey;
+}
+
+/**
+ * A Strava-style time-of-day ride name from a start instant (local wall-clock).
+ * Used as the fallback title for a ride that carries no real user-given name — the
+ * Beeline backend stores no title (the app generates one client-side), and an
+ * imported GPX may lack a `<name>`. Mirrors the naming Strava applies to uploaded
+ * activities so titles read naturally.
+ */
+export function timeOfDayName(startMs: number): string {
+  const h = new Date(startMs).getHours();
+  if (h < 5) return "Night ride";
+  if (h < 12) return "Morning ride";
+  if (h < 17) return "Afternoon ride";
+  if (h < 21) return "Evening ride";
+  return "Night ride";
+}
+
+/**
+ * True when `name` is one of our auto-generated time-of-day fallback names (see
+ * `timeOfDayName`) rather than a real, user-given ride title. Kept next to the
+ * generator so the two stay in lockstep — used to filter "named" rides.
+ */
+export function isSynthesizedRideName(name: string): boolean {
+  return /^(Morning|Afternoon|Evening|Night) ride$/.test(name.trim());
+}
+
 // --- date helpers -------------------------------------------------------------
 
 const MONTHS = [
@@ -169,9 +228,11 @@ const MONTH_ABBR: Record<string, number> = {
 
 const KEY_RE = /^\w{3}\s+(\w{3})\s+(\d{1,2})\s+(\d{4})\s+at\s+(\d{2}):(\d{2})$/;
 
-/** Parse a ride key like 'Sat Jun 13 2026 at 14:22' into a Date (local), or null. */
+/** Parse a ride key like 'Sat Jun 13 2026 at 14:22' into a Date (local), or null.
+ *  Tolerates a cross-source uid (`beeline::Sat Jun 13 …`) by parsing the datetime
+ *  portion, so every date/bucket helper built on it accepts uids and bare keys. */
 export function rideDatetime(key: string): Date | null {
-  const m = KEY_RE.exec(key);
+  const m = KEY_RE.exec(uidDateKey(key));
   if (!m) return null;
   const month = MONTH_ABBR[m[1]];
   if (month === undefined) return null;

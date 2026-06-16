@@ -3,17 +3,31 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Beeline Toolkit</title>
+<title>GPX Toolkit</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;500;700&family=Ubuntu+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Critical boot styles — inline so they apply on the FIRST paint, before the main
+     stylesheet (and, in dev, before Vite JS-injects it) and before the app's first
+     render. Two jobs: (1) paint the dark theme instantly so there's no white flash;
+     (2) keep the static chrome that the first render conditionally hides — the
+     Beeline connection controls and the filter bar — hidden until that render runs.
+     The ride cache loads async from IndexedDB, so without this the default "not
+     connected" + "Pull from Beeline" controls and the whole filter bar would paint
+     and then vanish a frame later. `body.booting` is removed after the first render. */
+  html { background: #0b0d11; color-scheme: dark; }
+  body.booting #connState,
+  body.booting #btnScan,
+  body.booting #filterbar { display: none; }
+</style>
 </head>
-<body>
+<body class="booting">
 <header>
   <div class="row">
     <span class="hdr-info">
-      <div class="brand"><span class="dot"></span><h1>Beeline Toolkit</h1><span class="ver" id="appVer"></span></div>
+      <div class="brand"><span class="dot"></span><h1>GPX Toolkit</h1><span class="ver" id="appVer"></span></div>
       <span class="totals" id="totals"></span>
       <span class="cstate" id="stateSize" title="Size of all rides, settings and status stored locally in this browser. Export to back it up; Reset to clear it."></span>
       <a class="osm-credit" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" title="Map data © OpenStreetMap contributors">© OpenStreetMap contributors</a>
@@ -21,49 +35,32 @@
     <span class="hdr-actions">
       <span class="conn">
         <span class="cstate off" id="connState">not connected</span>
+        <button class="primary small" id="btnScan" title="Pull your whole ride history from the connected Beeline account"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg><span class="scan-label" id="scanLabel">Pull from Beeline</span></button>
         <button class="small ghost" id="btnDisconnect" style="display:none">Disconnect</button>
-        <button class="small accent" id="btnSource" title="Switch data source (Beeline account or demo)"><svg class="mi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3l4 4-4 4M20 7H9M8 21l-4-4 4-4M4 17h11"/></svg><span class="btn-label">Change source</span></button>
+        <button class="small accent" id="btnSource" title="Connect or manage data sources (Beeline account, GPX files, demo)"><svg class="mi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3l4 4-4 4M20 7H9M8 21l-4-4 4-4M4 17h11"/></svg><span class="btn-label">Sources</span></button>
       </span>
       <span class="split">
-        <button class="ghost small menubtn iconmenu" data-splitmenu="state" aria-haspopup="true" aria-expanded="false" aria-label="App data: import, export, clear GPX cache or reset" title="App data: import, export, clear GPX cache or reset"><svg class="ki" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        <button class="ghost small menubtn iconmenu" data-splitmenu="state" aria-haspopup="true" aria-expanded="false" aria-label="Actions: push to Strava, selected-ride exports, and app data" title="Actions: push to Strava, selected-ride exports, and app data"><svg class="ki" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
         <span class="splitmenu" id="stateMenu">
+          <button class="ghost small menu-accent" id="btnUploadPending" title="Push all known pending rides to Strava (via Beeline)">Push all to Strava</button>
+          <span class="menu-group" id="selGroup">
+            <span class="menu-section" id="selGroupLabel">Selected</span>
+            <button class="ghost small" id="btnGpxSaveSel" title="Save the route-only GPX (the stored shape — no timestamps or elevation; instant, works offline) for the selected rides">Save route GPX</button>
+            <button class="ghost small" id="btnGpxSaveSelFull" title="Download the full recorded GPX (real per-point timestamps + elevation) for the selected rides and save them to disk">Save full GPX</button>
+            <button class="ghost small" id="btnGpxFetchSel" title="Fetch the full recorded GPX (real timestamps + elevation) for the selected rides into the local cache, without saving any file — pre-warms offline use and the per-ride map">Fetch full GPX</button>
+            <button class="ghost small" id="btnUploadSel" title="Push the selected pending rides to Strava (via Beeline)">Push selected to Strava</button>
+          </span>
+          <span class="menu-section">App data</span>
+          <span class="menu-storage" id="storageInfo" aria-live="polite"></span>
           <button class="ghost small" id="btnImport" title="Merge a previously exported (or Python tool) state file into this browser">Import…</button>
           <button class="ghost small" id="btnExport" title="Download all locally stored rides, settings and status as a JSON backup">Export</button>
-          <button class="ghost small" id="btnFlushGpx" title="Delete the locally cached full GPX downloads (real time + elevation). Your rides and settings are kept; cached rides are re-fetched next time you need them.">Clear GPX cache</button>
-          <button class="ghost small danger" id="btnReset" title="Erase all locally stored rides and settings, then return to the source-selection screen.">Reset</button>
+          <button class="ghost small" id="btnFlushGpx" title="Free up space by deleting the locally cached full-GPX downloads (re-fetched from Beeline next time you need them). Your rides, settings and imported GPX files are kept.">Clear download cache</button>
+          <button class="ghost small danger" id="btnReset" title="Erase ALL locally stored data — rides, settings, cached downloads and imported GPX files — then return to the source-selection screen.">Reset</button>
         </span>
       </span>
-      <span class="split" id="selSplit">
-        <button class="ghost small caret" data-splitmenu="sel" aria-haspopup="true" aria-expanded="false" title="More actions for the selected rides">More selected-ride actions</button>
-        <span class="splitmenu" id="selMenu">
-          <button class="ghost small" id="btnGpxSaveSel" title="Save the route-only GPX (the stored shape — no timestamps or elevation; instant, works offline) for the selected rides">Save route GPX</button>
-          <button class="ghost small" id="btnGpxSaveSelFull" title="Download the full recorded GPX (real per-point timestamps + elevation) for the selected rides and save them to disk">Save full GPX</button>
-          <button class="ghost small" id="btnGpxFetchSel" title="Fetch the full recorded GPX (real timestamps + elevation) for the selected rides into the local cache, without saving any file — pre-warms offline use and the per-ride map">Fetch full GPX</button>
-          <button class="ghost small" id="btnUploadSel" title="Upload the selected pending rides to Strava">Upload selected to Strava</button>
-        </span>
-      </span>
-      <button class="primary small" id="btnUploadPending" title="Upload all known pending rides to Strava"><svg class="mi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg><span class="btn-label">Upload all to Strava</span></button>
       <input type="file" id="importFile" accept="application/json,.json" style="display:none" />
+      <input type="file" id="gpxFile" accept=".gpx,.zip,application/gpx+xml,application/zip" multiple style="display:none" />
     </span>
-  </div>
-  <div class="row scanbar" id="scanbar">
-    <span class="ctlgroup" id="scanPresets">
-      <span class="totals">Scan</span>
-      <div class="seg" id="presets">
-        <button data-preset="today">Today</button>
-        <button data-preset="week">Week</button>
-        <button data-preset="month" class="active">Month</button>
-        <button data-preset="year">Year</button>
-        <button data-preset="all">All</button>
-      </div>
-      <label class="custom" id="customDays">last <input id="days" type="number" min="1" inputmode="numeric" placeholder="n" /> days</label>
-    </span>
-    <button class="primary" id="btnScan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg><span class="scan-label" id="scanLabel">Scan</span></button>
-    <span class="spacer"></span>
-    <label class="custom" id="trackPointsBox" title="How densely the rough map preview keeps points from a downloaded GPX, in points per kilometre. Start and end are always kept. The stored track is only a lightweight approximation — not the full GPX.">
-      Track detail
-      <input id="trackPoints" type="number" min="1" max="100" step="1" inputmode="numeric" /> pts/km
-    </label>
   </div>
 </header>
 
@@ -106,27 +103,16 @@
   </div>
     <div class="row filterbar" id="filterbar">
       <button class="small ghost ffilters-toggle" id="fToggle" aria-expanded="false" aria-controls="filterbar" title="Show or hide the ride filters"><svg class="mi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg><span class="btn-label">Filters</span><span class="fcount" id="fCount" hidden></span></button>
-      <span class="fgroup fstatusgroup">
-        <span class="totals">Strava status</span>
-        <div class="seg" id="fStatus" title="Filter by Strava upload status">
-          <button data-fstatus="all" class="active">All</button>
-          <button data-fstatus="not-uploaded">Not uploaded</button>
-          <button data-fstatus="processing">Processing</button>
-          <button data-fstatus="uploaded">Uploaded</button>
-        </div>
-      </span>
       <span class="fgroup fchips">
+        <button class="fchip" id="fSource" data-fchip="source" data-state="all" title="Filter by where a ride came from (click to cycle: any → Beeline → GPX)">Source: any</button>
+        <button class="fchip" id="fStatus" data-fchip="status" data-state="all" title="Filter by Strava upload status (click to cycle: any → not uploaded → processing → uploaded)">Strava: any</button>
         <button class="fchip" id="fGps" data-fchip="gps" data-state="any" title="Filter by route-preview presence — the lightweight stored polyline (click to cycle: any → has → missing)">Route: any</button>
         <button class="fchip" id="fCached" data-fchip="cached" data-state="any" title="Filter by full recorded GPX cached locally — real time + elevation (click to cycle: any → cached → not cached)">Full GPX: any</button>
-        <button class="fchip" id="fDetails" data-fchip="details" data-state="any" title="Filter by checked-details presence (click to cycle: any → has → missing)">Details: any</button>
-        <button class="fchip" id="fDestination" data-fchip="destination" data-state="any" title="Filter by routed-destination presence (click to cycle: any → has → none)">Destination: any</button>
+        <button class="fchip" id="fDestination" data-fchip="destination" data-state="any" title="Filter by destination presence — a place the ride went to or was tagged with (click to cycle: any → has → none)">Destination: any</button>
         <button class="fchip" id="fNamed" data-fchip="named" data-state="any" title="Filter by a real user-given name vs the auto time-of-day name (click to cycle: any → named → unnamed)">Named: any</button>
         <button class="fchip" id="fDeleted" data-fchip="deleted" data-state="any" title="Filter by deletion (click to cycle: any → only deleted → hide deleted)">Deleted: any</button>
       </span>
       <span class="fgroup ffields">
-        <label class="custom fdevice" title="Filter by the source a ride came from">Source
-          <select id="fDevice"><option value="all">All</option></select>
-        </label>
         <label class="custom fdist" title="Filter by distance in km (leave a side blank for no bound)">Distance
           <input id="fDistMin" type="number" min="0" step="1" inputmode="numeric" placeholder="min" />–<input id="fDistMax" type="number" min="0" step="1" inputmode="numeric" placeholder="max" /> km
         </label>
@@ -135,7 +121,7 @@
     </div>
     <div id="months"></div>
     <div class="empty" id="empty">
-      Sign in to your <b>Beeline</b> account to load your rides.
+      Loading your ride library…
     </div>
   </div>
   <div id="mapView" class="hidden">
@@ -150,6 +136,9 @@
           <svg class="mi mi-expand" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <svg class="mi mi-collapse" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
+        <button class="map-locate" id="btnMapLocate" aria-pressed="false" aria-label="Show my location" title="Show my current location">
+          <svg class="mi" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.4" fill="currentColor"/></svg>
+        </button>
         <div id="mapFilter" class="range-filter basemap-filter hidden" title="Drag to limit the rides shown by date"></div>
       </div>
       <aside class="map-side" id="mapSide"></aside>
@@ -157,8 +146,8 @@
   </div>
   <div id="statsView" class="hidden">
     <div class="stats-empty" id="statsEmpty">
-      No rides yet. Sign in to your <b>Beeline</b> account, then come back to see
-      your lifetime totals, records and a route-frequency heatmap.
+      No rides yet. <button type="button" class="linkbtn" data-act="open-sources">Connect a source</button> to see your
+      lifetime totals, records and a route-frequency heatmap.
     </div>
     <div class="stats-body" id="statsBody">
       <section class="stats-section">
@@ -185,6 +174,9 @@
             <button class="map-expand" id="btnHeatExpand" aria-pressed="false" aria-label="Full screen" title="Toggle full-screen heatmap (Esc to exit)">
               <svg class="mi mi-expand" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
               <svg class="mi mi-collapse" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button class="map-locate" id="btnHeatLocate" aria-pressed="false" aria-label="Show my location" title="Show my current location">
+              <svg class="mi" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.4" fill="currentColor"/></svg>
             </button>
             <div id="statsFilter" class="range-filter basemap-filter hidden" title="Drag to limit the rides counted by date"></div>
           </div>
@@ -247,20 +239,21 @@
   <div class="ridemap-profile hidden" id="rideMapProfile" aria-hidden="true"></div>
 </div>
 
-<div class="srcpick hidden" id="srcPick" role="dialog" aria-modal="true" aria-label="Choose a data source">
+<div class="srcpick hidden" id="srcPick" role="dialog" aria-modal="true" aria-label="Sources">
   <div class="srcpick-card">
     <button class="srcpick-close" id="btnPickClose" type="button" aria-label="Close" title="Close">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
     </button>
     <div class="srcpick-head">
-      <div class="brand"><span class="dot"></span><h1>Beeline Toolkit</h1><span class="ver" id="pickVer"></span><span class="ver tagline" title="A loving tribute to the Beeline Velo route history the app forgot it had.">(the forgotten Beeline Velo UI)</span></div>
-      <p class="srcpick-sub">Choose where your rides come from.</p>
+      <div class="brand"><span class="dot"></span><h1>GPX Toolkit</h1><span class="ver" id="pickVer"></span></div>
+      <p class="srcpick-welcome">Welcome! <b>GPX Toolkit</b> is one home for all your rides. Connect a <b>source</b> — your <b>Beeline</b> account or your own <b>GPX files</b> — and they live together in one library you can explore, map, analyze and push to Strava. You can add or change sources any time from <b>Sources</b> in the header.</p>
+      <p class="srcpick-sub">Connect the sources your rides come from. They all live together in one library.</p>
     </div>
     <div class="srcpick-options">
       <div class="srcopt" id="srcBeeline">
         <div class="srcopt-main">
-          <div class="srcopt-title">Beeline account <span class="srcopt-tag">recommended</span></div>
-          <div class="srcopt-desc">Sign in to download your whole ride history at once — routes, stats and Strava status — with fast uploads and no cable.</div>
+          <div class="srcopt-title">Beeline Velo account <span class="srcopt-mark" title="A first-class, natively supported source — your whole history, stats and Strava uploads."><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2.5l1.9 5.6 5.6 1.9-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.9z" fill="currentColor"/><path d="M18.7 14.2l.8 2.3 2.3.8-2.3.8-.8 2.3-.8-2.3-2.3-.8 2.3-.8z" fill="currentColor"/></svg></span></div>
+          <div class="srcopt-desc">Sign in to your <a class="srcopt-link" href="https://beeline.co/products/beeline-velo-2" target="_blank" rel="noopener noreferrer" title="Beeline Velo 2 on beeline.co (opens in a new tab)">Beeline Velo</a> account to download your whole ride history at once — routes, stats and Strava status — with fast uploads and no cable.</div>
         </div>
         <form class="srcopt-form" id="beelineForm" autocomplete="on">
           <input type="email" id="beelineEmail" placeholder="Email" autocomplete="username" required />
@@ -269,13 +262,24 @@
           <button class="ghost small" type="button" id="btnDemoBeeline" title="Explore the Beeline cloud experience with a simulated account">Try demo</button>
           <span class="srcopt-err" id="beelineErr"></span>
         </form>
-        <p class="srcopt-note">
-          <svg class="srcopt-note-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3l7 3v5c0 4.2-2.8 7.5-7 9-4.2-1.5-7-4.8-7-9V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span>Serverless &amp; private — this app has no backend and runs entirely in your browser. Your password is sent once to Beeline to sign in and kept only in memory; it's never stored, so your password manager can fill it in. It's open source — <a href="https://github.com/gubenkoved/beeline-velo" target="_blank" rel="noopener">read the code on GitHub</a> or run it yourself locally.</span>
-        </p>
+        <div class="srcopt-connected">
+          <span class="srcopt-status" id="beelineStatus"></span>
+          <div class="srcopt-actions">
+            <button class="primary small" type="button" id="btnBeelinePull" title="Pull your whole ride history from Beeline again">Pull from Beeline</button>
+            <button class="ghost small" type="button" id="btnBeelineDisconnect" title="Drop the live account connection (your downloaded rides are kept)">Disconnect</button>
+          </div>
+        </div>
+      </div>
+      <div class="srcopt" id="srcGpx">
+        <div class="srcopt-main">
+          <div class="srcopt-title">GPX files</div>
+          <div class="srcopt-desc">Import rides from <code>.gpx</code> files (or a <code>.zip</code> bundle) recorded by any device or app — explore, map and analyze them alongside your Beeline rides. No account needed.</div>
+        </div>
+        <div class="srcopt-form">
+          <button class="primary small" type="button" id="btnGpxSource">Choose GPX files…</button>
+        </div>
       </div>
     </div>
-    <button class="srcpick-dismiss ghost small" id="btnPickDismiss" type="button" title="Browse your saved rides without picking a source">Skip — view saved rides</button>
   </div>
 </div>
 
