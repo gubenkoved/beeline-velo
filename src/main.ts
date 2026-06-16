@@ -3252,11 +3252,12 @@ function exportRides(): void {
   URL.revokeObjectURL(url);
 }
 
-/** Trigger a browser "Save As" for a GPX file of one ride's route. */
+/** Trigger a browser "Save As" for a downloaded ride file (GPX, or a ZIP bundle). */
 function saveGpxFile(file: {
   filename: string;
   downloadName: string;
   bytes: Uint8Array;
+  mime?: string;
 }): void {
   // Demo GPX bytes are synthetic, and saving them would pop a browser "Save As"
   // dialog for every ride (especially with "ask where to save each file" on),
@@ -3267,14 +3268,16 @@ function saveGpxFile(file: {
     return;
   }
   const copy = new Uint8Array(file.bytes); // own the buffer for the Blob
-  const blob = new Blob([copy], { type: "application/gpx+xml" });
+  const blob = new Blob([copy], { type: file.mime || "application/gpx+xml" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   // Prefer the sort-friendly "YYYY-MM-DD HH-MM - <title>.gpx" name; fall back to
-  // the device-stable filename if a download name wasn't computed.
+  // the device-stable filename if a download name wasn't computed. A name that
+  // already carries an extension (e.g. a ".zip" bundle) is used as-is; otherwise
+  // default to ".gpx".
   const name = file.downloadName || file.filename;
-  a.download = name.endsWith(".gpx") ? name : `${name}.gpx`;
+  a.download = /\.[a-z0-9]+$/i.test(name) ? name : `${name}.gpx`;
   a.click();
   URL.revokeObjectURL(url);
 }

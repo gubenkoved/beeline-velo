@@ -17,6 +17,23 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Bundle multi-ride GPX downloads into a single .zip
+- **What:** A bulk GPX download (selecting many rides → save) now delivers ONE `.zip`
+  containing every ride's GPX instead of firing one `<a download>` click per ride; a
+  single-ride download still saves a plain `.gpx`. Applies to both light (route-only,
+  local) and full (cloud-rendered) modes. Added a dependency-free ZIP builder
+  (`src/zip.ts`) — CRC-32 + raw DEFLATE via the native `CompressionStream("deflate")`
+  (header/trailer stripped; STORE fallback when a payload doesn't shrink) — and reworked
+  `doDownloadGpx` to accumulate produced files into a bundle, then emit one zip
+  (`Beeline routes <date-range> (N).zip`) via the existing `onGpx`/`saveGpxFile` path
+  (now MIME-aware). `emitCachedLightGpx` became a `buildCachedLightGpx` builder so files
+  can be collected rather than emitted immediately.
+- **Why:** Selecting a whole year only ever saved ~5 files — browsers throttle and
+  silently drop rapid programmatic downloads, so most of a large light-mode batch was
+  lost, and full mode popped one "Save As" per ride. One archive is one reliable
+  download. Hand-rolled the ZIP (no new dependency) to honour the app's dependency-light
+  core value, using `deflate`+strip over `deflate-raw` for Node/Vitest compatibility.
+
 ## Hover the elevation profile → highlight that point on the route map
 - **What:** Hovering the full-screen ride map's elevation profile now lights up the
   matching point on the route above it — dropping/moving the same circle marker and

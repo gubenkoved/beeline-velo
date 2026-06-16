@@ -162,6 +162,31 @@ describe("Controller + BeelineRideSource (no network)", () => {
     expect(gpx).toContain("<trkpt ");
   });
 
+  it("bundles a multi-ride download into a single .zip instead of N files", async () => {
+    const c = makeController(new FakeBeelineApi(structuredClone(FIXTURE)));
+    const files: { downloadName: string; bytes: Uint8Array; mime?: string }[] = [];
+    c.onGpx((f) => files.push(f));
+    await c.connect();
+    c.scan("all", null);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    // Every Beeline ride that carries a cached route can be exported locally (light).
+    const keys = [...c.store.rides.entries()]
+      .filter(([, r]) => r.source === "beeline" && r.track)
+      .map(([k]) => k);
+    expect(keys.length).toBeGreaterThan(1);
+
+    c.downloadGpx(keys);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    // Exactly ONE download, and it's a ZIP — not one <a download> click per ride.
+    expect(files.length).toBe(1);
+    expect(files[0].mime).toBe("application/zip");
+    expect(files[0].downloadName.endsWith(".zip")).toBe(true);
+    // Local-file-header magic "PK\x03\x04" proves it's a real ZIP container.
+    expect([...files[0].bytes.slice(0, 4)]).toEqual([0x50, 0x4b, 0x03, 0x04]);
+  });
+
   it("reflects server-side changes to a ride on the next re-sync", async () => {
     const api = new FakeBeelineApi(structuredClone(FIXTURE));
     const c = makeController(api);

@@ -22,13 +22,18 @@ export type SourceKind = "beeline";
 
 // -- shared, backend-neutral seam types --------------------------------------
 
-/** A GPX file produced for one ride. */
+/** A file produced for download — one ride's GPX, or a multi-ride ZIP bundle. */
 export interface GpxFile {
   key: string;
   filename: string;
   /** Sort-friendly name for the browser download (see `gpxDownloadName`). */
   downloadName: string;
   bytes: Uint8Array;
+  /**
+   * MIME type for the download Blob. Omitted for a plain GPX (the saver defaults to
+   * `application/gpx+xml`); set to `application/zip` for a bundled multi-ride export.
+   */
+  mime?: string;
 }
 
 /** Per-ride outcome of a GPX export. */

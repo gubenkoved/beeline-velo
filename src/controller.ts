@@ -27,6 +27,7 @@ import {
 } from "./source";
 import { monthKey, monthLabel, type Settings, type Store, type UpsertFields } from "./store";
 import { encodedTrackToGpx, extractFullTrack, type FullTrack, gpxToRoughTrack } from "./track";
+import { buildZip } from "./zip";
 
 export interface RideView extends RideMetrics {
   key: string;
@@ -119,25 +120,24 @@ export class Controller {
   }
 
   /**
-   * Try to emit a route-only ("light") GPX for one ride synthesized from its cached
-   * polyline — no network, no timestamps/elevation. Returns true when a file was
-   * emitted, false when the ride has no usable cached route. Shared by the light
-   * export path and the full-export fallback (when the export gateway is
-   * unreachable but we still hold the route).
+   * Build a route-only ("light") GPX file for one ride synthesized from its cached
+   * polyline — no network, no timestamps/elevation. Returns the file, or null when
+   * the ride has no usable cached route. Shared by the light export path and the
+   * full-export fallback (when the export gateway is unreachable but we still hold
+   * the route).
    */
-  private emitCachedLightGpx(key: string): boolean {
+  private buildCachedLightGpx(key: string): GpxFile | null {
     const rec = this.store.rides.get(key);
-    if (!(rec && rec.source === "beeline" && rec.track)) return false;
+    if (!(rec && rec.source === "beeline" && rec.track)) return null;
     const title = rec.title || rec.title_base || "";
     const xml = encodedTrackToGpx(rec.track, title || rideShortLabel(key) || key);
-    if (!xml) return false;
-    this.emitGpx({
+    if (!xml) return null;
+    return {
       key,
       filename: gpxFilename(key),
       downloadName: gpxDownloadName(key, title),
       bytes: new TextEncoder().encode(xml),
-    });
-    return true;
+    };
   }
 
   /** The in-memory full track for a ride, or null when not fetched this session. */
@@ -393,6 +393,13 @@ export class Controller {
     // Seed live progress so the queue panel shows "0 of N" while the sweep runs.
     task.progress = { done: 0, total: task.keys.length };
 
+    // Accumulate every produced file here instead of emitting them one-by-one. A
+    // single file is delivered as a plain GPX; more than one is bundled into a
+    // single .zip below — browsers throttle and silently DROP rapid programmatic
+    // downloads, so firing one `<a download>` per ride loses most of a large
+    // selection (e.g. a whole year). One archive is one reliable download.
+    const bundle: GpxFile[] = [];
+
     // In LIGHT mode, rides that already carry their route in the cache (Beeline-
     // sourced) can be exported entirely locally — no device, no network, no sign-in.
     // Split those out and synthesize their GPX from the stored track; only the rest
@@ -406,7 +413,9 @@ export class Controller {
       for (const key of task.keys) {
         const rec = this.store.rides.get(key);
         if (rec && rec.source === "beeline" && rec.track) {
-          if (this.emitCachedLightGpx(key)) {
+          const file = this.buildCachedLightGpx(key);
+          if (file) {
+            bundle.push(file);
             succeeded++;
           } else {
             failures.push(`${rideShortLabel(key) || key}: no route track to export`);
@@ -459,7 +468,7 @@ export class Controller {
             // bogus empty track; record it so the task surfaces a real, persistent error.
             failures.push(`${file.key}: couldn't extract a GPS track from the downloaded GPX`);
           }
-          this.emitGpx(file);
+          bundle.push(file);
           if (task.progress) task.progress.done++;
         },
         (missing) => {
@@ -474,11 +483,15 @@ export class Controller {
           // cached route, hand the user a route-only GPX instead of failing — so a
           // gateway outage mid-batch never breaks the download. Genuine "no track"
           // failures (not retryable) stay real errors.
-          if (mode === "full" && retryable && this.emitCachedLightGpx(key)) {
-            succeeded++;
-            degraded.push(rideShortLabel(key) || key);
-            if (task.progress) task.progress.done++;
-            return;
+          if (mode === "full" && retryable) {
+            const fallback = this.buildCachedLightGpx(key);
+            if (fallback) {
+              bundle.push(fallback);
+              succeeded++;
+              degraded.push(rideShortLabel(key) || key);
+              if (task.progress) task.progress.done++;
+              return;
+            }
           }
           failures.push(`${key}: ${reason}`);
         },
@@ -490,14 +503,35 @@ export class Controller {
       succeeded += files.length;
     }
 
+    // Deliver the produced files. One file → a plain GPX (unchanged behaviour); more
+    // than one → a single ZIP so the browser reliably saves the whole batch.
+    let bundled = false;
+    if (bundle.length === 1) {
+      this.emitGpx(bundle[0]);
+    } else if (bundle.length > 1) {
+      const zipBytes = await buildZip(
+        bundle.map((f) => ({ name: f.downloadName, bytes: f.bytes })),
+      );
+      const name = this.bundleZipName(bundle, mode);
+      this.emitGpx({
+        key: bundle[0].key,
+        filename: name,
+        downloadName: name,
+        bytes: zipBytes,
+        mime: "application/zip",
+      });
+      bundled = true;
+    }
+
     const suffix = removed ? `, ${removed} deleted` : "";
     // Surface any graceful degradation (full track unreachable → route-only) in the
     // completion status so the user knows those files lack real time/elevation.
     const degradedNote = degraded.length
       ? ` — ${degraded.length} saved as route-only (export gateway unreachable; no real time/elevation)`
       : "";
+    const bundleNote = bundled ? " (bundled into one .zip)" : "";
     report(
-      `exported ${succeeded} GPX file${succeeded === 1 ? "" : "s"}${suffix}${degradedNote}`,
+      `exported ${succeeded} GPX file${succeeded === 1 ? "" : "s"}${bundleNote}${suffix}${degradedNote}`,
     );
 
     if (failures.length) {
@@ -509,6 +543,30 @@ export class Controller {
       throw new Error([header, ...failures.map((f) => `  • ${f}`)].join("\n"));
     }
   }
+
+  /**
+   * Name a multi-ride ZIP bundle: `Beeline routes 2026-01-03 to 2026-12-28 (123).zip`
+   * (or `Beeline GPX …` in full mode). The date range is derived from the rides in
+   * the bundle so the file is self-describing and sorts chronologically; it collapses
+   * to a single date when every ride falls on the same day.
+   */
+  private bundleZipName(files: GpxFile[], mode: GpxMode): string {
+    const kind = mode === "full" ? "GPX" : "routes";
+    const dates = files
+      .map((f) => rideDatetime(f.key))
+      .filter((d): d is Date => d !== null)
+      .sort((a, b) => a.getTime() - b.getTime());
+    const p2 = (n: number) => String(n).padStart(2, "0");
+    const iso = (d: Date) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+    let range = "";
+    if (dates.length) {
+      const lo = iso(dates[0]);
+      const hi = iso(dates[dates.length - 1]);
+      range = lo === hi ? ` ${lo}` : ` ${lo} to ${hi}`;
+    }
+    return `Beeline ${kind}${range} (${files.length}).zip`;
+  }
+
 
   /**
    * Rename a ride on the backend, then mirror the new name locally. The cloud is
