@@ -43,6 +43,7 @@ function ride(over: Partial<RideView> = {}): RideView {
     uploaded_at: "",
     deleted: false,
     deleted_at: "",
+    gpx_cached: false,
     ...over,
   };
 }

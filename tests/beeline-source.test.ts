@@ -7,7 +7,8 @@ import { BeelineError } from "../src/beeline-api";
 import type { BeelineApi } from "../src/beeline-source";
 import { BeelineRideSource } from "../src/beeline-source";
 import { Controller } from "../src/controller";
-import { memoryBackend } from "../src/kv";
+import { GpxCache } from "../src/gpxcache";
+import { memoryBackend, memoryBlobBackend } from "../src/kv";
 import { beelineRideKey } from "../src/parsing";
 import type { Sleep } from "../src/source";
 import { Store } from "../src/store";
@@ -336,6 +337,92 @@ describe("Controller + BeelineRideSource (no network)", () => {
     expect(ft).not.toBeNull();
     expect(ft?.times.every((t) => t != null)).toBe(true);
     expect(ft?.eles.every((e) => e != null)).toBe(true);
+  });
+
+  it("fetchFullGpx caches the full GPX without emitting a file to save", async () => {
+    const api = new FakeBeelineApi(structuredClone(FIXTURE));
+    const c = makeController(api);
+    await c.connect();
+    c.scan("all", null);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    const key = beelineRideKey(FIXTURE[UPLOADED].start as number);
+    const files: { bytes: Uint8Array }[] = [];
+    c.onGpx((f) => files.push(f));
+
+    c.fetchFullGpx([key]);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    // It hit the cloud export and cached the result, but NO file was handed to the saver.
+    expect(api.exportCalls).toContain(UPLOADED);
+    expect(files.length).toBe(0);
+    expect(c.gpxCachedKeys().has(key)).toBe(true);
+    expect(c.gpxCacheCount()).toBe(1);
+    expect(c.gpxCacheBytes()).toBeGreaterThan(0);
+    // The real recorded track is also rehydrated into the session map.
+    expect(c.getFullTrack(key)).not.toBeNull();
+
+    // A second fetch is a no-op fetch (already cached) — no new export call.
+    const before = api.exportCalls.length;
+    c.fetchFullGpx([key]);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+    expect(api.exportCalls.length).toBe(before);
+  });
+
+  it("rehydrates the full track from the GPX cache offline after a reload", async () => {
+    // Shared backends survive the "reload": a second Controller built over them sees
+    // what the first persisted (mirrors IndexedDB across a page refresh).
+    const stateMap = new Map<string, string>();
+    const blobMap = new Map<string, Uint8Array>();
+    const PREFIX = "beeline-acct";
+
+    // 1) Connected session: scan, then fetch+cache the full GPX for one ride.
+    const api = new FakeBeelineApi(structuredClone(FIXTURE));
+    const storeA = await Store.load(memoryBackend(stateMap));
+    const cacheA = await GpxCache.load(memoryBlobBackend(blobMap), PREFIX);
+    const a = new Controller(
+      () =>
+        BeelineRideSource.create("rider@example.com", "secret", () => 4, {
+          api,
+          signIn: fakeSignIn,
+          sleep: async () => {},
+        }),
+      storeA,
+      cacheA,
+    );
+    await a.connect();
+    a.scan("all", null);
+    await vi.waitFor(() => expect(a.state().jobs.busy).toBe(false), { timeout: 5000 });
+    const key = beelineRideKey(FIXTURE[UPLOADED].start as number);
+    a.fetchFullGpx([key]);
+    await vi.waitFor(() => expect(a.state().jobs.busy).toBe(false), { timeout: 5000 });
+    expect(a.gpxCachedKeys().has(key)).toBe(true);
+
+    // 2) "Reload" offline: a fresh Controller whose source throws (not signed in),
+    // over the SAME persisted state + GPX cache.
+    const storeB = await Store.load(memoryBackend(stateMap));
+    const cacheB = await GpxCache.load(memoryBlobBackend(blobMap), PREFIX);
+    const b = new Controller(
+      async () => {
+        throw new Error("Not signed in — sign in to Beeline to sync.");
+      },
+      storeB,
+      cacheB,
+    );
+
+    // The parsed track isn't in memory yet (only the gzipped bytes survived)…
+    expect(b.getFullTrack(key)).toBeNull();
+    expect(b.gpxCachedKeys().has(key)).toBe(true);
+
+    // …but it rehydrates from the cache with NO source/network, so the offline map
+    // gets the real recorded track instead of offering "Fetch full track".
+    const ft = await b.loadCachedFullTrack(key);
+    expect(ft).not.toBeNull();
+    expect(ft?.points.length).toBeGreaterThanOrEqual(2);
+    expect(b.getFullTrack(key)).not.toBeNull();
+
+    // fetchFullTrack also serves from the cache offline (never touches the source).
+    await expect(b.fetchFullTrack(key)).resolves.toBe(ft);
   });
 
   it("paces full-GPX exports to at most one ride per second", async () => {

@@ -18,6 +18,8 @@ export interface Filters {
   status: "all" | "uploaded" | "processing" | "not-uploaded";
   /** Route-preview (encoded track) presence. */
   gps: TriState;
+  /** Full recorded GPX present in the local cache (real time + elevation). */
+  cached: TriState;
   /** Checked-details (stats) presence. */
   details: TriState;
   /** Routed-destination presence (Beeline rides that navigated somewhere). */
@@ -38,6 +40,7 @@ export function emptyFilters(): Filters {
   return {
     status: "all",
     gps: "any",
+    cached: "any",
     details: "any",
     destination: "any",
     named: "any",
@@ -73,6 +76,7 @@ export function filterActiveCount(f: Filters): number {
   let n = 0;
   if (f.status !== "all") n++;
   if (f.gps !== "any") n++;
+  if (f.cached !== "any") n++;
   if (f.details !== "any") n++;
   if (f.destination !== "any") n++;
   if (f.named !== "any") n++;
@@ -97,6 +101,11 @@ export function matchesFilters(f: Filters, r: RideView): boolean {
   const hasGps = r.track.length > 0;
   if (f.gps === "yes" && !hasGps) return false;
   if (f.gps === "no" && hasGps) return false;
+
+  // Full recorded GPX cached locally (real time + elevation) — distinct from the
+  // lightweight route preview the `gps` dimension checks.
+  if (f.cached === "yes" && !r.gpx_cached) return false;
+  if (f.cached === "no" && r.gpx_cached) return false;
 
   // Checked-details presence. The detail sheet adds speeds / moving time /
   // elevation that the list card never shows, so any of those being known means

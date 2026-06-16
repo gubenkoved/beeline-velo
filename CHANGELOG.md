@@ -17,6 +17,71 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Single-ride map: start/finish markers + speed profile toggle
+- **What:** The full-screen ride map now draws persistent **Start** (green) and
+  **Finish** (red) dots at the route ends — green/red is the universal convention,
+  matching the orange hover dot's circle style; each has a hover tooltip and they
+  redraw with the line on a colour-mode change. The profile panel below the map can
+  now graph **Speed** as well as **Elevation**, via an "Elevation | Speed" segmented
+  toggle (shown only when the full track carries both elevation and timestamps).
+  `renderRideProfile` was generalized to plot either metric (speed anchored at 0,
+  km/h axis); the cursor sync is unchanged since the x-axis is distance for both.
+- **Why:** "Where did the ride end?" wasn't answerable from the line alone (only a
+  transient hover dot existed), and the recorded track already carries per-point
+  speed (reused via `fullTrackSpeedsKmh` + `movingAverage`) — so surfacing a speed
+  profile is a natural, math-free extension of the existing elevation graph.
+
+## Surface the cached full GPX: "GPX" badge, "Full GPX" filter, clearer "Route" label
+- **What:** Ride cards carry a subtle "GPX" badge (muted pill + small green
+  "ready offline" dot) when the full recorded GPX is cached locally, and the Explore
+  filter bar gains a "Full GPX" tri-state chip (any → cached → not cached), both
+  driven by `RideView.gpx_cached`. The existing route-preview filter was relabeled
+  **"GPS" → "Route"** to read cleanly next to it (the lightweight stored polyline vs
+  the full recorded track); the internal `gps` key is unchanged.
+- **Why:** With full GPX now persistently cached, "which rides already have the real
+  track (offline map/profile, instant save)?" is a distinct axis from "does the route
+  preview exist" — so it needed its own quiet indicator + filter, and the old "GPS"
+  label was ambiguous once both concepts shared the bar.
+
+## Declutter the header & unify GPX action naming
+- **What:** The labeled "Data" dropdown (Import / Export / Clear GPX cache / Reset)
+  is now a single icon-only "⋯" overflow button, so the rare maintenance actions
+  stop competing with the task buttons. GPX actions are renamed to one consistent
+  vocabulary used identically in the selection menu and the per-ride menu:
+  **Save route GPX** (light/local), **Save full GPX** (download), **Fetch full GPX**
+  (cache only; shows a "✓" when already cached) — replacing the old mix of
+  "Save .gpx files" / "Save .gpx (route)" / "Save full .gpx" / "Fetch full GPX
+  (cache only)" with their inconsistent `.gpx`-vs-`GPX` casing, parens-vs-prefix
+  qualifiers and stray "files" suffix. Tooltips carry the detail.
+- **Why:** The top bar had grown crowded and the same action was worded three
+  different ways across surfaces. De-emphasizing maintenance actions to an icon
+  and giving every GPX action one name (kind as an adjective, op as the verb)
+  makes the bar scannable and the choices unambiguous.
+
+## Offline full-GPX cache: persist downloads gzipped, fetch-only, reuse everywhere
+- **What:** Full-track GPX downloads are gzipped and kept in their own IndexedDB
+  object store (`gpx`, DB bumped to v2) keyed per profile, behind a new `GpxCache`
+  (over a binary `BlobStore` in kv.ts) wired into the Controller; `gzip`/`gunzip`
+  live in a shared `src/gzip.ts`. A re-download/bundle of an already-saved ride is
+  served straight from the cache (no network, fully offline), so a year-bundle only
+  fetches what it's missing and an all-cached full save skips the relay-consent +
+  re-auth prompts. A new selection/per-ride **"Fetch full GPX"** action pre-warms the
+  cache *without* saving any file — an orthogonal `save:false` flag on the
+  `download-gpx` task (its own non-coalescing sweep) that runs the same fetch + map
+  rehydrate + cache write, minus delivery. The ride map now rehydrates a cached
+  track from the cache on open (`Controller.loadCachedFullTrack`) and `fetchFullTrack`
+  falls back to the cache before the source, so the full map UX (real time/elevation/
+  speed profile) works offline after a reload instead of showing "Fetch full track".
+  An icon-menu **"Clear GPX cache"** flushes only the GPX bytes (Reset still wipes
+  everything); the header size chip shows the cache total (`… · X MB GPX`).
+- **Why:** The full GPX is the expensive artifact (server-side render + ~500 KB,
+  paced 1/s); discarding it after one save meant re-paying that cost every time, and
+  the parsed track only ever lived in per-session memory — so a reload silently lost
+  it. Persisting it gzipped makes re-saves and the offline map instant, a *separate*
+  store + flush keeps megabytes of GPX out of the re-serialized state blob (and lets
+  the user reclaim it without losing rides/settings), and a file-free "fetch" makes
+  "just make these available offline" a first-class action instead of a noisy download.
+
 ## Bundle multi-ride GPX downloads into a single .zip
 - **What:** A bulk GPX download (selecting many rides → save) now delivers ONE `.zip`
   containing every ride's GPX instead of firing one `<a download>` click per ride; a

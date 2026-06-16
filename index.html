@@ -25,18 +25,20 @@
         <button class="small accent" id="btnSource" title="Switch data source (Beeline account or demo)"><svg class="mi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3l4 4-4 4M20 7H9M8 21l-4-4 4-4M4 17h11"/></svg><span class="btn-label">Change source</span></button>
       </span>
       <span class="split">
-        <button class="ghost small menubtn" data-splitmenu="state" aria-haspopup="true" aria-expanded="false" title="Local data: import, export or reset"><svg class="mi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg><span class="btn-label">Data</span></button>
+        <button class="ghost small menubtn iconmenu" data-splitmenu="state" aria-haspopup="true" aria-expanded="false" aria-label="App data: import, export, clear GPX cache or reset" title="App data: import, export, clear GPX cache or reset"><svg class="ki" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
         <span class="splitmenu" id="stateMenu">
           <button class="ghost small" id="btnImport" title="Merge a previously exported (or Python tool) state file into this browser">Import…</button>
           <button class="ghost small" id="btnExport" title="Download all locally stored rides, settings and status as a JSON backup">Export</button>
+          <button class="ghost small" id="btnFlushGpx" title="Delete the locally cached full GPX downloads (real time + elevation). Your rides and settings are kept; cached rides are re-fetched next time you need them.">Clear GPX cache</button>
           <button class="ghost small danger" id="btnReset" title="Erase all locally stored rides and settings, then return to the source-selection screen.">Reset</button>
         </span>
       </span>
       <span class="split" id="selSplit">
         <button class="ghost small caret" data-splitmenu="sel" aria-haspopup="true" aria-expanded="false" title="More actions for the selected rides">More selected-ride actions</button>
         <span class="splitmenu" id="selMenu">
-          <button class="ghost small" id="btnGpxSaveSel" title="Save the lightweight route-only GPX (shape only, instant) for the selected rides">Save .gpx files</button>
-          <button class="ghost small" id="btnGpxSaveSelFull" title="Download the full recorded GPX (real per-point timestamps + elevation) for the selected rides and save them">Save full .gpx files</button>
+          <button class="ghost small" id="btnGpxSaveSel" title="Save the route-only GPX (the stored shape — no timestamps or elevation; instant, works offline) for the selected rides">Save route GPX</button>
+          <button class="ghost small" id="btnGpxSaveSelFull" title="Download the full recorded GPX (real per-point timestamps + elevation) for the selected rides and save them to disk">Save full GPX</button>
+          <button class="ghost small" id="btnGpxFetchSel" title="Fetch the full recorded GPX (real timestamps + elevation) for the selected rides into the local cache, without saving any file — pre-warms offline use and the per-ride map">Fetch full GPX</button>
           <button class="ghost small" id="btnUploadSel" title="Upload the selected pending rides to Strava">Upload selected to Strava</button>
         </span>
       </span>
@@ -114,7 +116,8 @@
         </div>
       </span>
       <span class="fgroup fchips">
-        <button class="fchip" id="fGps" data-fchip="gps" data-state="any" title="Filter by route-preview presence (click to cycle: any → has → missing)">GPS: any</button>
+        <button class="fchip" id="fGps" data-fchip="gps" data-state="any" title="Filter by route-preview presence — the lightweight stored polyline (click to cycle: any → has → missing)">Route: any</button>
+        <button class="fchip" id="fCached" data-fchip="cached" data-state="any" title="Filter by full recorded GPX cached locally — real time + elevation (click to cycle: any → cached → not cached)">Full GPX: any</button>
         <button class="fchip" id="fDetails" data-fchip="details" data-state="any" title="Filter by checked-details presence (click to cycle: any → has → missing)">Details: any</button>
         <button class="fchip" id="fDestination" data-fchip="destination" data-state="any" title="Filter by routed-destination presence (click to cycle: any → has → none)">Destination: any</button>
         <button class="fchip" id="fNamed" data-fchip="named" data-state="any" title="Filter by a real user-given name vs the auto time-of-day name (click to cycle: any → named → unnamed)">Named: any</button>
@@ -231,7 +234,11 @@
         <button data-color="height" type="button" title="Colour the route by elevation">Height</button>
         <button data-color="speed" type="button" title="Colour the route by speed">Speed</button>
       </span>
-      <button class="small ghost hidden" id="btnRideMapProfile" type="button" aria-pressed="true" title="Show or hide the elevation profile">Hide profile</button>
+      <span class="seg ridemap-profmetric hidden" id="rideMapProfileMetric" role="group" aria-label="Profile metric">
+        <button data-profile="elevation" class="active" type="button" title="Graph elevation vs distance">Elevation</button>
+        <button data-profile="speed" type="button" title="Graph speed vs distance">Speed</button>
+      </span>
+      <button class="small ghost hidden" id="btnRideMapProfile" type="button" aria-pressed="true" title="Show or hide the profile graph">Hide profile</button>
     </span>
     <button class="small ghost" id="btnRideMapClose" type="button" title="Close (Esc)" aria-label="Close">Close</button>
   </div>

@@ -174,14 +174,16 @@ export class JobQueue {
     if (!this.queue.length) return null;
     const task = this.queue.shift()!;
     // Coalesce consecutive same-kind upload/status tasks into this one. For
-    // download-gpx the `mode` (light vs full) must also match — a light and a full
-    // export are different sweeps and must never merge.
+    // download-gpx the `mode` (light vs full) AND `save` (deliver to disk vs
+    // fetch-only cache) must also match — a light vs full, or a save vs fetch-only,
+    // are different sweeps and must never merge.
     if (COALESCE_KINDS.has(task.kind)) {
       const seen = new Set(task.keys);
       while (
         this.queue.length &&
         this.queue[0].kind === task.kind &&
-        this.queue[0].payload.mode === task.payload.mode
+        this.queue[0].payload.mode === task.payload.mode &&
+        this.queue[0].payload.save === task.payload.save
       ) {
         const nxt = this.queue.shift()!;
         for (const k of nxt.keys) {

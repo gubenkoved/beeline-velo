@@ -32,10 +32,14 @@
  * entirely in the SPA with no backend proxy. Only `fetch` is used.
  */
 
+import { gunzip } from "./gzip";
 import type { StravaStatus } from "./parsing";
 import { beelineRideKey } from "./parsing";
 import type { RideSource, UpsertFields } from "./store";
 import { decodePolyline, trackLengthKm } from "./track";
+
+// Re-exported so existing importers (and tests) can keep pulling `gunzip` from here.
+export { gunzip } from "./gzip";
 
 // -- backend constants (from the capture; not secrets — they live in the APK) --
 const FIREBASE_API_KEY = "AIzaSyDS48dtvbuXhM5mWwygLY7CM5kpFbe6L0U";
@@ -389,21 +393,6 @@ async function downloadStorageObject(
     );
   }
   return new Uint8Array(await resp.arrayBuffer());
-}
-
-/**
- * Gunzip bytes via the native `DecompressionStream` (evergreen browsers + Node 18+;
- * no dependency). When the bytes lack the gzip magic header (`1f 8b`) — e.g. a host
- * that transparently decoded `Content-Encoding: gzip` — they're returned unchanged
- * so a plain GPX still parses.
- */
-export async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
-  if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
-  const ds = new DecompressionStream("gzip");
-  const writer = ds.writable.getWriter();
-  void writer.write(bytes as BufferSource);
-  void writer.close();
-  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
 }
 
 // -- 4. rename / delete -----------------------------------------------------

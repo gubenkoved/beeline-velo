@@ -8,6 +8,7 @@
  * anything moves, and the UI re-renders.
  */
 
+import { GpxCache } from "./gpxcache";
 import { JobQueue, type JobsSnapshot, type Report, type Task } from "./jobs";
 import {
   type RideDetail,
@@ -56,6 +57,8 @@ export interface RideView extends RideMetrics {
   uploaded_at: string;
   deleted: boolean;
   deleted_at: string;
+  /** True when the full recorded GPX for this ride is cached on disk (see GpxCache). */
+  gpx_cached: boolean;
 }
 
 export interface AppState {
@@ -90,6 +93,9 @@ export class Controller {
   constructor(
     private readonly sourceFactory: SourceFactory,
     store: Store,
+    /** Persistent compressed full-GPX cache. Defaults to an ephemeral in-memory
+     *  one (demo/tests that don't supply a durable backend). */
+    private readonly gpxCache: GpxCache = GpxCache.memory(),
   ) {
     this.store = store;
     this.jobs = new JobQueue(
@@ -140,20 +146,71 @@ export class Controller {
     };
   }
 
+  /**
+   * Build a FULL GPX file for one ride from the on-disk gzip cache (real per-point
+   * time + elevation), or null when it isn't cached. Also rehydrates the in-memory
+   * full track so the ride's map shows real data offline. No network — this is the
+   * reuse path that lets a re-download/bundle skip re-fetching already-saved rides.
+   */
+  private async buildCachedFullGpx(key: string): Promise<GpxFile | null> {
+    const bytes = await this.gpxCache.get(key);
+    if (!bytes) return null;
+    const rec = this.store.rides.get(key);
+    const title = rec ? rec.title || rec.title_base || "" : "";
+    if (!this.fullTracks.has(key)) {
+      try {
+        this.fullTracks.set(key, extractFullTrack(new TextDecoder().decode(bytes)));
+      } catch {
+        // A corrupt cached GPX still downloads fine; only the map upgrade is skipped.
+      }
+    }
+    return {
+      key,
+      filename: gpxFilename(key),
+      downloadName: gpxDownloadName(key, title),
+      bytes,
+    };
+  }
+
   /** The in-memory full track for a ride, or null when not fetched this session. */
   getFullTrack(key: string): FullTrack | null {
     return this.fullTracks.get(key) ?? null;
   }
 
   /**
+   * Rehydrate a ride's FULL recorded track from the persistent GPX cache into the
+   * session map, if it's cached and not already loaded. No network — this is what
+   * lets the offline map/profile show real time + elevation after a reload (the
+   * gzipped GPX survives in IndexedDB even though the parsed in-memory track does
+   * not). Returns the track, or null when the ride isn't cached or won't parse.
+   */
+  async loadCachedFullTrack(key: string): Promise<FullTrack | null> {
+    const existing = this.fullTracks.get(key);
+    if (existing) return existing;
+    const bytes = await this.gpxCache.get(key);
+    if (!bytes) return null;
+    try {
+      const ft = extractFullTrack(new TextDecoder().decode(bytes));
+      this.fullTracks.set(key, ft);
+      this.notify();
+      return ft;
+    } catch {
+      return null; // corrupt cached GPX — leave it to a fresh fetch
+    }
+  }
+
+  /**
    * Fetch (or return the cached) FULL recorded track for one ride — the real ~1 Hz
    * trace with per-point time + elevation. Interactive (not queued): the UI awaits
-   * it to upgrade a ride's map. Cached in memory for the session; throws when the
-   * ride has no recorded track or the source isn't connected.
+   * it to upgrade a ride's map. Checks the session map, then the persistent GPX
+   * cache (so it works offline), and only then hits the source. Throws when the
+   * ride has no recorded track or — when nothing is cached — the source isn't connected.
    */
   async fetchFullTrack(key: string): Promise<FullTrack> {
     const cached = this.fullTracks.get(key);
     if (cached) return cached;
+    const fromCache = await this.loadCachedFullTrack(key);
+    if (fromCache) return fromCache;
     const source = this.sourceFor();
     const ft = await source.fetchFullTrack(key);
     this.fullTracks.set(key, ft);
@@ -242,6 +299,7 @@ export class Controller {
         uploaded_at: r.uploaded_at,
         deleted: r.deleted,
         deleted_at: r.deleted_at,
+        gpx_cached: this.gpxCache.has(r.key),
       };
     });
     return {
@@ -390,6 +448,13 @@ export class Controller {
     // can still hand the user a route-only GPX instead of failing outright.
     const degraded: string[] = [];
     const mode: GpxMode = (task.payload.mode as GpxMode) ?? "light";
+    // Whether the produced files are handed to the browser to save. When false
+    // (the "Fetch full GPX" action), the full sweep still runs — fetching, parsing
+    // the real track into the session map, and caching the gzipped GPX — but NO file
+    // is written to disk. This pre-warms the offline cache for the selected rides
+    // without spawning a download. Only meaningful in full mode (light GPX is
+    // synthesized locally and has nothing to cache).
+    const save = task.payload.save !== false;
     // Seed live progress so the queue panel shows "0 of N" while the sweep runs.
     task.progress = { done: 0, total: task.keys.length };
 
@@ -398,17 +463,37 @@ export class Controller {
     // single .zip below — browsers throttle and silently DROP rapid programmatic
     // downloads, so firing one `<a download>` per ride loses most of a large
     // selection (e.g. a whole year). One archive is one reliable download.
+    // In fetch-only (save === false) mode nothing is delivered, so we never retain
+    // bytes here — important at the thousands-of-rides scale.
     const bundle: GpxFile[] = [];
 
     // In LIGHT mode, rides that already carry their route in the cache (Beeline-
     // sourced) can be exported entirely locally — no device, no network, no sign-in.
     // Split those out and synthesize their GPX from the stored track; only the rest
     // need the source. (This is why light GPX export works in the offline, cached-
-    // rides mode.) In FULL mode every ride must be fetched from the cloud render, so
-    // nothing is handled locally.
+    // rides mode.) In FULL mode every ride must be fetched from the cloud render,
+    // EXCEPT rides whose full GPX we already downloaded once and cached on disk —
+    // those are served straight from the gzip cache (instant, offline), so only the
+    // rest hit the source.
     const remote: string[] = [];
     if (mode === "full") {
-      remote.push(...task.keys);
+      for (const key of task.keys) {
+        // Fetch-only: a ride already in the cache needs no work at all — count it
+        // done without reading/gunzipping the blob.
+        if (!save && this.gpxCache.has(key)) {
+          succeeded++;
+          if (task.progress) task.progress.done++;
+          continue;
+        }
+        const file = save ? await this.buildCachedFullGpx(key) : null;
+        if (file) {
+          bundle.push(file);
+          succeeded++;
+          if (task.progress) task.progress.done++;
+        } else {
+          remote.push(key);
+        }
+      }
     } else {
       for (const key of task.keys) {
         const rec = this.store.rides.get(key);
@@ -450,6 +535,13 @@ export class Controller {
               // A malformed GPX shouldn't sink the download; the rough sketch below
               // still drives the display map.
             }
+            // Persist the full GPX (gzipped) so a later save/bundle of this ride is
+            // instant and works offline. Fire-and-forget: caching is best-effort and
+            // must never delay or fail the download itself (quota errors surface via
+            // the cache's own onError). The bytes are only read, never mutated.
+            void this.gpxCache.put(file.key, file.bytes).then((ok) => {
+              if (ok) this.notify();
+            });
           }
           const rough = gpxToRoughTrack(file.bytes, this.store.settings.trackPointsPerKm);
           if (rough.polyline) {
@@ -468,7 +560,9 @@ export class Controller {
             // bogus empty track; record it so the task surfaces a real, persistent error.
             failures.push(`${file.key}: couldn't extract a GPS track from the downloaded GPX`);
           }
-          bundle.push(file);
+          // Only retain bytes for delivery when actually saving; fetch-only has
+          // already cached them above and discards the bytes here.
+          if (save) bundle.push(file);
           if (task.progress) task.progress.done++;
         },
         (missing) => {
@@ -482,8 +576,10 @@ export class Controller {
           // When the full export gateway is unreachable but the ride still carries a
           // cached route, hand the user a route-only GPX instead of failing — so a
           // gateway outage mid-batch never breaks the download. Genuine "no track"
-          // failures (not retryable) stay real errors.
-          if (mode === "full" && retryable) {
+          // failures (not retryable) stay real errors. Skipped in fetch-only mode:
+          // there's no file to hand over and a route-only sketch is nothing to cache,
+          // so an unreachable full export is reported as a real failure instead.
+          if (save && mode === "full" && retryable) {
             const fallback = this.buildCachedLightGpx(key);
             if (fallback) {
               bundle.push(fallback);
@@ -504,11 +600,12 @@ export class Controller {
     }
 
     // Deliver the produced files. One file → a plain GPX (unchanged behaviour); more
-    // than one → a single ZIP so the browser reliably saves the whole batch.
+    // than one → a single ZIP so the browser reliably saves the whole batch. In
+    // fetch-only mode nothing is delivered — the rides are now cached.
     let bundled = false;
-    if (bundle.length === 1) {
+    if (save && bundle.length === 1) {
       this.emitGpx(bundle[0]);
-    } else if (bundle.length > 1) {
+    } else if (save && bundle.length > 1) {
       const zipBytes = await buildZip(
         bundle.map((f) => ({ name: f.downloadName, bytes: f.bytes })),
       );
@@ -531,13 +628,16 @@ export class Controller {
       : "";
     const bundleNote = bundled ? " (bundled into one .zip)" : "";
     report(
-      `exported ${succeeded} GPX file${succeeded === 1 ? "" : "s"}${bundleNote}${suffix}${degradedNote}`,
+      save
+        ? `exported ${succeeded} GPX file${succeeded === 1 ? "" : "s"}${bundleNote}${suffix}${degradedNote}`
+        : `fetched & cached ${succeeded} full GPX${succeeded === 1 ? "" : "s"}${suffix}`,
     );
 
     if (failures.length) {
       // Fail the task so the UI shows a persistent, acknowledgeable error with full
       // per-ride detail under "Details" — not a status message that just blinks past.
-      const header = `${failures.length} of ${task.keys.length} GPX download${
+      const verb = save ? "GPX download" : "GPX fetch";
+      const header = `${failures.length} of ${task.keys.length} ${verb}${
         task.keys.length === 1 ? "" : "s"
       } failed (${succeeded} succeeded):`;
       throw new Error([header, ...failures.map((f) => `  • ${f}`)].join("\n"));
@@ -566,7 +666,6 @@ export class Controller {
     }
     return `Beeline ${kind}${range} (${files.length}).zip`;
   }
-
 
   /**
    * Rename a ride on the backend, then mirror the new name locally. The cloud is
@@ -637,7 +736,23 @@ export class Controller {
     return this.jobs.submit("download-gpx", {
       label: label || `${keys.length} rides`,
       keys,
-      payload: { mode },
+      payload: { mode, save: true },
+    });
+  }
+
+  /**
+   * Fetch the FULL recorded GPX for the given rides and cache it locally WITHOUT
+   * saving any file to disk. Same queued cloud sweep as a full download (it also
+   * rehydrates each ride's real time/elevation map track), minus the delivery — so
+   * the user can pre-warm the offline cache for a selection in one go. Rides already
+   * cached are skipped. Runs as its own sweep: the `save:false` payload keeps it from
+   * coalescing with a real save-download (see JobQueue).
+   */
+  fetchFullGpx(keys: string[], label = ""): TaskSnapshotResult {
+    return this.jobs.submit("download-gpx", {
+      label: label || `${keys.length} rides`,
+      keys,
+      payload: { mode: "full", save: false },
     });
   }
 
@@ -696,14 +811,41 @@ export class Controller {
   }
 
   /**
-   * Wipe all local state: cancel/clear the job queue and empty the ride cache.
+   * Wipe all local state: cancel/clear the job queue and empty the ride cache. Also
+   * flushes the persistent full-GPX cache (a reset is "erase everything local").
    * Destroys browser-side data only; nothing in your Beeline account is affected.
    */
   reset(): void {
     this.jobs.cancelAll();
     this.jobs.clear();
     this.store.clear();
+    void this.gpxCache.clear();
     this.notify();
+  }
+
+  /**
+   * Flush ONLY the persistent full-GPX cache, leaving rides and settings intact.
+   * Separate from `reset()` so the user can reclaim the (potentially large) GPX
+   * cache without losing their ride history.
+   */
+  async flushGpxCache(): Promise<void> {
+    await this.gpxCache.clear();
+    this.notify();
+  }
+
+  /** Total on-disk (compressed) size of the cached full-GPX files, in bytes. */
+  gpxCacheBytes(): number {
+    return this.gpxCache.totalBytes();
+  }
+
+  /** Number of rides with a cached full GPX. */
+  gpxCacheCount(): number {
+    return this.gpxCache.count;
+  }
+
+  /** The set of ride keys whose full GPX is cached on disk. */
+  gpxCachedKeys(): Set<string> {
+    return this.gpxCache.cachedKeys();
   }
 
   // -- import / export ---------------------------------------------------

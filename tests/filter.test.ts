@@ -40,6 +40,7 @@ function ride(over: Partial<RideView> = {}): RideView {
     uploaded_at: "",
     deleted: false,
     deleted_at: "",
+    gpx_cached: false,
     ...over,
   };
 }
@@ -112,17 +113,26 @@ describe("matchesFilters — status", () => {
     expect(matchesFilters(f({ status: "processing" }), ride({ status: "processing" }))).toBe(
       true,
     );
-    expect(matchesFilters(f({ status: "processing" }), ride({ status: "pending" }))).toBe(false);
+    expect(matchesFilters(f({ status: "processing" }), ride({ status: "pending" }))).toBe(
+      false,
+    );
     expect(matchesFilters(f({ status: "processing" }), ride({ status: "uploaded" }))).toBe(
       false,
     );
   });
 
   it("not-uploaded is everything still eligible to upload (pending/unknown)", () => {
-    expect(matchesFilters(f({ status: "not-uploaded" }), ride({ status: "pending" }))).toBe(true);
-    expect(matchesFilters(f({ status: "not-uploaded" }), ride({ status: "unknown" }))).toBe(true);
+    expect(matchesFilters(f({ status: "not-uploaded" }), ride({ status: "pending" }))).toBe(
+      true,
+    );
+    expect(matchesFilters(f({ status: "not-uploaded" }), ride({ status: "unknown" }))).toBe(
+      true,
+    );
     expect(
-      matchesFilters(f({ status: "not-uploaded" }), ride({ status: "pending", deleted: true })),
+      matchesFilters(
+        f({ status: "not-uploaded" }),
+        ride({ status: "pending", deleted: true }),
+      ),
     ).toBe(true);
     expect(matchesFilters(f({ status: "not-uploaded" }), ride({ status: "uploaded" }))).toBe(
       false,
@@ -139,6 +149,22 @@ describe("matchesFilters — gps / details tri-states", () => {
     expect(matchesFilters(f({ gps: "yes" }), ride({ track: "" }))).toBe(false);
     expect(matchesFilters(f({ gps: "no" }), ride({ track: "" }))).toBe(true);
     expect(matchesFilters(f({ gps: "no" }), ride({ track: "abc" }))).toBe(false);
+  });
+
+  it("cached yes/no keys off the full-GPX cache flag, independent of track presence", () => {
+    // A ride can carry the lightweight route (track) yet NOT have the full GPX cached.
+    expect(
+      matchesFilters(f({ cached: "yes" }), ride({ track: "abc", gpx_cached: true })),
+    ).toBe(true);
+    expect(
+      matchesFilters(f({ cached: "yes" }), ride({ track: "abc", gpx_cached: false })),
+    ).toBe(false);
+    expect(
+      matchesFilters(f({ cached: "no" }), ride({ track: "abc", gpx_cached: false })),
+    ).toBe(true);
+    expect(matchesFilters(f({ cached: "no" }), ride({ track: "abc", gpx_cached: true }))).toBe(
+      false,
+    );
   });
 
   it("details yes/no keys off the presence of checked stats", () => {

@@ -43,7 +43,8 @@ import { computeStats, type PeriodRecord } from "./stats";
 import "leaflet.heat";
 import { DEMO_BEELINE_EMAIL, demoBeelineDeps } from "./beeline-demo";
 import { BeelineRideSource, type BeelineSourceDeps } from "./beeline-source";
-import { idbBackend, memoryBackend } from "./kv";
+import { GpxCache } from "./gpxcache";
+import { idbBackend, idbBlobBackend, memoryBackend } from "./kv";
 import type { SourceFactory } from "./source";
 import { Store } from "./store";
 import {
@@ -66,6 +67,8 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string): T =>
 
 /** Durable ride-cache storage. One IndexedDB connection shared by every controller. */
 const storageBackend = idbBackend();
+/** Durable binary backend for the compressed full-GPX cache (own `gpx` object store). */
+const gpxBlobBackend = idbBlobBackend();
 /** Surface a background-write failure (e.g. quota exceeded) to the user. */
 const onStorageError = (message: string): void => pushError("Storage error", message);
 
@@ -279,6 +282,49 @@ function withGpxRelayConsent(action: () => void): void {
   });
 }
 
+/**
+ * Run a full-track GPX download for the given rides. When EVERY requested ride is
+ * already in the on-disk GPX cache, the bytes are served locally — so we skip both
+ * the export-gateway consent and the Beeline re-auth prompt and run straight away
+ * (a genuine offline re-save). Otherwise at least one ride must be fetched, so we
+ * gate on consent + a live connection as before.
+ */
+function saveFullGpx(keys: string[]): void {
+  const cached = controller.gpxCachedKeys();
+  const allCached = keys.length > 0 && keys.every((k) => cached.has(k));
+  if (allCached) {
+    run(() => controller.downloadGpx(keys, "", "full"));
+    return;
+  }
+  withGpxRelayConsent(() =>
+    withBeelineAccess(() => run(() => controller.downloadGpx(keys, "", "full"))),
+  );
+}
+
+/**
+ * Fetch the full-track GPX for the given rides into the local cache WITHOUT saving
+ * any file (pre-warms offline use + each ride's real time/elevation map). Always a
+ * cloud fetch, so it gates on the export-gateway consent + a live Beeline
+ * connection. Rides already cached need no fetch — when every requested ride is
+ * already cached we just say so instead of spinning up an empty sweep.
+ */
+function fetchFullGpx(keys: string[]): void {
+  if (!keys.length) return;
+  const cached = controller.gpxCachedKeys();
+  const missing = keys.filter((k) => !cached.has(k));
+  if (!missing.length) {
+    toast(
+      keys.length === 1
+        ? "Full GPX already cached for this ride."
+        : "Full GPX already cached for all selected rides.",
+    );
+    return;
+  }
+  withGpxRelayConsent(() =>
+    withBeelineAccess(() => run(() => controller.fetchFullGpx(missing))),
+  );
+}
+
 /** Build a ride source from a device getter (closure captures serial, etc.). */
 function beelineSourceFactory(
   email: string,
@@ -302,7 +348,7 @@ function beelineSourceFactory(
 async function goDemoBeeline(): Promise<void> {
   const store = new Store(memoryBackend());
   const factory = beelineSourceFactory(DEMO_BEELINE_EMAIL, "demo", store, demoBeelineDeps());
-  const c = new Controller(factory, store);
+  const c = new Controller(factory, store, GpxCache.memory());
   activate(c, true, "beeline");
   try {
     await c.connect();
@@ -323,7 +369,8 @@ async function goDemoBeeline(): Promise<void> {
  */
 async function goBeeline(email: string, password: string): Promise<boolean> {
   const store = await Store.load(storageBackend, onStorageError, BEELINE_STORAGE_KEY);
-  const c = new Controller(beelineSourceFactory(email, password, store), store);
+  const gpxCache = await GpxCache.load(gpxBlobBackend, BEELINE_STORAGE_KEY, onStorageError);
+  const c = new Controller(beelineSourceFactory(email, password, store), store, gpxCache);
   activate(c, false, "beeline"); // show cached rides immediately
   try {
     await c.connect(); // signs in; throws on bad credentials / no network
@@ -364,10 +411,11 @@ async function goBeeline(email: string, password: string): Promise<boolean> {
  */
 async function goBeelineOffline(): Promise<void> {
   const store = await Store.load(storageBackend, onStorageError, BEELINE_STORAGE_KEY);
+  const gpxCache = await GpxCache.load(gpxBlobBackend, BEELINE_STORAGE_KEY, onStorageError);
   const factory: SourceFactory = async () => {
     throw new Error("Not signed in — sign in to Beeline to sync.");
   };
-  const c = new Controller(factory, store);
+  const c = new Controller(factory, store, gpxCache);
   activate(c, false, "beeline");
 }
 
@@ -438,6 +486,7 @@ function loadFilters(): Filters {
     const o = JSON.parse(raw) as Partial<Filters>;
     if (STATUS_VALUES.includes(o.status as Filters["status"])) f.status = o.status!;
     if (TRI_VALUES.includes(o.gps as TriState)) f.gps = o.gps!;
+    if (TRI_VALUES.includes(o.cached as TriState)) f.cached = o.cached!;
     if (TRI_VALUES.includes(o.details as TriState)) f.details = o.details!;
     if (TRI_VALUES.includes(o.destination as TriState)) f.destination = o.destination!;
     if (TRI_VALUES.includes(o.named as TriState)) f.named = o.named!;
@@ -661,6 +710,9 @@ let rideMapKey: string | null = null;
 let rideMapColorMode: "none" | "height" | "speed" = "none";
 /** Whether the elevation profile panel is shown (when a full track is loaded). */
 let rideMapProfileShown = true;
+/** Which metric the profile graphs: elevation vs distance, or speed vs distance.
+ *  Falls back to whichever is available when the chosen one has no data. */
+let rideMapProfileMetric: "elevation" | "speed" = "elevation";
 /** Cached hover state for the open ride map, recomputed on pan/zoom/resize. */
 let rideHover: {
   pts: [number, number][];
@@ -747,6 +799,7 @@ function drawRideLine(): void {
   const range = values ? finiteRange(values) : null;
   if (rideMapColorMode === "none" || !full || !values || !range) {
     L.polyline(pts, { color: "#fc5200", weight: 4 }).addTo(layer);
+    drawEndpointMarkers(layer, pts);
     return;
   }
   const span = range.hi - range.lo || 1;
@@ -760,14 +813,66 @@ function drawRideLine(): void {
     const t = v == null ? 0.5 : (v - range.lo) / span;
     L.polyline(seg, { color: heatColor(t), weight: 4, opacity: 0.95 }).addTo(layer);
   }
+  drawEndpointMarkers(layer, pts);
 }
 
-/** Render the elevation-vs-distance profile below the map from the full track. */
+/**
+ * Draw the persistent start (green) and finish (red) markers for the open route —
+ * green/red is the universal "begin here / ended here" convention (matching the
+ * orange hover dot's circle style). Added last so they sit above the route line;
+ * each carries a hover tooltip. On a loop ride the finish overlaps the start, which
+ * is expected. The markers live on the route layer, so they're cleared and redrawn
+ * together with the line on a colour-mode change.
+ */
+function drawEndpointMarkers(layer: L.LayerGroup, pts: [number, number][]): void {
+  if (pts.length < 2) return;
+  L.circleMarker(pts[0], {
+    radius: 6,
+    color: "#ffffff",
+    weight: 2,
+    fillColor: "#2ec27e",
+    fillOpacity: 1,
+  })
+    .bindTooltip("Start", { direction: "top" })
+    .addTo(layer);
+  L.circleMarker(pts[pts.length - 1], {
+    radius: 6,
+    color: "#ffffff",
+    weight: 2,
+    fillColor: "#ff5a5a",
+    fillOpacity: 1,
+  })
+    .bindTooltip("Finish", { direction: "top" })
+    .addTo(layer);
+}
+
+/** Which profile metrics have real data for the open track (drives the toggle). */
+function profileMetricsAvailable(): { elevation: boolean; speed: boolean } {
+  const full = rideHover?.full ?? null;
+  return {
+    elevation: !!full && hasElevation(full),
+    speed: !!(rideHover?.speeds && finiteRange(rideHover.speeds)),
+  };
+}
+
+/** The metric the profile will actually draw: the chosen one when it has data,
+ *  else whichever is available, else null (nothing to show). */
+function effectiveProfileMetric(): "elevation" | "speed" | null {
+  const a = profileMetricsAvailable();
+  if (rideMapProfileMetric === "speed" && a.speed) return "speed";
+  if (rideMapProfileMetric === "elevation" && a.elevation) return "elevation";
+  if (a.elevation) return "elevation";
+  if (a.speed) return "speed";
+  return null;
+}
+
+/** Render the elevation- or speed-vs-distance profile below the map from the full track. */
 function renderRideProfile(): void {
   const host = document.getElementById("rideMapProfile");
   if (!host) return;
   const full = rideHover?.full ?? null;
-  if (!rideMapProfileShown || !full || !hasElevation(full)) {
+  const metric = effectiveProfileMetric();
+  if (!rideMapProfileShown || !full || !metric) {
     host.classList.add("hidden");
     host.setAttribute("aria-hidden", "true");
     host.innerHTML = "";
@@ -777,10 +882,14 @@ function renderRideProfile(): void {
   host.setAttribute("aria-hidden", "false");
 
   const cum = rideHover!.cum;
-  const eles = full.eles;
-  const range = finiteRange(eles);
+  // Elevation vs speed differ only in the source array, axis unit and label; the
+  // x-axis (distance) and the cursor sync are identical, so they share this body.
+  const speed = metric === "speed";
+  const values = speed ? (rideHover!.speeds ?? []) : full.eles;
+  const unit = speed ? "km/h" : "m";
+  const range = finiteRange(values);
   if (!range) {
-    host.innerHTML = `<div class="rp-empty">No elevation data in this track.</div>`;
+    host.innerHTML = `<div class="rp-empty">No ${speed ? "speed" : "elevation"} data in this track.</div>`;
     return;
   }
   const W = 1000;
@@ -789,20 +898,23 @@ function renderRideProfile(): void {
   const padTop = 8;
   const padBot = 18;
   const totalKm = rideHover!.totalKm || 1;
-  const eSpan = range.hi - range.lo || 1;
+  // Anchor a speed profile's fill at zero so the height reads as absolute speed;
+  // elevation keeps its own min so modest hills aren't flattened against the floor.
+  const lo = speed ? Math.min(0, range.lo) : range.lo;
+  const vSpan = range.hi - lo || 1;
   const xOf = (km: number) => padX + (km / totalKm) * (W - 2 * padX);
-  const yOf = (e: number) => padTop + (1 - (e - range.lo) / eSpan) * (H - padTop - padBot);
+  const yOf = (v: number) => padTop + (1 - (v - lo) / vSpan) * (H - padTop - padBot);
 
-  // Build the area + line path over points that carry an elevation.
+  // Build the area + line path over points that carry a value.
   let line = "";
   let firstX = padX;
   let lastX = padX;
   let started = false;
-  for (let i = 0; i < eles.length; i++) {
-    const e = eles[i];
-    if (e == null) continue;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v == null) continue;
     const x = xOf(cum[i]);
-    const y = yOf(e);
+    const y = yOf(v);
     if (!started) {
       firstX = x;
       line = `M${x.toFixed(1)},${y.toFixed(1)}`;
@@ -814,14 +926,15 @@ function renderRideProfile(): void {
   }
   const baseY = (H - padBot).toFixed(1);
   const area = `${line} L${lastX.toFixed(1)},${baseY} L${firstX.toFixed(1)},${baseY} Z`;
+  const fmt = (v: number) => (speed ? v.toFixed(0) : Math.round(v).toString());
   host.innerHTML =
     `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" ` +
-    `aria-label="Elevation profile">` +
+    `aria-label="${speed ? "Speed" : "Elevation"} profile">` +
     `<path class="rp-area" d="${area}"/>` +
     `<path class="rp-line" d="${line}"/>` +
     `<line class="rp-cursor" id="rpCursor" x1="0" y1="${padTop}" x2="0" y2="${baseY}" style="display:none"/>` +
-    `<text class="rp-axis" x="${padX}" y="12">${Math.round(range.hi)} m</text>` +
-    `<text class="rp-axis" x="${padX}" y="${H - 5}">${Math.round(range.lo)} m</text>` +
+    `<text class="rp-axis" x="${padX}" y="12">${fmt(range.hi)} ${unit}</text>` +
+    `<text class="rp-axis" x="${padX}" y="${H - 5}">${fmt(lo)} ${unit}</text>` +
     `</svg>`;
 }
 
@@ -1028,14 +1141,18 @@ function syncRideMapControls(): void {
   const fetchBtn = document.getElementById("btnRideMapFull") as HTMLButtonElement | null;
   const colorSeg = document.getElementById("rideMapColor");
   const profileBtn = document.getElementById("btnRideMapProfile") as HTMLButtonElement | null;
+  const metricSeg = document.getElementById("rideMapProfileMetric");
   const est = document.getElementById("rideMapEst");
   const hasTime = (ride?.elapsed_sec || ride?.moving_sec || 0) > 0;
 
   if (full) {
     fetchBtn?.classList.add("hidden");
     colorSeg?.classList.remove("hidden");
-    // The elevation profile + its toggle only make sense with real elevation.
-    const showProfileBtn = hasElevation(full);
+    // The profile + its toggle make sense once the track carries elevation OR
+    // (timestamps →) speed; the metric seg only appears when BOTH are available,
+    // since with one metric there's nothing to switch to.
+    const avail = profileMetricsAvailable();
+    const showProfileBtn = avail.elevation || avail.speed;
     profileBtn?.classList.toggle("hidden", !showProfileBtn);
     est?.classList.add("hidden"); // real time now — no estimate disclaimer
     setRideMapStatus(""); // loaded — clear any prior fetching/error note
@@ -1048,6 +1165,13 @@ function syncRideMapControls(): void {
       profileBtn.textContent = shown ? "Hide profile" : "Show profile";
       profileBtn.setAttribute("aria-pressed", String(shown));
     }
+    // Profile-metric segmented control: visible only with both metrics + profile open.
+    const showMetricSeg = avail.elevation && avail.speed && rideMapProfileShown;
+    metricSeg?.classList.toggle("hidden", !showMetricSeg);
+    const eff = effectiveProfileMetric();
+    metricSeg?.querySelectorAll<HTMLButtonElement>("button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.profile === eff);
+    });
   } else {
     if (fetchBtn) {
       fetchBtn.classList.remove("hidden");
@@ -1056,6 +1180,7 @@ function syncRideMapControls(): void {
     }
     colorSeg?.classList.add("hidden");
     profileBtn?.classList.add("hidden");
+    metricSeg?.classList.add("hidden");
     est?.classList.toggle("hidden", !hasTime);
   }
 }
@@ -1113,6 +1238,7 @@ function openRideMap(key: string): void {
 
   rideMapKey = key;
   rideMapColorMode = "none";
+  rideMapProfileMetric = "elevation";
   setRideMapStatus("");
 
   // Title: the ride's name + location, then its short date.
@@ -1144,6 +1270,22 @@ function openRideMap(key: string): void {
   buildRideMapState();
   if (rideHover) {
     map.fitBounds(L.latLngBounds(rideHover.pts), { padding: [24, 24] });
+  }
+
+  // If the full GPX is cached (real time + elevation) but not yet parsed into this
+  // session, rehydrate it from the cache — no network — so the offline map shows the
+  // full UX (profile, real speed/elevation) automatically instead of offering "Fetch
+  // full track" for data we already hold. Async: the initial build above already drew
+  // the route, this just upgrades it in place once the cache read resolves.
+  if (ride?.gpx_cached && !controller.getFullTrack(key)) {
+    void controller.loadCachedFullTrack(key).then((ft) => {
+      if (ft && rideMapKey === key && rideMapBig) {
+        buildRideMapState();
+        if (rideHover) {
+          rideMapBig.fitBounds(L.latLngBounds(rideHover.pts), { padding: [24, 24] });
+        }
+      }
+    });
   }
 
   map.on("move zoom resize zoomend moveend", reprojectRideHover);
@@ -1219,6 +1361,13 @@ function toggleRideMapProfile(): void {
     rideMapBig?.invalidateSize();
     reprojectRideHover();
   }, 0);
+}
+
+/** Switch the profile metric (elevation vs speed), redrawing the graph in place. */
+function setRideMapProfileMetric(metric: "elevation" | "speed"): void {
+  rideMapProfileMetric = metric;
+  renderRideProfile();
+  syncRideMapControls();
 }
 
 /** Close the full-screen route map and release its Leaflet instance. */
@@ -2248,6 +2397,16 @@ function deletedBadge(): string {
 function gpsBadge(): string {
   return `<span class="badge gps" title="Route preview available — expand details to see the map.">gps</span>`;
 }
+/**
+ * Subtle marker for a ride whose FULL recorded GPX is cached locally (real
+ * per-point time + elevation), so its map/profile work offline and a save is
+ * instant. Distinct from the `gps` badge, which only means the lightweight route
+ * preview is present. Rendered as a small dot + "GPX" so it reads as a quiet
+ * "ready offline" hint, not another loud status pill.
+ */
+function cachedBadge(): string {
+  return `<span class="badge cached" title="Full recorded GPX is cached locally (real time + elevation) — its map and profile work offline and saving is instant.">GPX</span>`;
+}
 function fmtStats(r: RideView): string {
   // Render the detail grid from the NORMALIZED numbers so a comma-decimal source
   // ("20,0km/h") reads identically to a dot one ("20.0 km/h"). Each row appears
@@ -2305,7 +2464,8 @@ function syncFilterBar(allRides: AppState["rides"]): void {
       state === "any" ? `${label}: any` : `${label} ${state === yes ? "✓" : "✕"}`;
     el.classList.toggle("on", state !== "any");
   };
-  chip("fGps", "GPS", filters.gps, "yes");
+  chip("fGps", "Route", filters.gps, "yes");
+  chip("fCached", "Full GPX", filters.cached, "yes");
   chip("fDetails", "Details", filters.details, "yes");
   chip("fDestination", "Destination", filters.destination, "yes");
   chip("fNamed", "Named", filters.named, "yes");
@@ -2363,6 +2523,7 @@ function cycleChip(which: string): void {
   const nextTri = (s: TriState): TriState =>
     s === "any" ? "yes" : s === "yes" ? "no" : "any";
   if (which === "gps") filters.gps = nextTri(filters.gps);
+  else if (which === "cached") filters.cached = nextTri(filters.cached);
   else if (which === "details") filters.details = nextTri(filters.details);
   else if (which === "destination") filters.destination = nextTri(filters.destination);
   else if (which === "named") filters.named = nextTri(filters.named);
@@ -2376,6 +2537,7 @@ function cycleChip(which: string): void {
 function clearFilters(): void {
   filters.status = "all";
   filters.gps = "any";
+  filters.cached = "any";
   filters.details = "any";
   filters.destination = "any";
   filters.named = "any";
@@ -2679,11 +2841,12 @@ function render(): void {
 
   // Batch actions apply to the current selection — disable + count-label them so
   // "nothing to do" is obvious instead of a button that just toasts on click. The
-  // actions live behind one dropdown (Save .gpx + Upload), so the caret is disabled
-  // too when empty.
+  // actions live behind one dropdown (Save/Fetch GPX + Upload), so the caret is
+  // disabled too when empty.
   const selBtns: Array<[string, string]> = [
-    ["btnGpxSaveSel", "Save .gpx files"],
-    ["btnGpxSaveSelFull", "Save full .gpx files"],
+    ["btnGpxSaveSel", "Save route GPX"],
+    ["btnGpxSaveSelFull", "Save full GPX"],
+    ["btnGpxFetchSel", "Fetch full GPX"],
     ["btnUploadSel", "Upload selected to Strava"],
   ];
   for (const [id, base] of selBtns) {
@@ -2709,7 +2872,35 @@ function render(): void {
   if (selCluster) selCluster.style.display = nSel ? "" : "none";
 
   const sizeEl = $("#stateSize");
-  if (sizeEl) sizeEl.textContent = fmtBytes(controller.stateBytes());
+  if (sizeEl) {
+    // The header chip is the single "how much am I storing locally?" readout. The
+    // GPX cache lives in its own store and is usually the BIGGER consumer, so fold
+    // it in — but only show the GPX segment when the cache is non-empty, so users
+    // who never download full GPX see no extra clutter. The tooltip breaks it down
+    // and points at the separate flush; the in-menu button shows the per-cache detail.
+    const stateBytes = controller.stateBytes();
+    const gpxBytes = controller.gpxCacheBytes();
+    const gpxCount = controller.gpxCacheCount();
+    sizeEl.textContent = gpxCount
+      ? `${fmtBytes(stateBytes)} · ${fmtBytes(gpxBytes)} GPX`
+      : fmtBytes(stateBytes);
+    sizeEl.title = gpxCount
+      ? `Stored locally in this browser: ${fmtBytes(stateBytes)} of rides, settings & status` +
+        ` + ${fmtBytes(gpxBytes)} of cached full-GPX downloads (${gpxCount} ride${
+          gpxCount === 1 ? "" : "s"
+        }).\nClear the GPX cache on its own via Data ▸ Clear GPX cache. Export backs up` +
+        ` rides/settings; Reset clears everything.`
+      : "Size of all rides, settings and status stored locally in this browser." +
+        " Export to back it up; Reset to clear it.";
+  }
+
+  // The GPX-cache flush is only meaningful when something is cached, so disable it
+  // when empty. The count + size aren't repeated here — the header size chip already
+  // shows the cache total, and the "Full GPX" filter lists exactly which rides hold it.
+  const flushGpxBtn = document.getElementById("btnFlushGpx") as HTMLButtonElement | null;
+  if (flushGpxBtn) {
+    flushGpxBtn.disabled = controller.gpxCacheCount() === 0;
+  }
 
   const tp = $<HTMLInputElement>("#trackPoints");
   if (tp && document.activeElement !== tp) tp.value = String(STATE.settings.trackPointsPerKm);
@@ -2799,7 +2990,7 @@ function render(): void {
         el.innerHTML = `
           <input type="checkbox" class="chk" data-key="${r.key}" ${selected.has(r.key) ? "checked" : ""}>
           <div class="rmain">
-            <div class="rtitle"><span class="rname"><span class="rtitle-text">${r.title || "Ride"}</span>${r.location ? `<span class="rtitle-loc">${r.location}</span>` : ""}</span> ${badge(r.status)} ${!beelineMode() && r.track ? gpsBadge() : ""} ${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}</div>
+            <div class="rtitle"><span class="rname"><span class="rtitle-text">${r.title || "Ride"}</span>${r.location ? `<span class="rtitle-loc">${r.location}</span>` : ""}</span> ${badge(r.status)} ${!beelineMode() && r.track ? gpsBadge() : ""} ${r.gpx_cached ? cachedBadge() : ""} ${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}</div>
             <div class="rmeta">${r.key} · ${summaryDistance} · ${summaryDuration}
               <a href="#" data-stats="${r.key}">${so ? "hide" : "details"}</a></div>
             ${so ? detailsBlock(r) : ""}
@@ -2808,8 +2999,9 @@ function render(): void {
             <button class="small accent" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ' title="Upload to Strava"'}>${UPLOAD_ICON}<span class="btn-label">Upload to Strava</span></button>
             <button class="small ghost ovr" data-splitmenu="ovr-r:${r.key}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-r:${r.key}`}" title="More ride actions">${KEBAB_ICON}</button>
             <span class="ovr-items">
-              <button class="small ghost" data-act="gpx-save-one" data-key="${r.key}" title="Save the lightweight route-only GPX (shape only, instant)">Save .gpx (route)</button>
-              <button class="small ghost" data-act="gpx-save-full-one" data-key="${r.key}" title="Download the full recorded GPX (real timestamps + elevation) and save it">Save full .gpx</button>
+              <button class="small ghost" data-act="gpx-save-one" data-key="${r.key}" title="Save the route-only GPX (the stored shape — no timestamps or elevation; instant, works offline)">Save route GPX</button>
+              <button class="small ghost" data-act="gpx-save-full-one" data-key="${r.key}" title="Download the full recorded GPX (real timestamps + elevation) and save it to disk">Save full GPX</button>
+              <button class="small ghost" data-act="gpx-fetch-one" data-key="${r.key}" title="${r.gpx_cached ? "Full GPX is cached — fetch again to refresh it (no file saved)" : "Fetch the full recorded GPX into the local cache without saving a file (pre-warms offline use + the map)"}">${r.gpx_cached ? "Fetch full GPX ✓" : "Fetch full GPX"}</button>
               ${r.deleted ? "" : `<button class="small ghost" data-act="rename-one" data-key="${r.key}" title="Rename this ride on Beeline">Rename…</button>`}
               ${r.deleted ? "" : `<button class="small danger" data-act="delete-one" data-key="${r.key}" title="Delete this ride from Beeline">Delete…</button>`}
             </span>
@@ -3344,6 +3536,31 @@ async function resetEverything(): Promise<void> {
   toast("Local data cleared.");
 }
 
+/**
+ * Flush only the persistent full-GPX cache, leaving rides and settings intact. The
+ * cache can grow large (one gzipped GPX per downloaded ride); this reclaims that
+ * space. Cached rides are simply re-fetched the next time they're saved.
+ */
+async function flushGpxCache(): Promise<void> {
+  openMenu = null; // close the Data menu we were invoked from
+  const n = controller.gpxCacheCount();
+  if (n === 0) {
+    toast("No cached GPX downloads to clear.");
+    return;
+  }
+  if (
+    !confirm(
+      `Clear ${n} cached GPX download${n === 1 ? "" : "s"} (${fmtBytes(
+        controller.gpxCacheBytes(),
+      )})? Your rides and settings are kept; cached rides are re-fetched next time you save them.`,
+    )
+  ) {
+    return;
+  }
+  await controller.flushGpxCache();
+  toast("GPX cache cleared.");
+}
+
 // --------------------------------------------------------------------------- //
 // Events
 // --------------------------------------------------------------------------- //
@@ -3381,6 +3598,9 @@ document.addEventListener("click", (e) => {
   }
   if (t.dataset?.color && t.closest("#rideMapColor")) {
     return setRideMapColor(t.dataset.color as "none" | "height" | "speed");
+  }
+  if (t.dataset?.profile && t.closest("#rideMapProfileMetric")) {
+    return setRideMapProfileMetric(t.dataset.profile as "elevation" | "speed");
   }
   if (t.id === "btnRideMapProfile") {
     return toggleRideMapProfile();
@@ -3503,6 +3723,7 @@ document.addEventListener("click", (e) => {
   if (t.id === "btnDisconnect") return showPicker({ reauth: true });
   if (t.id === "btnImport") return void ($("#importFile") as HTMLInputElement).click();
   if (t.id === "btnExport") return exportRides();
+  if (t.id === "btnFlushGpx") return void flushGpxCache();
   if (t.id === "btnReset") return void resetEverything();
   if (t.id === "btnScan") return doScan();
   if (t.id === "btnCancel") return run(() => controller.cancel(null));
@@ -3549,10 +3770,12 @@ document.addEventListener("click", (e) => {
   if (t.id === "btnGpxSaveSelFull") {
     openMenu = null;
     if (!selected.size) return toast("Select some rides first.");
-    const keys = [...selected];
-    return withGpxRelayConsent(() =>
-      withBeelineAccess(() => run(() => controller.downloadGpx(keys, "", "full"))),
-    );
+    return saveFullGpx([...selected]);
+  }
+  if (t.id === "btnGpxFetchSel") {
+    openMenu = null;
+    if (!selected.size) return toast("Select some rides first.");
+    return fetchFullGpx([...selected]);
   }
   if (t.id === "btnUploadSel") {
     if (!selected.size) return toast("Select some rides first.");
@@ -3588,9 +3811,11 @@ document.addEventListener("click", (e) => {
   if (act === "gpx-save-full-one") {
     openMenu = null;
     const key = t.dataset.key!;
-    return withGpxRelayConsent(() =>
-      withBeelineAccess(() => run(() => controller.downloadGpx([key], "", "full"))),
-    );
+    return saveFullGpx([key]);
+  }
+  if (act === "gpx-fetch-one") {
+    openMenu = null;
+    return fetchFullGpx([t.dataset.key!]);
   }
   if (act === "upload-one") {
     const ride = STATE.rides.find((r) => r.key === t.dataset.key);

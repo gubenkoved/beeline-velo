@@ -1274,6 +1274,26 @@ span.caret.open::before {
   border-color: #1c4742;
   background: #0c211f;
 }
+/* "Full GPX cached" — deliberately quiet: muted text + a small green "ready
+   offline" dot, so it reads as a subtle availability hint rather than another loud
+   status pill. Distinct from `.gps` (which only means the route preview exists). */
+.badge.cached {
+  color: var(--muted);
+  border-color: var(--line);
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  letter-spacing: 0.3px;
+}
+.badge.cached::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2ec27e;
+  flex: 0 0 auto;
+}
 .badge.working {
   color: var(--blue);
   border-color: #16324a;
@@ -1534,6 +1554,25 @@ span.caret.open::before {
   color: var(--text);
   background: #222732;
   border-color: #333b48;
+}
+/* Icon-only overflow trigger in the header (the rare app-data actions: import /
+   export / clear GPX cache / reset). A square kebab button with NO text label and
+   NO chevron — de-emphasizes maintenance actions so they stop competing with the
+   task buttons. Keeps `.menubtn` only for its open-state highlight; the `.ki` icon
+   bypasses the header rule that hides collapsible `.mi` icons, so it always shows. */
+.split > button.iconmenu {
+  width: 32px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+}
+.split > button.iconmenu::after {
+  content: none;
+}
+.split > button.iconmenu .ki {
+  display: block;
+  width: 18px;
+  height: 18px;
 }
 /* The caret hides its `▾` glyph (kept for the accessible name) and draws a crisp chevron
    from two borders instead — consistent across fonts and pixel-snapped at any size. */
