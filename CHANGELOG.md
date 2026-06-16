@@ -17,7 +17,32 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
-## Transition from a Beeline uploader to the generic GPX Toolkit
+## Fix: per-ride "⋮" menu clipped by the month box
+- **What:** The month container that owns the currently-open per-ride overflow menu now gets a
+  `menu-open` class flipping it to `overflow: visible`, so the downward dropdown is no longer cut
+  off at the month box's bottom edge (most visible on the only/last compact card in a month).
+- **Why:** `.month { overflow: hidden }` (kept for rounded-corner clipping) was clipping the
+  absolutely-positioned `.ovr-items` dropdown. Only one menu is open at a time, so at most one
+  month transiently relaxes its clipping — a minimal, state-gated fix with no JS positioning.
+
+## Historical wind overlay on rides (head/tailwind colouring)
+- **What:** An explicit **Resolve wind** action (per-ride, row action, or over a selection) adds
+  a **Wind** colouring mode to the big ride map: the route is painted green (tailwind) → red
+  (headwind) by the along-track wind component, with downwind arrows, the data's grid-cell
+  footprint, and a summary line (direction, speed, %tailwind, gust, Open-Meteo credit). New
+  `weather.ts` (Open-Meteo client + grid sampling + wind math) and `windcache.ts` (a global
+  `(dataset, cell, day)` cache in its own IndexedDB `wind` store, finest archive per place/era:
+  CERRA 5 km → ECMWF-IFS 9 km → ERA5 25 km, live forecast for recent rides). Resolution runs
+  through the job queue, never automatically; adds a "Clear wind cache" action and a **Wind**
+  filter chip. Renamed the DB `beeline-toolkit` → `gpx-toolkit` (no migration).
+- **Why:** Let the rider see how their speed correlates with the wind along their axis of
+  movement — on the analysis surface, leaving mini-maps untouched. The cache is keyed by
+  place+time (not ride) because wind is universal, so resolving one ride pre-populates cells
+  others reuse for free — keeping us inside Open-Meteo's free tier. Wind is computed from the
+  freshly-fetched data (not a cache read-back), so a cache-write failure degrades to "re-fetched
+  next time" not "no wind"; the IndexedDB layer self-heals a missing store by forcing an upgrade.
+  Footprints keep the coarse spatial resolution honest.
+
 - **What:** Reframed the app from a single-purpose **Beeline → Strava uploader** into a
   generic, multi-source **ride library** ("GPX Toolkit"). Rides now come from any source and
   coexist in one unified, uid-keyed store (`${source}::${datetime}`): a local **GPX import**

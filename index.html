@@ -29,14 +29,12 @@
     <span class="hdr-info">
       <div class="brand"><span class="dot"></span><h1>GPX Toolkit</h1><span class="ver" id="appVer"></span></div>
       <span class="totals" id="totals"></span>
-      <span class="cstate" id="stateSize" title="Size of all rides, settings and status stored locally in this browser. Export to back it up; Reset to clear it."></span>
       <a class="osm-credit" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" title="Map data © OpenStreetMap contributors">© OpenStreetMap contributors</a>
     </span>
     <span class="hdr-actions">
       <span class="conn">
         <span class="cstate off" id="connState">not connected</span>
         <button class="primary small" id="btnScan" title="Pull your whole ride history from the connected Beeline account"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg><span class="scan-label" id="scanLabel">Pull from Beeline</span></button>
-        <button class="small ghost" id="btnDisconnect" style="display:none">Disconnect</button>
         <button class="small accent" id="btnSource" title="Connect or manage data sources (Beeline account, GPX files, demo)"><svg class="mi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3l4 4-4 4M20 7H9M8 21l-4-4 4-4M4 17h11"/></svg><span class="btn-label">Sources</span></button>
       </span>
       <span class="split">
@@ -48,13 +46,13 @@
             <button class="ghost small" id="btnGpxSaveSel" title="Save the route-only GPX (the stored shape — no timestamps or elevation; instant, works offline) for the selected rides">Save route GPX</button>
             <button class="ghost small" id="btnGpxSaveSelFull" title="Download the full recorded GPX (real per-point timestamps + elevation) for the selected rides and save them to disk">Save full GPX</button>
             <button class="ghost small" id="btnGpxFetchSel" title="Fetch the full recorded GPX (real timestamps + elevation) for the selected rides into the local cache, without saving any file — pre-warms offline use and the per-ride map">Fetch full GPX</button>
+            <button class="ghost small" id="btnResolveWindSel" title="Resolve historical wind (from Open-Meteo) for the selected rides into the local cache — colours each ride's big map by head/tailwind">Resolve wind</button>
             <button class="ghost small" id="btnUploadSel" title="Push the selected pending rides to Strava (via Beeline)">Push selected to Strava</button>
           </span>
           <span class="menu-section">App data</span>
           <span class="menu-storage" id="storageInfo" aria-live="polite"></span>
           <button class="ghost small" id="btnImport" title="Merge a previously exported (or Python tool) state file into this browser">Import…</button>
           <button class="ghost small" id="btnExport" title="Download all locally stored rides, settings and status as a JSON backup">Export</button>
-          <button class="ghost small" id="btnFlushGpx" title="Free up space by deleting the locally cached full-GPX downloads (re-fetched from Beeline next time you need them). Your rides, settings and imported GPX files are kept.">Clear download cache</button>
           <button class="ghost small danger" id="btnReset" title="Erase ALL locally stored data — rides, settings, cached downloads and imported GPX files — then return to the source-selection screen.">Reset</button>
         </span>
       </span>
@@ -108,6 +106,8 @@
         <button class="fchip" id="fStatus" data-fchip="status" data-state="all" title="Filter by Strava upload status (click to cycle: any → not uploaded → processing → uploaded)">Strava: any</button>
         <button class="fchip" id="fGps" data-fchip="gps" data-state="any" title="Filter by route-preview presence — the lightweight stored polyline (click to cycle: any → has → missing)">Route: any</button>
         <button class="fchip" id="fCached" data-fchip="cached" data-state="any" title="Filter by full recorded GPX cached locally — real time + elevation (click to cycle: any → cached → not cached)">Full GPX: any</button>
+        <button class="fchip hidden" id="fWind" data-fchip="wind" data-state="any" title="Filter by historical wind resolved (Open-Meteo) — appears once some rides have wind and some don't (click to cycle: any → resolved → not resolved)">Wind: any</button>
+        <label class="custom fwind hidden" id="fWindRange" title="Filter resolved-wind rides by average wind speed in km/h (leave a side blank for no bound)"><input id="fWindMin" type="number" min="0" step="1" inputmode="numeric" placeholder="min" />–<input id="fWindMax" type="number" min="0" step="1" inputmode="numeric" placeholder="max" /> km/h</label>
         <button class="fchip" id="fDestination" data-fchip="destination" data-state="any" title="Filter by destination presence — a place the ride went to or was tagged with (click to cycle: any → has → none)">Destination: any</button>
         <button class="fchip" id="fNamed" data-fchip="named" data-state="any" title="Filter by a real user-given name vs the auto time-of-day name (click to cycle: any → named → unnamed)">Named: any</button>
         <button class="fchip" id="fDeleted" data-fchip="deleted" data-state="any" title="Filter by deletion (click to cycle: any → only deleted → hide deleted)">Deleted: any</button>
@@ -221,6 +221,7 @@
     <span class="ridemap-tools">
       <span class="ridemap-status" id="rideMapStatus" role="status" aria-live="polite"></span>
       <button class="small ghost" id="btnRideMapFull" type="button" title="Download the full recorded track (real per-point timestamps + elevation) and use it for this map">Fetch full track</button>
+      <button class="small ghost" id="btnRideMapWind" type="button" title="Resolve historical wind for this ride (from Open-Meteo) and colour the route by head/tailwind">Resolve wind</button>
       <span class="seg ridemap-color hidden" id="rideMapColor" role="group" aria-label="Colour the route by">
         <button data-color="none" class="active" type="button" title="Plain route line">Route</button>
         <button data-color="height" type="button" title="Colour the route by elevation">Height</button>
@@ -235,6 +236,7 @@
     <button class="small ghost" id="btnRideMapClose" type="button" title="Close (Esc)" aria-label="Close">Close</button>
   </div>
   <div class="ridemap-summary hidden" id="rideMapSummary" aria-live="polite"></div>
+  <div class="ridemap-wind hidden" id="rideMapWind" aria-live="polite"></div>
   <div class="ridemap-canvas" id="rideMapBig"></div>
   <div class="ridemap-profile hidden" id="rideMapProfile" aria-hidden="true"></div>
 </div>

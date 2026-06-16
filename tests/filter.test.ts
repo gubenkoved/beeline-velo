@@ -44,6 +44,8 @@ function ride(over: Partial<RideView> = {}): RideView {
     deleted: false,
     deleted_at: "",
     gpx_cached: false,
+    wind_resolved: false,
+    wind_speed_kmh: null,
     ...over,
   };
 }
@@ -168,6 +170,32 @@ describe("matchesFilters — gps / cached tri-states", () => {
     expect(matchesFilters(f({ cached: "no" }), ride({ track: "abc", gpx_cached: true }))).toBe(
       false,
     );
+  });
+
+  it("wind yes/no keys off the resolved-wind flag", () => {
+    expect(matchesFilters(f({ wind: "yes" }), ride({ wind_resolved: true }))).toBe(true);
+    expect(matchesFilters(f({ wind: "yes" }), ride({ wind_resolved: false }))).toBe(false);
+    expect(matchesFilters(f({ wind: "no" }), ride({ wind_resolved: false }))).toBe(true);
+    expect(matchesFilters(f({ wind: "no" }), ride({ wind_resolved: true }))).toBe(false);
+    // Neutral: passes either way.
+    expect(matchesFilters(f({ wind: "any" }), ride({ wind_resolved: false }))).toBe(true);
+  });
+
+  it("wind speed bounds keep only resolved rides within the km/h range", () => {
+    const windy = ride({ wind_resolved: true, wind_speed_kmh: 25 });
+    const calm = ride({ wind_resolved: true, wind_speed_kmh: 8 });
+    const unresolved = ride({ wind_resolved: false, wind_speed_kmh: null });
+    // Min bound.
+    expect(matchesFilters(f({ windMin: 15 }), windy)).toBe(true);
+    expect(matchesFilters(f({ windMin: 15 }), calm)).toBe(false);
+    // Max bound.
+    expect(matchesFilters(f({ windMax: 15 }), calm)).toBe(true);
+    expect(matchesFilters(f({ windMax: 15 }), windy)).toBe(false);
+    // Both bounds (a band).
+    expect(matchesFilters(f({ windMin: 10, windMax: 30 }), windy)).toBe(true);
+    // Any bound excludes a ride with no resolved wind speed.
+    expect(matchesFilters(f({ windMin: 5 }), unresolved)).toBe(false);
+    expect(matchesFilters(f({ windMax: 50 }), unresolved)).toBe(false);
   });
 
   it("destination yes/no keys off the location (routed-destination) suffix", () => {

@@ -12,9 +12,16 @@
 export type Report = (msg: string) => boolean;
 export type Runner = (task: Task, report: Report) => Promise<void>;
 
-const COALESCE_KINDS = new Set(["upload", "download-gpx"]);
+const COALESCE_KINDS = new Set(["upload", "download-gpx", "fetch-weather"]);
 
-export type TaskKind = "scan" | "import" | "upload" | "download-gpx" | "rename" | "delete";
+export type TaskKind =
+  | "scan"
+  | "import"
+  | "upload"
+  | "download-gpx"
+  | "rename"
+  | "delete"
+  | "fetch-weather";
 export type TaskStatus = "queued" | "running" | "done" | "error" | "cancelled";
 
 export interface TaskSnapshot {

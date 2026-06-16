@@ -33,13 +33,88 @@ import {
 import {
   monthKey,
   monthLabel,
+  type RideRecord,
   type RideSource,
   type Settings,
   type Store,
   type UpsertFields,
 } from "./store";
-import { encodedTrackToGpx, extractFullTrack, type FullTrack, gpxToRoughTrack } from "./track";
+import {
+  decodePolyline,
+  encodedTrackToGpx,
+  extractFullTrack,
+  type FullTrack,
+  gpxToRoughTrack,
+  hasTimes,
+  type LatLon,
+} from "./track";
 import { buildZip } from "./zip";
+import {
+  type CellDayWind,
+  cellDayKey,
+  computeRidePoints,
+  type Dataset,
+  datasetById,
+  type DatasetId,
+  OpenMeteo,
+  pickDatasets,
+  type PointWind,
+  type RideWind,
+  sampleGridCells,
+  summarize,
+  type WeatherDeps,
+} from "./weather";
+import { WindCache } from "./windcache";
+
+/** Largest number of grid cells to probe per ride (caps request cost). */
+const MAX_WIND_CELLS = 24;
+
+/** Real side-effects for the Open-Meteo client (overridden in tests). */
+function defaultWeatherDeps(): WeatherDeps {
+  return {
+    fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
+    now: () => Date.now(),
+    sleep: (ms: number) => new Promise((r) => setTimeout(r, ms)),
+  };
+}
+
+/** ISO-8601 (seconds) timestamp, mirroring the Store's `nowIso`. */
+function nowIsoLocal(): string {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, "+00:00");
+}
+
+/** Unique UTC calendar days ("YYYY-MM-DD") spanned by a set of epoch-ms times, sorted. */
+function uniqueUtcDays(times: number[]): string[] {
+  const days = new Set<string>();
+  for (const t of times) if (Number.isFinite(t)) days.add(new Date(t).toISOString().slice(0, 10));
+  return [...days].sort();
+}
+
+/** Fill null gaps in a per-point time series by linear interpolation between known
+ *  anchors (ends clamped to the nearest known value), so every point gets an instant. */
+function fillTimes(times: (number | null)[]): number[] {
+  const n = times.length;
+  const out = new Array<number>(n);
+  let prevI = -1;
+  let prevV = Number.NaN;
+  for (let i = 0; i < n; i++) {
+    const v = times[i];
+    if (v != null && Number.isFinite(v)) {
+      if (prevI >= 0 && i - prevI > 1) {
+        for (let j = prevI + 1; j < i; j++) {
+          out[j] = prevV + ((v - prevV) * (j - prevI)) / (i - prevI);
+        }
+      } else if (prevI < 0) {
+        for (let j = 0; j < i; j++) out[j] = v; // clamp leading nulls
+      }
+      out[i] = v;
+      prevI = i;
+      prevV = v;
+    }
+  }
+  for (let j = prevI + 1; j < n; j++) out[j] = prevV; // clamp trailing nulls
+  return out;
+}
 
 export interface RideView extends RideMetrics {
   key: string;
@@ -79,6 +154,12 @@ export interface RideView extends RideMetrics {
   deleted_at: string;
   /** True when the full recorded GPX for this ride is cached on disk (see GpxCache). */
   gpx_cached: boolean;
+  /** True when historical wind has been resolved for this ride (summary persisted).
+   *  Drives the Wind filter chip (which only appears once rides differ on this). */
+  wind_resolved: boolean;
+  /** Average wind speed (km/h) for the ride when resolved (null otherwise) — the
+   *  number the Wind speed min/max filter bounds against. */
+  wind_speed_kmh: number | null;
 }
 
 export interface AppState {
@@ -121,6 +202,21 @@ export class Controller {
    */
   private readonly fullTracks = new Map<string, FullTrack>();
 
+  /**
+   * Per-point wind for a ride, computed at render time from the global wind cache
+   * and kept in memory for THIS SESSION ONLY — never persisted (the heavy arrays
+   * would bloat the state blob). The small derived summary IS persisted on the ride
+   * record (`weather_blob`); these are rebuilt from the cache on demand.
+   */
+  private readonly rideWinds = new Map<string, (PointWind | null)[]>();
+  /** The track geometry each ride's winds were computed on (so the map colours the
+   *  exact same points). Parallel to `rideWinds`, session-only. */
+  private readonly rideWindGeom = new Map<string, LatLon[]>();
+  /** Rides whose wind is currently being resolved (cache recompute or a fetch job),
+   *  so a re-render doesn't kick off duplicate work. */
+  private readonly windBusy = new Set<string>();
+  private readonly windClient: OpenMeteo;
+
   constructor(
     private readonly sourceFactory: SourceFactory,
     store: Store,
@@ -137,8 +233,17 @@ export class Controller {
      * goes only when the ride is deleted or on a full reset. Defaults to in-memory.
      */
     private readonly gpxData: GpxCache = GpxCache.memory(),
+    /**
+     * Global, re-fetchable cache of historical wind keyed by (dataset, grid-cell,
+     * day). Shared across every ride — resolving one ride populates cells others
+     * reuse for free. Defaults to an ephemeral in-memory one (demo/tests).
+     */
+    private readonly windCache: WindCache = WindCache.memory(),
+    /** Injectable Open-Meteo side-effects (fetch/now/sleep) for tests. */
+    weatherDeps: WeatherDeps = defaultWeatherDeps(),
   ) {
     this.store = store;
+    this.windClient = new OpenMeteo(weatherDeps);
     this.jobs = new JobQueue(
       (task, report) => this.runTask(task, report),
       () => this.notify(),
@@ -269,6 +374,342 @@ export class Controller {
     this.fullTracks.set(uid, ft);
     this.notify();
     return ft;
+  }
+
+  // -- historical wind ---------------------------------------------------
+
+  /** The persisted wind summary for a ride (provenance + averages), or null. */
+  getRideWind(key: string): RideWind | null {
+    const rec = this.store.rides.get(this.normalizeUid(key));
+    if (!rec?.weather_blob) return null;
+    try {
+      return JSON.parse(rec.weather_blob) as RideWind;
+    } catch {
+      return null;
+    }
+  }
+
+  /** This session's per-point wind for a ride (recomputed from cache), or null when
+   *  not yet resolved. Aligned to the ride's track points; nulls where unresolved. */
+  getRideWindPoints(key: string): (PointWind | null)[] | null {
+    return this.rideWinds.get(this.normalizeUid(key)) ?? null;
+  }
+
+  /** The wind overlay for a ride: the geometry plus the per-point wind computed on
+   *  it (so the map colours the exact same points), or null until resolved. */
+  getRideWindOverlay(key: string): { points: LatLon[]; winds: (PointWind | null)[] } | null {
+    const uid = this.normalizeUid(key);
+    const winds = this.rideWinds.get(uid);
+    const points = this.rideWindGeom.get(uid);
+    if (!winds || !points) return null;
+    return { points, winds };
+  }
+
+  /**
+   * Draw a ride's wind from the cache if it was ALREADY resolved — never any
+   * network. Safe to call on every ride-detail render: it only recomputes the
+   * per-point overlay for rides that already carry a persisted summary. Actually
+   * *resolving* (fetching) wind is an explicit user action — see `resolveWind`.
+   */
+  showCachedWind(key: string): void {
+    const uid = this.normalizeUid(key);
+    if (this.rideWinds.has(uid) || this.windBusy.has(uid)) return;
+    const rec = this.store.rides.get(uid);
+    if (!rec?.weather_blob) return; // never resolved → wait for the explicit action
+    void this.recomputeCachedWind(uid, rec);
+  }
+
+  /** True when an explicit wind resolution is queued/running for this ride. */
+  isResolvingWind(key: string): boolean {
+    return this.windBusy.has(this.normalizeUid(key));
+  }
+
+  /** True when a ride has had its wind resolved (cached summary persisted). */
+  hasResolvedWind(key: string): boolean {
+    return !!this.store.rides.get(this.normalizeUid(key))?.weather_fetched_at;
+  }
+
+  /**
+   * Explicitly resolve historical wind for one or more rides (the networked action,
+   * triggered by a user — per-ride or over a selection). Cache-first per cell, so
+   * already-resolved or overlapping rides cost little or nothing; all keys ride one
+   * coalesced `fetch-weather` job. Rides without a track are skipped. Returns the
+   * number actually queued. Pass `force` to re-resolve already-cached rides.
+   */
+  resolveWind(keys: string[], force = false): number {
+    const uids = keys
+      .map((k) => this.normalizeUid(k))
+      .filter((uid) => {
+        const rec = this.store.rides.get(uid);
+        if (!rec?.track) return false;
+        if (this.windBusy.has(uid)) return false;
+        if (!force && rec.weather_fetched_at) return false; // already resolved
+        return true;
+      });
+    if (uids.length === 0) return 0;
+    for (const uid of uids) this.windBusy.add(uid);
+    const first = rideShortLabel(uidDateKey(uids[0])) || uids[0];
+    this.jobs.submit("fetch-weather", {
+      label:
+        uids.length === 1
+          ? `Resolving wind for ${first}`
+          : `Resolving wind for ${uids.length} rides`,
+      keys: uids,
+      payload: { force },
+    });
+    return uids.length;
+  }
+
+  /** Total compressed size of the global wind cache, for the settings size hint. */
+  windCacheBytes(): number {
+    return this.windCache.totalBytes();
+  }
+
+  /** Number of cached (cell, day) wind entries. */
+  windCacheCount(): number {
+    return this.windCache.count;
+  }
+
+  /** Flush the global wind cache (re-fetchable). Clears this session's per-point
+   *  wind too so maps re-resolve; persisted summaries stay until a ride re-resolves. */
+  async flushWindCache(): Promise<void> {
+    await this.windCache.flush();
+    this.rideWinds.clear();
+    this.rideWindGeom.clear();
+    this.notify();
+  }
+
+  /** Recompute a ride's per-point wind from the cache for display — no network. If
+   *  the cache was flushed since it was resolved, the overlay simply stays absent
+   *  (the summary badge still shows); the user can re-resolve to redraw it. */
+  private async recomputeCachedWind(uid: string, rec: RideRecord): Promise<void> {
+    try {
+      const summary = JSON.parse(rec.weather_blob!) as RideWind;
+      if (summary.noData) {
+        this.rideWinds.set(uid, []);
+        this.rideWindGeom.set(uid, []);
+        this.notify();
+        return;
+      }
+      if (await this.tryComputeFromCache(uid, rec, datasetById(summary.dataset))) {
+        this.notify();
+      }
+    } catch {
+      /* corrupt summary — leave it; an explicit re-resolve will fix it */
+    }
+  }
+
+  /** Job runner: resolve wind for each ride, releasing the busy flag as it goes.
+   *  Cancellation-aware: `report()` returns true once Stop is pressed, so we finish
+   *  the ride in flight, then stop — every ride resolved so far is already persisted
+   *  (resolveRideWind saves per ride), so progress is preserved and nothing is lost.
+   *  The remaining rides' busy flags are released so they can be resolved again later. */
+  private async doFetchWeather(task: Task, report: Report): Promise<void> {
+    const uids = task.keys;
+    const force = task.payload.force === true;
+    task.progress = { done: 0, total: uids.length };
+    let i = 0;
+    for (; i < uids.length; i++) {
+      const uid = uids[i];
+      const rec = this.store.rides.get(uid);
+      const label = rec ? rideShortLabel(rec.key) || rec.key : uid;
+      // Cancellation is checked BETWEEN rides (one ride ≈ one quick request). `report`
+      // returns true once Stop is pressed; bail before starting this ride's network
+      // work. Everything resolved so far is already persisted (resolveRideWind saves
+      // per ride), so progress is preserved and nothing is lost.
+      if (report(`Resolving wind for ${label}…`)) break;
+      try {
+        await this.resolveRideWind(uid, report, force);
+      } catch (err) {
+        report(`Wind lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      } finally {
+        this.windBusy.delete(uid);
+        if (task.progress) task.progress.done++;
+      }
+    }
+    // Stopped early — free the busy flag on this ride and every one we never got to,
+    // so the user can resolve them later (and a re-render doesn't think they're still
+    // in flight).
+    for (; i < uids.length; i++) this.windBusy.delete(uids[i]);
+  }
+
+  /**
+   * Resolve one ride's wind: sample the track into grid cells, fetch only the cells
+   * the global cache is missing (one multi-coordinate request per dataset), then
+   * compute per-point head/tailwind and persist the small summary. Tries the
+   * finest dataset for the ride's place/era first and falls back down the chain.
+   */
+  private async resolveRideWind(uid: string, report: Report, force = false): Promise<void> {
+    const rec = this.store.rides.get(uid);
+    if (!rec) return;
+    report(`Reading track for ${rideShortLabel(rec.key) || rec.key}…`);
+    const pt = await this.ridePointsAndTimes(uid, rec);
+    if (!pt || pt.points.length < 2) {
+      this.markRideWindEmpty(uid, "era5");
+      return;
+    }
+    const { points, times } = pt;
+    const startMs = times.find((t) => Number.isFinite(t)) ?? Date.now();
+    const candidates = pickDatasets(points[0][0], points[0][1], startMs, Date.now());
+    const days = uniqueUtcDays(times);
+
+    // Cell-days fetched this run, kept in memory so the result is computed from them
+    // directly — independent of whether the persistent cache write succeeds.
+    const freshEntries = new Map<string, CellDayWind>();
+
+    for (const dataset of candidates) {
+      const cells = sampleGridCells(points, dataset, MAX_WIND_CELLS);
+      report(`Sampling ${cells.length} wind cell${cells.length === 1 ? "" : "s"} along the route…`);
+      // A forced refresh re-fetches every cell; otherwise only the cache gaps.
+      const missingCells = force
+        ? cells
+        : cells.filter((c) =>
+            days.some((d) => !this.windCache.has(cellDayKey(dataset.id, c.latIdx, c.lonIdx, d))),
+          );
+      if (missingCells.length > 0) {
+        report(
+          `Fetching wind from Open-Meteo · ${dataset.label} · ` +
+            `${missingCells.length} of ${cells.length} cell${cells.length === 1 ? "" : "s"} ` +
+            `(${days.length} day${days.length === 1 ? "" : "s"})…`,
+        );
+        const entries = await this.windClient.fetchWindMulti(dataset, missingCells, days, report);
+        // Compute from the data we JUST fetched (merged with any cache hits) so the
+        // result NEVER depends on the cache write succeeding — caching is only an
+        // optimization for next time. A failed write degrades to "re-fetch later",
+        // not "no wind at all". Persisting is best-effort and fire-and-forget.
+        for (const e of entries) freshEntries.set(cellDayKey(e.dataset, e.latIdx, e.lonIdx, e.dayISO), e);
+        void this.windCache.putMany(entries);
+      } else {
+        report(`Wind already cached (${dataset.label}) — drawing…`);
+      }
+      const { lookup, centers } = await this.buildLookup(dataset, cells, days, freshEntries);
+      const pw = computeRidePoints(points, times, lookup, dataset);
+      if (pw.some((p) => p != null)) {
+        this.rideWinds.set(uid, pw);
+        this.rideWindGeom.set(uid, points);
+        const summary = summarize(pw, { dataset, cells: centers, fetchedAt: nowIsoLocal() });
+        this.store.upsert(uid, {
+          weather_blob: JSON.stringify(summary),
+          weather_fetched_at: summary.fetchedAt,
+          weather_speed_kmh: summary.avgSpeedKmh,
+        });
+        this.store.save();
+        return;
+      }
+      report(`${dataset.label} returned no wind here — trying a coarser model…`);
+    }
+    // Every candidate came back empty (recency lag, ocean, data gap).
+    this.markRideWindEmpty(uid, candidates[0]?.id ?? "era5");
+  }
+
+  /** Cache-only recompute (no network). Returns false when the cache lacks a needed
+   *  cell-day (e.g. it was flushed), so the caller falls back to a fetch job. */
+  private async tryComputeFromCache(uid: string, rec: RideRecord, dataset: Dataset): Promise<boolean> {
+    const pt = await this.ridePointsAndTimes(uid, rec);
+    if (!pt || pt.points.length < 2) {
+      this.rideWinds.set(uid, []);
+      this.rideWindGeom.set(uid, []);
+      return true;
+    }
+    const cells = sampleGridCells(pt.points, dataset, MAX_WIND_CELLS);
+    const days = uniqueUtcDays(pt.times);
+    const needed = cells.flatMap((c) => days.map((d) => cellDayKey(dataset.id, c.latIdx, c.lonIdx, d)));
+    if (this.windCache.missingKeys(needed).length > 0) return false;
+    const { lookup } = await this.buildLookup(dataset, cells, days);
+    this.rideWinds.set(uid, computeRidePoints(pt.points, pt.times, lookup, dataset));
+    this.rideWindGeom.set(uid, pt.points);
+    return true;
+  }
+
+  /** Build a cell-day lookup for a ride, preferring in-memory `fresh` entries (just
+   *  fetched this run) and falling back to the persistent cache. Decoupling the
+   *  result from the cache write is what keeps wind working when caching fails. */
+  private async buildLookup(
+    dataset: Dataset,
+    cells: { latIdx: number; lonIdx: number }[],
+    days: string[],
+    fresh?: Map<string, CellDayWind>,
+  ): Promise<{ lookup: (latIdx: number, lonIdx: number, day: string) => CellDayWind | null; centers: { lat: number; lon: number }[] }> {
+    const map = new Map<string, CellDayWind>();
+    const centers: { lat: number; lon: number }[] = [];
+    for (const c of cells) {
+      for (const day of days) {
+        const key = cellDayKey(dataset.id, c.latIdx, c.lonIdx, day);
+        const entry = fresh?.get(key) ?? (await this.windCache.get(key));
+        if (entry) {
+          map.set(key, entry);
+          if (!entry.noData) centers.push({ lat: entry.cellLat, lon: entry.cellLon });
+        }
+      }
+    }
+    const lookup = (latIdx: number, lonIdx: number, day: string): CellDayWind | null =>
+      map.get(cellDayKey(dataset.id, latIdx, lonIdx, day)) ?? null;
+    return { lookup, centers };
+  }
+
+  /** Record that a ride has no resolvable wind (negative cache) so it isn't retried. */
+  private markRideWindEmpty(uid: string, dataset: DatasetId): void {
+    this.rideWinds.set(uid, []);
+    this.rideWindGeom.set(uid, []);
+    const ds = datasetById(dataset);
+    const summary: RideWind = {
+      fetchedAt: nowIsoLocal(),
+      dataset,
+      datasetLabel: ds.label,
+      gridKm: ds.gridKm,
+      cellCount: 0,
+      usedForecast: ds.forecast,
+      cells: [],
+      avgAlongKmh: 0,
+      pctTailwind: 0,
+      prevailingFromDeg: 0,
+      avgSpeedKmh: 0,
+      avgGustKmh: 0,
+      noData: true,
+    };
+    this.store.upsert(uid, {
+      weather_blob: JSON.stringify(summary),
+      weather_fetched_at: summary.fetchedAt,
+      weather_speed_kmh: 0,
+    });
+    this.store.save();
+  }
+
+  /**
+   * The ride's track points and per-point epoch-ms times for wind sampling. Prefers
+   * the FULL recorded track (real per-point times) when it's already in memory or
+   * the GPX cache; otherwise falls back to the rough polyline with times synthesized
+   * from the ride's start + elapsed duration (so it works without a GPX download).
+   */
+  private async ridePointsAndTimes(
+    uid: string,
+    rec: RideRecord,
+  ): Promise<{ points: LatLon[]; times: number[] } | null> {
+    let ft = this.getFullTrack(uid);
+    if (!ft) ft = await this.loadCachedFullTrack(uid);
+    if (ft && ft.points.length >= 2 && hasTimes(ft)) {
+      return { points: ft.points, times: fillTimes(ft.times) };
+    }
+    if (!rec.track) return null;
+    let points: LatLon[];
+    try {
+      points = decodePolyline(rec.track);
+    } catch {
+      return null;
+    }
+    if (points.length < 2) return null;
+    const start = rideDatetime(rec.key);
+    const startMs = start ? start.getTime() : Date.now();
+    const elapsedSec =
+      rec.elapsed_sec ??
+      rec.moving_sec ??
+      (rec.distance_km && rec.avg_speed_kmh ? (rec.distance_km / rec.avg_speed_kmh) * 3600 : 3600);
+    const times = new Array<number>(points.length);
+    for (let i = 0; i < points.length; i++) {
+      times[i] = startMs + (elapsedSec * 1000 * i) / (points.length - 1);
+    }
+    return { points, times };
   }
 
   // -- connection / source registry --------------------------------------
@@ -407,6 +848,12 @@ export class Controller {
         deleted_at: r.deleted_at,
         // Full GPX present locally — in the cache (Beeline) OR the data vault (import).
         gpx_cached: this.blobFor(uid).has(uid),
+        // Historical wind resolved (summary persisted) — gates the Wind filter chip.
+        wind_resolved: !!r.weather_fetched_at,
+        wind_speed_kmh:
+          typeof r.weather_speed_kmh === "number" && r.weather_speed_kmh > 0
+            ? r.weather_speed_kmh
+            : null,
       };
     });
     return {
@@ -428,6 +875,7 @@ export class Controller {
     else if (task.kind === "download-gpx") await this.doDownloadGpx(task, report);
     else if (task.kind === "rename") await this.doRename(task, report);
     else if (task.kind === "delete") await this.doDelete(task, report);
+    else if (task.kind === "fetch-weather") await this.doFetchWeather(task, report);
   }
 
   private async doScan(task: Task, report: Report): Promise<void> {
@@ -1049,6 +1497,9 @@ export class Controller {
     this.store.clear();
     void this.gpxCache.clear();
     void this.gpxData.clear();
+    void this.windCache.flush();
+    this.rideWinds.clear();
+    this.rideWindGeom.clear();
     this.notify();
   }
 

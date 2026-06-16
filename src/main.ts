@@ -45,7 +45,7 @@ import { DEMO_BEELINE_EMAIL, demoBeelineDeps } from "./beeline-demo";
 import { BeelineRideSource, type BeelineSourceDeps } from "./beeline-source";
 import { GpxRideSource } from "./gpx-source";
 import { GpxCache } from "./gpxcache";
-import { idbBackend, idbBlobBackend, memoryBackend } from "./kv";
+import { idbBackend, idbBlobBackend, idbWindBlobBackend, memoryBackend } from "./kv";
 import { createLocate, type Locate } from "./locate";
 import type { SourceFactory } from "./source";
 import { type RideSource, STORAGE_KEY, Store } from "./store";
@@ -59,6 +59,9 @@ import {
   hasTimes,
   movingAverage,
 } from "./track";
+import type { PointWind } from "./weather";
+import { cellBounds } from "./weather";
+import { WindCache } from "./windcache";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string): T =>
   document.querySelector(sel) as T;
@@ -71,6 +74,7 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string): T =>
 const storageBackend = idbBackend();
 /** Durable binary backend for the compressed full-GPX cache (own `gpx` object store). */
 const gpxBlobBackend = idbBlobBackend();
+const windBlobBackend = idbWindBlobBackend();
 /** Surface a background-write failure (e.g. quota exceeded) to the user. */
 const onStorageError = (message: string): void => pushError("Storage error", message);
 
@@ -347,6 +351,31 @@ function fetchFullGpx(keys: string[]): void {
   );
 }
 
+/**
+ * Explicitly resolve historical wind for the given rides (the deliberate user
+ * action — per-ride or over a selection). Cache-first per cell, so already-resolved
+ * or overlapping rides cost little or nothing; one coalesced background job covers
+ * all of them. No Beeline account or gateway needed — Open-Meteo is keyless and
+ * CORS-friendly. `force` re-resolves rides that already have wind.
+ */
+function resolveWindFor(keys: string[], force = false): void {
+  if (!keys.length) return;
+  const n = controller.resolveWind(keys, force);
+  if (n === 0) {
+    toast(
+      force
+        ? "Nothing to resolve."
+        : keys.length === 1
+          ? "Wind is already resolved for this ride."
+          : "Wind is already resolved for all selected rides.",
+    );
+    return;
+  }
+  toast(
+    n === 1 ? "Resolving wind for 1 ride…" : `Resolving wind for ${n} rides…`,
+  );
+}
+
 /** Build a ride source from a device getter (closure captures serial, etc.). */
 function beelineSourceFactory(
   email: string,
@@ -475,6 +504,7 @@ async function getRealController(): Promise<Controller> {
   // imported-GPX data vault (primary state). A cache flush can only touch the former.
   const gpxCache = await GpxCache.load(gpxBlobBackend, GPX_CACHE_PREFIX, onStorageError);
   const gpxData = await GpxCache.load(gpxBlobBackend, GPX_DATA_PREFIX, onStorageError);
+  const windCache = await WindCache.load(windBlobBackend, onStorageError);
   const c = new Controller(
     async () => {
       throw new Error("Not signed in — sign in to Beeline to sync.");
@@ -482,6 +512,7 @@ async function getRealController(): Promise<Controller> {
     store,
     gpxCache,
     gpxData,
+    windCache,
   );
   c.registerSource(new GpxRideSource(gpxData, () => store.settings.trackPointsPerKm));
   realController = c;
@@ -586,6 +617,7 @@ function loadFilters(): Filters {
     if (STATUS_VALUES.includes(o.status as Filters["status"])) f.status = o.status!;
     if (TRI_VALUES.includes(o.gps as TriState)) f.gps = o.gps!;
     if (TRI_VALUES.includes(o.cached as TriState)) f.cached = o.cached!;
+    if (TRI_VALUES.includes(o.wind as TriState)) f.wind = o.wind!;
     if (TRI_VALUES.includes(o.destination as TriState)) f.destination = o.destination!;
     if (TRI_VALUES.includes(o.named as TriState)) f.named = o.named!;
     if (DELETED_VALUES.includes(o.deleted as Filters["deleted"])) f.deleted = o.deleted!;
@@ -593,6 +625,8 @@ function loadFilters(): Filters {
     if (typeof o.device === "string") f.device = o.device;
     f.distMin = sanitizeBound(o.distMin);
     f.distMax = sanitizeBound(o.distMax);
+    f.windMin = sanitizeBound(o.windMin);
+    f.windMax = sanitizeBound(o.windMax);
   } catch {
     /* malformed JSON / storage disabled — fall back to neutral */
   }
@@ -638,6 +672,9 @@ interface PushedError {
 const pushedErrors: PushedError[] = [];
 let errSeq = 0;
 let lastSig = "";
+/** Tracks the per-ride wind-resolved state applied to the DOM, so a weather-only
+ *  change can be detected and patched in place (see applyState/applyWeatherUpdate). */
+let lastWeatherSig = "";
 
 const yearOf = (mkey: string): string => (mkey || "").slice(0, 4);
 function setChecked(el: HTMLInputElement | null, on: boolean | null): void {
@@ -733,6 +770,12 @@ function detailsBlock(r: RideView): string {
   );
 }
 
+/** 8-point compass label for a FROM-direction (degrees). */
+function compass8(deg: number): string {
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+}
+
 /** (Re)create Leaflet maps for every visible track container after a render. */
 function mountMaps(): void {
   // Tear down any maps whose container no longer exists (collapsed/replaced DOM).
@@ -785,6 +828,75 @@ function mountMaps(): void {
   });
 }
 
+/** Colour each track segment by its along-track wind: green tailwind → red headwind. */
+function drawWindColoredTrack(
+  group: L.LayerGroup,
+  points: [number, number][],
+  winds: (PointWind | null)[],
+): void {
+  for (let i = 0; i < points.length - 1; i++) {
+    const w = winds[i];
+    if (!w) continue;
+    L.polyline([points[i], points[i + 1]], {
+      color: windColor(w.alongKmh),
+      weight: 4,
+      opacity: 0.95,
+      interactive: false,
+    }).addTo(group);
+  }
+}
+
+/** Place a handful of downwind arrows along the route (decimated to avoid clutter). */
+function drawWindArrows(
+  group: L.LayerGroup,
+  points: [number, number][],
+  winds: (PointWind | null)[],
+  count = 9,
+): void {
+  const step = Math.max(1, Math.floor(points.length / count));
+  for (let i = 0; i < points.length; i += step) {
+    const w = winds[i];
+    if (!w) continue;
+    // Arrow points the way the wind blows (downwind = from-direction + 180°).
+    const toDeg = (w.fromDeg + 180) % 360;
+    L.marker(points[i], {
+      icon: windArrowIcon(toDeg),
+      interactive: false,
+      keyboard: false,
+    }).addTo(group);
+  }
+}
+
+/** A wind-direction marker, rotated to a compass bearing, as a Leaflet divIcon.
+ *  ITERATION: finalist #4 — double chevron (» airflow), larger with a dark casing.
+ *  Drawn twice: a thick dark underlay (the outline) + the white chevrons on top. */
+function windArrowIcon(bearingDeg: number): L.DivIcon {
+  const rot = `transform:rotate(${bearingDeg.toFixed(0)}deg)`;
+  const chevrons = `<path d="M7 12.5 L12 7 L17 12.5"/><path d="M7 17 L12 11.5 L17 17"/>`;
+  const html =
+    `<span class="wind-arrow wa-pick" style="${rot}">` +
+    `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">` +
+    `<g class="wa-casing" fill="none" stroke-linecap="round" stroke-linejoin="round">${chevrons}</g>` +
+    `<g class="wa-stroke" fill="none" stroke-linecap="round" stroke-linejoin="round">${chevrons}</g>` +
+    `</svg></span>`;
+  return L.divIcon({ html, className: "wind-arrow-icon", iconSize: [38, 38], iconAnchor: [19, 19] });
+}
+
+/** Diverging colour for an along-track component: +tailwind green, −headwind red. */
+function windColor(alongKmh: number): string {
+  const t = Math.max(-1, Math.min(1, alongKmh / 15)); // saturate at ±15 km/h
+  if (t >= 0) return hexLerp("#cdbf3e", "#37c06a", t); // neutral → green
+  return hexLerp("#cdbf3e", "#e23b3b", -t); // neutral → red
+}
+
+/** Linear interpolate two #rrggbb colours. */
+function hexLerp(a: string, b: string, t: number): string {
+  const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+  const c = pa.map((v, i) => Math.round(v + (pb[i] - v) * t));
+  return `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
 // --------------------------------------------------------------------------- //
 // Full-screen single-ride route map (opened from a ride's mini-map). Shows the
 // one track big and interactive; hovering the track reports how far into the ride
@@ -801,8 +913,8 @@ let rideMapLineLayer: L.LayerGroup | null = null;
 let rideMapMarker: L.CircleMarker | null = null;
 /** The ride key currently open in the full-screen map (null when closed). */
 let rideMapKey: string | null = null;
-/** How the route line is coloured: plain, by elevation, or by speed. */
-let rideMapColorMode: "none" | "height" | "speed" = "none";
+/** How the route line is coloured: plain, by elevation, by speed, or by head/tailwind. */
+let rideMapColorMode: "none" | "height" | "speed" | "wind" = "none";
 /** Whether the elevation profile panel is shown (when a full track is loaded). */
 let rideMapProfileShown = true;
 /** Which metric the profile graphs: elevation vs distance, or speed vs distance.
@@ -884,6 +996,16 @@ function drawRideLine(): void {
   // White casing underneath for legibility over the basemap.
   L.polyline(pts, { color: "#ffffff", weight: 7, opacity: 0.9 }).addTo(layer);
 
+  // Wind mode draws an entirely separate overlay (head/tailwind colouring + downwind
+  // arrows + the grid-cell footprints the data covers), computed on the wind sample
+  // geometry — see drawRideWindOverlay. Falls back to the plain route until resolved.
+  if (rideMapColorMode === "wind") {
+    const drawn = drawRideWindOverlay(layer);
+    if (!drawn) L.polyline(pts, { color: "#fc5200", weight: 4 }).addTo(layer);
+    drawEndpointMarkers(layer, pts);
+    return;
+  }
+
   const full = rideHover.full;
   const values =
     rideMapColorMode === "height"
@@ -939,6 +1061,35 @@ function drawEndpointMarkers(layer: L.LayerGroup, pts: [number, number][]): void
   })
     .bindTooltip("Finish", { direction: "top" })
     .addTo(layer);
+}
+
+/**
+ * Draw the head/tailwind wind overlay on the big ride map: the grid-cell footprint
+ * squares the data came from, the route recoloured green (tailwind) → red (headwind)
+ * by along-track component, and downwind arrows. Uses the controller's resolved
+ * overlay geometry (the wind sample points), so it's self-consistent. Returns false
+ * when wind isn't resolved yet (caller draws the plain route instead).
+ */
+function drawRideWindOverlay(layer: L.LayerGroup): boolean {
+  if (!rideMapKey) return false;
+  const overlay = controller.getRideWindOverlay(rideMapKey);
+  if (!overlay || overlay.points.length < 2 || !overlay.winds.some((w) => w)) return false;
+  const summary = controller.getRideWind(rideMapKey);
+  if (summary && !summary.noData) {
+    for (const c of summary.cells) {
+      L.rectangle(cellBounds(c.lat, c.lon, summary.gridKm), {
+        className: "wind-cell",
+        color: "#7fd4ff",
+        weight: 1,
+        opacity: 0.4,
+        fillOpacity: 0.05,
+        interactive: false,
+      }).addTo(layer);
+    }
+  }
+  drawWindColoredTrack(layer, overlay.points, overlay.winds);
+  drawWindArrows(layer, overlay.points, overlay.winds, 12);
+  return true;
 }
 
 /** Which profile metrics have real data for the open track (drives the toggle). */
@@ -1135,8 +1286,10 @@ function updateRideHoverAt(cur: L.Point, maxDistPx: number): void {
 
 /** Clear the hover marker, readout and profile cursor (pointer left the track). */
 function clearRideTrackPoint(): void {
-  const out = document.getElementById("rideMapHover");
-  if (out) out.textContent = "";
+  // Clear the text but KEEP the persistent dial element (just hide it), so its CSS
+  // transitions survive between hovers instead of resetting on a recreated node.
+  if (hoverTextEl) hoverTextEl.textContent = "";
+  windDialEl?.classList.add("hidden");
   rideMapMarker?.remove();
   rideMapMarker = null;
   moveProfileCursor(null);
@@ -1192,8 +1345,100 @@ function showRideTrackPoint(latLng: [number, number], idx: number, km: number): 
       parts.push(`~${p2(clock.getHours())}:${p2(clock.getMinutes())}`);
     }
   }
-  if (out) out.textContent = parts.join(" · ");
+  if (out) {
+    // Keep the text and the wind dial as PERSISTENT child elements (never recreated)
+    // so the dial's rotation + colour animate smoothly via CSS as you scrub the route,
+    // instead of snapping on each rebuilt node.
+    const els = ensureHoverEls(out);
+    els.text.textContent = parts.join(" · ");
+    const w = windProjectionAt(latLng);
+    if (w) {
+      updateWindDial(els.dial, w);
+      els.dial.classList.remove("hidden");
+    } else {
+      els.dial.classList.add("hidden");
+    }
+  }
   moveProfileCursor(km);
+}
+
+/** Persistent children of the hover readout: the text run + the wind dial. Rebuilt
+ *  only when the readout container is replaced (e.g. the map reopened). */
+let hoverTextEl: HTMLElement | null = null;
+let windDialEl: HTMLElement | null = null;
+
+function ensureHoverEls(out: HTMLElement): { text: HTMLElement; dial: HTMLElement } {
+  if (!hoverTextEl || hoverTextEl.parentElement !== out || !windDialEl) {
+    out.textContent = "";
+    hoverTextEl = document.createElement("span");
+    hoverTextEl.className = "rmh-text";
+    windDialEl = buildWindDial();
+    out.append(hoverTextEl, windDialEl);
+  }
+  return { text: hoverTextEl, dial: windDialEl };
+}
+
+/**
+ * Build the wind dial: a tiny compass where "up" is YOUR direction of travel (a fixed
+ * muted marker), and a coloured arrow rotates to show where the wind pushes RELATIVE
+ * to your movement — straight up = pure tailwind, straight down = pure headwind,
+ * sideways = crosswind. Drawn once; `updateWindDial` spins + tints it on each hover.
+ */
+function buildWindDial(): HTMLElement {
+  const dial = document.createElement("span");
+  dial.className = "rmh-dial hidden";
+  dial.innerHTML =
+    `<svg viewBox="0 0 24 24" aria-hidden="true">` +
+    `<circle class="rd-ring" cx="12" cy="12" r="10"/>` +
+    // Fixed "forward" tick at the top = your direction of travel.
+    `<path class="rd-fwd" d="M12 1.5 L13.6 4.2 L10.4 4.2 Z"/>` +
+    // The rotating wind arrow (points up = tailwind by default).
+    `<g class="rd-arrow"><path d="M12 17.5 L12 7 M9 10 L12 6.5 L15 10"/></g>` +
+    `</svg>` +
+    `<b class="rd-val">0</b><i>km/h</i>`;
+  return dial;
+}
+
+/** Spin + tint the wind dial to the relative wind at a hovered point. */
+function updateWindDial(dial: HTMLElement, w: PointWind): void {
+  // Direction the wind blows TOWARD, expressed in the rider's frame (0 = forward).
+  const relFlow = (((w.fromDeg + 180 - w.headingDeg) % 360) + 360) % 360;
+  const along = Math.abs(w.alongKmh);
+  const cross = along < 1.5;
+  const value = cross ? Math.round(w.speedKmh) : Math.round(along);
+  dial.style.setProperty("--wind", windColor(w.alongKmh));
+  const arrow = dial.querySelector<SVGElement>(".rd-arrow");
+  if (arrow) arrow.style.transform = `rotate(${relFlow.toFixed(0)}deg)`;
+  const val = dial.querySelector(".rd-val");
+  if (val) val.textContent = String(value);
+  dial.title =
+    `${cross ? "Crosswind" : w.alongKmh > 0 ? "Tailwind" : "Headwind"} ` +
+    `${value} km/h (along your heading) · wind ${Math.round(w.speedKmh)} km/h from ` +
+    `${compass8(w.fromDeg)} · gust ${Math.round(w.gustKmh)} km/h. Up = your direction of travel.`;
+}
+
+/** The nearest resolved wind sample to a lat/lng on the open ride, or null when wind
+ *  isn't resolved. A linear nearest-point scan (point count is bounded) so it's cheap
+ *  on every hover and robust even if the wind geometry differs from the hover track. */
+function windProjectionAt(latLng: [number, number]): PointWind | null {
+  if (!rideMapKey) return null;
+  const overlay = controller.getRideWindOverlay(rideMapKey);
+  if (!overlay) return null;
+  const { points, winds } = overlay;
+  let best = Number.POSITIVE_INFINITY;
+  let bestW: PointWind | null = null;
+  for (let i = 0; i < points.length; i++) {
+    const w = winds[i];
+    if (!w) continue;
+    const dlat = points[i][0] - latLng[0];
+    const dlon = points[i][1] - latLng[1];
+    const d = dlat * dlat + dlon * dlon;
+    if (d < best) {
+      best = d;
+      bestW = w;
+    }
+  }
+  return bestW;
 }
 
 /**
@@ -1249,6 +1494,27 @@ function syncRideMapControls(): void {
   const metricSeg = document.getElementById("rideMapProfileMetric");
   const est = document.getElementById("rideMapEst");
   const hasTime = (ride?.elapsed_sec || ride?.moving_sec || 0) > 0;
+
+  // The Wind action is available for any ride with a route (it works off the rough
+  // polyline + synthesized times when no full GPX is loaded). Its label tracks the
+  // explicit lifecycle: Resolve → Resolving… → toggle on/off.
+  const windBtn = document.getElementById("btnRideMapWind") as HTMLButtonElement | null;
+  if (windBtn && rideMapKey) {
+    const resolving = controller.isResolvingWind(rideMapKey);
+    const resolved = controller.hasResolvedWind(rideMapKey);
+    const on = rideMapColorMode === "wind";
+    windBtn.classList.toggle("hidden", !ride?.track);
+    windBtn.disabled = resolving;
+    windBtn.classList.toggle("active", on);
+    windBtn.setAttribute("aria-pressed", String(on));
+    windBtn.textContent = resolving
+      ? "Resolving wind…"
+      : !resolved
+        ? "Resolve wind"
+        : on
+          ? "Wind: on"
+          : "Show wind";
+  }
 
   if (full) {
     fetchBtn?.classList.add("hidden");
@@ -1325,6 +1591,7 @@ function buildRideMapState(): void {
   drawRideLine();
   renderRideProfile();
   renderRideSummary();
+  renderRideMapWind();
   syncRideMapControls();
   setTimeout(() => {
     rideMapBig?.invalidateSize();
@@ -1345,6 +1612,9 @@ function openRideMap(key: string): void {
   rideMapColorMode = "none";
   rideMapProfileMetric = "elevation";
   setRideMapStatus("");
+  // If this ride's wind was resolved earlier, recompute its overlay from the cache
+  // (no network) so the "Show wind" toggle paints instantly; never auto-fetches.
+  controller.showCachedWind(key);
 
   // Title: the ride's name + location, then its short date.
   const name = (ride?.title || "Ride") + (ride?.location || "");
@@ -1462,6 +1732,78 @@ function setRideMapColor(mode: "none" | "height" | "speed"): void {
   syncRideMapControls();
 }
 
+/**
+ * The explicit Wind action on the big map. Wind is NEVER fetched automatically —
+ * this is the deliberate trigger. When the open ride has no resolved wind yet, it
+ * kicks off the (networked) resolution job and switches the route colouring to wind
+ * so the overlay paints as soon as it lands; when already resolved, it toggles the
+ * wind colouring on/off (no network).
+ */
+function toggleRideMapWind(): void {
+  const key = rideMapKey;
+  if (!key) return;
+  if (rideMapColorMode === "wind") {
+    // Toggle the wind colouring back off (leaves the data cached).
+    setRideMapColor("none");
+    renderRideMapWind();
+    return;
+  }
+  rideMapColorMode = "wind";
+  if (!controller.hasResolvedWind(key) && !controller.isResolvingWind(key)) {
+    const n = controller.resolveWind([key]);
+    if (n === 0) toast("This ride has no track to resolve wind for.");
+  } else {
+    controller.showCachedWind(key); // recompute the overlay from cache if needed
+  }
+  drawRideLine();
+  syncRideMapControls();
+  renderRideMapWind();
+}
+
+/**
+ * Wind summary line under the big-map bar: prevailing direction, average wind, the
+ * tailwind share, and the data provenance (model + cells + Open-Meteo credit). Shows
+ * a quiet "resolving" hint while the explicit lookup runs, and an honest note when
+ * no historical wind is available. Visible only while wind colouring is active.
+ */
+function renderRideMapWind(): void {
+  const host = document.getElementById("rideMapWind");
+  if (!host) return;
+  const key = rideMapKey;
+  if (!key || rideMapColorMode !== "wind") {
+    host.classList.add("hidden");
+    host.innerHTML = "";
+    return;
+  }
+  host.classList.remove("hidden");
+  const w = controller.getRideWind(key);
+  if (!w) {
+    host.innerHTML = controller.isResolvingWind(key)
+      ? `<span class="windbadge-pending">Resolving historical wind from Open-Meteo…</span>`
+      : `<span class="windbadge-pending">Resolving historical wind…</span>`;
+    return;
+  }
+  if (w.noData) {
+    host.innerHTML = `<span class="windbadge-none">No historical wind available for this ride (it may be too recent — the reanalysis archive lags a few days).</span>`;
+    return;
+  }
+  const assist = w.avgAlongKmh >= 0 ? "tailwind" : "headwind";
+  const toDeg = (w.prevailingFromDeg + 180) % 360;
+  const arrow =
+    `<span class="wind-arrow wind-arrow-badge" style="transform:rotate(${toDeg.toFixed(0)}deg)">` +
+    `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">` +
+    `<path d="M12 3 L12 21 M12 3 L7 9 M12 3 L17 9" fill="none" stroke="currentColor" ` +
+    `stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+  host.innerHTML =
+    arrow +
+    `<span class="wind-main">Wind from <b>${compass8(w.prevailingFromDeg)}</b> · ` +
+    `${Math.round(w.avgSpeedKmh)} km/h · ${Math.round(w.pctTailwind * 100)}% tailwind · ` +
+    `avg ${assist} ${Math.abs(w.avgAlongKmh).toFixed(1)} km/h · gust ${Math.round(w.avgGustKmh)} km/h</span>` +
+    `<span class="wind-prov">${esc(w.datasetLabel)} · ${w.cellCount} cell${w.cellCount === 1 ? "" : "s"} · ` +
+    `hourly · green = tailwind, red = headwind · ` +
+    `<a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Weather by Open-Meteo</a></span>`;
+}
+
 /** Toggle the elevation profile panel, re-measuring the map afterwards. */
 function toggleRideMapProfile(): void {
   rideMapProfileShown = !rideMapProfileShown;
@@ -1493,8 +1835,11 @@ function closeRideMap(): void {
   rideMapMarker = null;
   rideHover = null;
   rideMapKey = null;
+  hoverTextEl = null;
+  windDialEl = null;
   setRideMapStatus("");
   document.getElementById("rideMapSummary")?.classList.add("hidden");
+  document.getElementById("rideMapWind")?.classList.add("hidden");
 }
 
 // --------------------------------------------------------------------------- //
@@ -2502,6 +2847,19 @@ function queueBadge(key: string): string {
   if (ACTIVE.has(key)) return `<span class="badge queued">queued</span>`;
   return "";
 }
+/** The inner HTML of a ride's title row (`.rtitle`): source marker, name + location,
+ *  and the status badges. One canonical builder so the full-list render and the
+ *  lightweight in-place wind-badge update (applyWeatherUpdate) stay identical. */
+function rtitleHtml(r: RideView, multiSource: boolean): string {
+  return (
+    sourceMark(r.source, multiSource) +
+    `<span class="rname"><span class="rtitle-text">${r.title || "Ride"}</span>` +
+    `${r.location ? `<span class="rtitle-loc">${r.location}</span>` : ""}</span> ` +
+    `${r.source !== "gpx" && r.gpx_cached ? cachedBadge() : ""} ` +
+    `${r.wind_resolved ? windBadge() : ""} ` +
+    `${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}`
+  );
+}
 function deletedBadge(): string {
   return `<span class="badge deleted" title="This ride is no longer in your Beeline account — it was deleted in the Beeline app.">deleted</span>`;
 }
@@ -2513,6 +2871,20 @@ function deletedBadge(): string {
  */
 function cachedBadge(): string {
   return `<span class="badge cached" title="Full recorded GPX is cached locally (real time + elevation) — its map and profile work offline and saving is instant.">GPX</span>`;
+}
+/**
+ * A tiny, icon-only marker for a ride that has had its historical wind resolved
+ * (head/tailwind available on its big map). Just a small breeze glyph so it reads as
+ * a quiet "wind ready" hint at a glance — the detail lives in the tooltip and the
+ * map itself. Pairs with the Wind filter chip for finding resolved/unresolved rides.
+ */
+function windBadge(): string {
+  return (
+    `<span class="badge wind" title="Historical wind resolved — open this ride's map and choose “Show wind” for head/tailwind colouring.">` +
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">` +
+    `<path d="M4 9h10a2.5 2.5 0 1 0-2.5-2.5"/><path d="M4 15h6a2.5 2.5 0 1 1-2.5 2.5"/></svg>` +
+    `</span>`
+  );
 }
 /**
  * A tiny, icon-only marker for a ride's source, shown at the START of its title so
@@ -2635,6 +3007,7 @@ function syncFilterBar(allRides: AppState["rides"]): void {
   };
   chip("fGps", "Route", filters.gps, "yes");
   chip("fCached", "Full GPX", filters.cached, "yes");
+  chip("fWind", "Wind", filters.wind, "yes");
   chip("fDestination", "Destination", filters.destination, "yes");
   chip("fNamed", "Named", filters.named, "yes");
   chip("fDeleted", "Deleted", filters.deleted, "only");
@@ -2681,6 +3054,37 @@ function syncFilterBar(allRides: AppState["rides"]): void {
     }
   }
 
+  // Wind chip: appears only once the library has DIVERSITY on this dimension — some
+  // rides with wind resolved AND some without — since with no such split there's
+  // nothing to narrow. Gated on the real signal (not a flag), like the Source chip.
+  const someWind = allRides.some((r) => r.wind_resolved);
+  const someNoWind = allRides.some((r) => !r.wind_resolved);
+  const windDiverse = someWind && someNoWind;
+  const windChip = document.getElementById("fWind");
+  if (windChip) windChip.classList.toggle("hidden", !windDiverse);
+  if (!windDiverse && filters.wind !== "any") {
+    filters.wind = "any";
+    saveFilters();
+  }
+
+  // Wind speed min/max range: a contextual companion to the Wind chip, shown ONLY
+  // while filtering to resolved-wind rides ("Wind ✓"). When that's not the case the
+  // bounds are meaningless, so hide the inputs and drop any active bound so a hidden
+  // control can't keep rides filtered.
+  const windRangeOn = windDiverse && filters.wind === "yes";
+  document.getElementById("fWindRange")?.classList.toggle("hidden", !windRangeOn);
+  if (!windRangeOn && (filters.windMin !== null || filters.windMax !== null)) {
+    filters.windMin = null;
+    filters.windMax = null;
+    saveFilters();
+  }
+  const wMin = $<HTMLInputElement>("#fWindMin");
+  const wMax = $<HTMLInputElement>("#fWindMax");
+  if (wMin && document.activeElement !== wMin)
+    wMin.value = filters.windMin === null ? "" : String(filters.windMin);
+  if (wMax && document.activeElement !== wMax)
+    wMax.value = filters.windMax === null ? "" : String(filters.windMax);
+
   // Distance inputs (don't clobber the field being typed into).
   const min = $<HTMLInputElement>("#fDistMin");
   const max = $<HTMLInputElement>("#fDistMax");
@@ -2715,6 +3119,7 @@ function cycleChip(which: string): void {
     filters.source = SOURCE_CYCLE[(i + 1) % SOURCE_CYCLE.length];
   } else if (which === "gps") filters.gps = nextTri(filters.gps);
   else if (which === "cached") filters.cached = nextTri(filters.cached);
+  else if (which === "wind") filters.wind = nextTri(filters.wind);
   else if (which === "destination") filters.destination = nextTri(filters.destination);
   else if (which === "named") filters.named = nextTri(filters.named);
   else if (which === "deleted") {
@@ -2728,6 +3133,9 @@ function clearFilters(): void {
   filters.status = "all";
   filters.gps = "any";
   filters.cached = "any";
+  filters.wind = "any";
+  filters.windMin = null;
+  filters.windMax = null;
   filters.destination = "any";
   filters.named = "any";
   filters.deleted = "any";
@@ -2928,7 +3336,6 @@ function renderSpeed(
 
 function renderConn(): void {
   const el = $("#connState");
-  const disconnectBtn = $<HTMLButtonElement>("#btnDisconnect");
   const sourceBtn = $<HTMLButtonElement>("#btnSource");
   const scanBtn = document.getElementById("btnScan") as HTMLButtonElement | null;
 
@@ -2952,7 +3359,6 @@ function renderConn(): void {
     // No dedicated "Exit demo" button: the always-visible "Change source" already
     // leads out of the demo (picking any source replaces it), so a second exit
     // affordance would just be header clutter.
-    disconnectBtn.style.display = "none";
   } else if (STATE.connected) {
     el.textContent = STATE.device || "connected";
     el.className = "cstate on";
@@ -2960,21 +3366,20 @@ function renderConn(): void {
     // No "Sign out" button: the password is never stored, so a plain page refresh
     // already drops account access (back to offline cached rides), and "Change
     // source" leads out — a dedicated sign-out would just be header clutter.
-    disconnectBtn.style.display = "none";
   } else if (usesBeeline) {
     // Showing cached Beeline rides without a live account — flag it in red so the
-    // "stale, can't sync right now" state is unmistakable, and offer a way back in.
+    // "stale, can't sync right now" state is unmistakable. No dedicated "Sign in"
+    // button: "Pull from Beeline" already routes through the re-auth gate
+    // (withBeelineAccess), so clicking it signs in (via the password manager) and
+    // then pulls in one step — a separate sign-in affordance would be redundant.
     // Name the source so the state is clear once several sources can coexist.
     el.textContent = "Beeline: offline — not signed in";
     el.className = "cstate err";
     el.style.display = "";
-    disconnectBtn.textContent = "Sign in";
-    disconnectBtn.style.display = "";
   } else {
     // Pure-GPX (or empty): no Beeline footprint, so no account chrome at all — the
     // connection state and Re-sync would be meaningless noise here.
     el.style.display = "none";
-    disconnectBtn.style.display = "none";
   }
 
   // The whole-history "Re-sync" pull is a Beeline-account action; hide it entirely
@@ -3046,12 +3451,10 @@ function render(): void {
   }
   const years = [...byYear.entries()].sort((a, b) => b[0].localeCompare(a[0]));
 
-  const up = rides.filter((r) => r.status === "uploaded").length;
-  const pe = rides.filter((r) => r.status === "pending" && !r.deleted).length;
   const del = rides.filter((r) => r.deleted).length;
-  // Strava upload is a Beeline-only capability; only surface its chrome (the totals
-  // segments, the "Push all" button, the Strava-status filter) when at least one
-  // ride can actually be pushed. A pure-GPX library never sees Strava UI it can't use.
+  // Strava upload is a Beeline-only capability; only surface its chrome (the "Push all"
+  // button, the Strava-status filter) when at least one ride can actually be pushed.
+  // A pure-GPX library never sees Strava UI it can't use.
   const hasUploadable = allRides.some((r) => r.can_upload);
   // Whether to mark each ride's source: only worth it once the library mixes sources.
   const multiSource = new Set(allRides.map((r) => r.source)).size > 1;
@@ -3061,9 +3464,11 @@ function render(): void {
   const nSel = selected.size;
   // The "N selected" suffix doubles as a one-click "Clear selection" affordance.
   // Everything interpolated here is static text or a number, so innerHTML is safe.
+  // Upload totals (uploaded / pending) are intentionally NOT shown here — they're
+  // low-importance noise in the header; the Strava-status filter lets the user drill
+  // into exactly those subsets on demand.
   $("#totals").innerHTML =
     `${shown}` +
-    (hasUploadable ? ` · ${up} uploaded · ${pe} upload pending` : "") +
     (del ? ` · ${del} deleted` : "") +
     (nSel
       ? ` · <button class="selchip" id="selClear" title="Clear selection">${nSel} selected <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`
@@ -3095,72 +3500,41 @@ function render(): void {
   const selGroupLabel = document.getElementById("selGroupLabel");
   if (selGroupLabel) selGroupLabel.textContent = nSel ? `Selected (${nSel})` : "Selected";
 
-  const sizeEl = $("#stateSize");
-  if (sizeEl) {
-    // The header chip is the single "how much am I storing locally?" readout. GPX
-    // blobs live in their own stores and are usually the BIGGER consumer, so fold
-    // them in — distinguishing the re-fetchable Beeline cache from imported-GPX data,
-    // and showing each segment only when non-empty so a user with neither sees no
-    // clutter. The tooltip breaks it down; the Data menu repeats the split + the flush.
-    const stateBytes = controller.stateBytes();
-    const cacheBytes = controller.gpxCacheBytes();
-    const cacheCount = controller.gpxCacheCount();
-    const dataBytes = controller.gpxDataBytes();
-    const dataCount = controller.gpxDataCount();
-    const segs = [fmtBytes(stateBytes)];
-    if (cacheCount) segs.push(`${fmtBytes(cacheBytes)} cache`);
-    if (dataCount) segs.push(`${fmtBytes(dataBytes)} GPX`);
-    sizeEl.textContent = segs.join(" · ");
-    const ride = (n: number) => `${n} ride${n === 1 ? "" : "s"}`;
-    const lines = [
-      `Stored locally in this browser:`,
-      `• ${fmtBytes(stateBytes)} — rides, settings & status`,
-    ];
-    if (cacheCount)
-      lines.push(
-        `• ${fmtBytes(cacheBytes)} — cached full-GPX downloads (${ride(cacheCount)}, clearable; re-downloaded from Beeline)`,
-      );
-    if (dataCount)
-      lines.push(
-        `• ${fmtBytes(dataBytes)} — imported GPX files (${ride(dataCount)}, your data; kept until you delete the ride)`,
-      );
-    lines.push(
-      cacheCount
-        ? `\nData ▸ Clear download cache frees the cache only. Export backs up rides/settings; Reset clears everything.`
-        : `\nExport backs up rides/settings; Reset clears everything.`,
-    );
-    sizeEl.title = lines.join("\n");
-  }
-
   // Data-menu storage breakdown: spell out the cache-vs-data split so it's obvious
-  // what "Clear download cache" does and doesn't touch.
+  // what each row holds, and inline a small "Clear" button on the re-fetchable caches
+  // (the imported-GPX vault is your data — no inline clear). This menu is the single
+  // home for the local-storage breakdown (the header no longer repeats it).
   const storageInfo = document.getElementById("storageInfo");
   if (storageInfo) {
+    const stateBytes = controller.stateBytes();
     const cacheCount = controller.gpxCacheCount();
     const dataCount = controller.gpxDataCount();
-    const rows: string[] = [];
-    if (cacheCount)
-      rows.push(
-        `<span class="ms-row"><span>Download cache</span><span>${fmtBytes(controller.gpxCacheBytes())} · clearable</span></span>`,
-      );
-    if (dataCount)
-      rows.push(
-        `<span class="ms-row"><span>Imported GPX</span><span>${fmtBytes(controller.gpxDataBytes())} · your data</span></span>`,
-      );
+    const windCount = controller.windCacheCount();
+    // Two distinct groups so it's obvious what's safe to clear: YOUR DATA (rides,
+    // settings, imported GPX — no clear button, losing it loses real data) vs.
+    // re-fetchable CACHES (downloads + wind — each with an inline Clear). A subheading
+    // separates them. Grid cells: label · size (right-aligned) · clear-or-blank.
+    const row = (label: string, size: string, clear?: string) =>
+      `<span class="ms-row">` +
+      `<span class="ms-label">${label}</span>` +
+      `<span class="ms-size">${size}</span>` +
+      `<span class="ms-act">` +
+      (clear
+        ? `<button class="ms-clear" data-clear="${clear}" title="Clear ${label.toLowerCase()} — it's re-fetchable">Clear</button>`
+        : "") +
+      `</span></span>`;
+    const sub = (text: string) => `<span class="ms-sub">${text}</span>`;
+    const rows: string[] = [row("Rides & settings", fmtBytes(stateBytes))];
+    if (dataCount) rows.push(row("Imported GPX", fmtBytes(controller.gpxDataBytes())));
+    // The cache group only appears when something is actually cached.
+    if (cacheCount || windCount) {
+      rows.push(sub("Caches"));
+      if (cacheCount)
+        rows.push(row("Download cache", fmtBytes(controller.gpxCacheBytes()), "gpx"));
+      if (windCount) rows.push(row("Wind cache", fmtBytes(controller.windCacheBytes()), "wind"));
+    }
     storageInfo.innerHTML = rows.join("");
     storageInfo.classList.toggle("hidden", rows.length === 0);
-  }
-
-  // The cache flush is only meaningful when something is cached, so disable it when
-  // empty and label it with the reclaimable size. Imported-GPX data is NOT counted
-  // here — it's never touched by a flush.
-  const flushGpxBtn = document.getElementById("btnFlushGpx") as HTMLButtonElement | null;
-  if (flushGpxBtn) {
-    const cacheCount = controller.gpxCacheCount();
-    flushGpxBtn.disabled = cacheCount === 0;
-    flushGpxBtn.textContent = cacheCount
-      ? `Clear download cache (${fmtBytes(controller.gpxCacheBytes())})`
-      : "Clear download cache";
   }
 
   const allSelState = (keys: string[]): boolean | null => {
@@ -3184,14 +3558,9 @@ function render(): void {
   for (const [year, ymonths] of years) {
     const yKeys = ymonths.flatMap(([, m]) => m.rides.map((r) => r.key));
     const yRides = ymonths.flatMap(([, m]) => m.rides);
-    const yup = yRides.filter((r) => r.status === "uploaded").length;
-    const ype = yRides.filter((r) => r.status === "pending" && !r.deleted).length;
     const ykm = yRides.reduce((s, r) => s + (r.distance_km ?? 0), 0);
     const yOpen = !openYears.has(`c${year}`);
     const ySel = allSelState(yKeys);
-    // The "up · pending" upload meta only applies to upload-capable (Beeline)
-    // rides — omit it for a GPX-only year.
-    const yUploadable = yRides.some((r) => r.can_upload);
 
     const ybox = document.createElement("div");
     ybox.className = "year";
@@ -3201,7 +3570,7 @@ function render(): void {
         <input type="checkbox" class="selall" data-selyear="${year}" ${ySel === true ? "checked" : ""}>
         <span class="ytitle">${year}</span>
         ${volumeBar(ykm, maxYearKm)}
-        <span class="ymeta">${yRides.length} rides · ${fmtKm(ykm)}${yUploadable ? ` · ${yup} up · ${ype} upload pending` : ""}</span>
+        <span class="ymeta">${yRides.length} rides · ${fmtKm(ykm)}</span>
       </div>
       <div class="ybody" ${yOpen ? "" : 'style="display:none"'}></div>`;
     root.appendChild(ybox);
@@ -3210,23 +3579,25 @@ function render(): void {
     const ybody = ybox.querySelector(".ybody")!;
     for (const [mkey, m] of ymonths) {
       m.rides.sort((a, b) => compareRideKeysDesc(a.key, b.key));
-      const mup = m.rides.filter((r) => r.status === "uploaded").length;
-      const mpe = m.rides.filter((r) => r.status === "pending" && !r.deleted).length;
       const mkm = m.rides.reduce((s, r) => s + (r.distance_km ?? 0), 0);
       const isOpen = openMonths.has(mkey);
       const mKeys = m.rides.map((r) => r.key);
       const mSel = allSelState(mKeys);
-      const mUploadable = m.rides.some((r) => r.can_upload);
+      // A per-ride "⋮" menu drops downward and would be clipped by the month box's
+      // `overflow: hidden` (kept for rounded-corner clipping). Let just the month that
+      // owns the open menu show overflow so the dropdown is fully visible.
+      const menuHere =
+        !!openMenu && openMenu.startsWith("ovr-r:") && mKeys.includes(openMenu.slice(6));
 
       const box = document.createElement("div");
-      box.className = "month";
+      box.className = menuHere ? "month menu-open" : "month";
       box.innerHTML = `
         <div class="mhead" data-m="${mkey}">
           <span class="caret${isOpen ? " open" : ""}" aria-hidden="true"></span>
           <input type="checkbox" class="selall" data-selmonth="${mkey}" ${mSel === true ? "checked" : ""}>
           <span class="mtitle">${m.label}</span>
           ${volumeBar(mkm, maxMonthKm)}
-          <span class="mmeta">${m.rides.length} rides · ${fmtKm(mkm)}${mUploadable ? ` · ${mup} up · ${mpe} upload pending` : ""}</span>
+          <span class="mmeta">${m.rides.length} rides · ${fmtKm(mkm)}</span>
         </div>
         <div class="rows ${isOpen ? "open" : ""}"></div>`;
       ybody.appendChild(box);
@@ -3251,7 +3622,7 @@ function render(): void {
         el.innerHTML = `
           <input type="checkbox" class="chk" data-key="${r.key}" ${selected.has(r.key) ? "checked" : ""}>
           <div class="rmain">
-            <div class="rtitle">${sourceMark(r.source, multiSource)}<span class="rname"><span class="rtitle-text">${r.title || "Ride"}</span>${r.location ? `<span class="rtitle-loc">${r.location}</span>` : ""}</span> ${r.source !== "gpx" && r.gpx_cached ? cachedBadge() : ""} ${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}</div>
+            <div class="rtitle">${rtitleHtml(r, multiSource)}</div>
             <div class="rmeta">${r.date_key} · ${summaryDistance} · ${summaryDuration}
               <a href="#" data-stats="${r.key}">${so ? "hide" : "details"}</a></div>
             ${so ? detailsBlock(r) : ""}
@@ -3263,6 +3634,7 @@ function render(): void {
               <button class="small ghost" data-act="gpx-save-one" data-key="${r.key}" title="Save the route-only GPX (the stored shape — no timestamps or elevation; instant, works offline)">Save route GPX</button>
               <button class="small ghost" data-act="gpx-save-full-one" data-key="${r.key}" title="Download the full recorded GPX (real timestamps + elevation) and save it to disk">Save full GPX</button>
               <button class="small ghost" data-act="gpx-fetch-one" data-key="${r.key}" title="${r.gpx_cached ? "Full GPX is cached — fetch again to refresh it (no file saved)" : "Fetch the full recorded GPX into the local cache without saving a file (pre-warms offline use + the map)"}">${r.gpx_cached ? "Fetch full GPX ✓" : "Fetch full GPX"}</button>
+              <button class="small ghost" data-act="resolve-wind-one" data-key="${r.key}" title="${controller.hasResolvedWind(r.key) ? "Historical wind is resolved — open the map and choose Show wind, or resolve again to refresh" : "Resolve historical wind (from Open-Meteo) for this ride — colours its big map by head/tailwind"}">${controller.hasResolvedWind(r.key) ? "Resolve wind ✓" : "Resolve wind"}</button>
               ${r.deleted ? "" : `<button class="small ghost" data-act="rename-one" data-key="${r.key}" title="Rename this ride">Rename…</button>`}
               ${r.deleted || r.source !== "gpx" ? "" : `<button class="small ghost" data-act="destination-one" data-key="${r.key}" title="Set or edit this ride's destination (the place it went to)">${r.location.trim() ? "Edit destination…" : "Set destination…"}</button>`}
               ${r.deleted ? "" : `<button class="small danger" data-act="delete-one" data-key="${r.key}" title="Delete this ride">Delete…</button>`}
@@ -3284,6 +3656,7 @@ function render(): void {
   // header's Beeline connection chrome hidden, so it never flashed in then out.
   document.body.classList.remove("booting");
   lastSig = stateSig();
+  lastWeatherSig = weatherSig();
 }
 
 function renderJob(): void {
@@ -3332,10 +3705,26 @@ function renderJob(): void {
   qc.textContent = total ? `${total} ride${total === 1 ? "" : "s"} queued` : "";
   qc.style.display = total ? "" : "none";
 
-  // Minimized handle mirrors the count (or the live verb when nothing is queued).
-  $("#jobHandleText").textContent = total
-    ? `${total} ride${total === 1 ? "" : "s"}`
-    : "Working\u2026";
+  // Minimized handle: keep it a tiny pill, but convey the NATURE of the work and the
+  // PROGRESS, not just a bare count. Show the current verb ("Resolving wind") + a
+  // done/total when the running task reports progress, and turn the spinner into a
+  // determinate ring that fills as work completes (falls back to the indeterminate
+  // spinner when no progress is known, e.g. a scan).
+  const handleText = $("#jobHandleText");
+  const handleSpin = $("#jobHandle .spin") as HTMLElement;
+  const verb = cur ? TASK_VERB[cur.kind] || cur.kind : "Working";
+  const hp = cur?.progress;
+  if (hp && hp.total > 0) {
+    handleSpin.classList.add("det");
+    handleSpin.style.setProperty("--p", String(hp.done / hp.total));
+    handleText.textContent = `${verb} · ${hp.done}/${hp.total}`;
+  } else {
+    handleSpin.classList.remove("det");
+    handleSpin.style.removeProperty("--p");
+    handleText.textContent = total
+      ? `${verb} · ${total} ride${total === 1 ? "" : "s"}`
+      : `${verb}\u2026`;
+  }
 
   // -- the rest of the queue: what is to be done ----------------------------
   const toggle = $("#btnQueueToggle") as HTMLElement;
@@ -3358,6 +3747,7 @@ const TASK_VERB: Record<string, string> = {
   status: "Checking",
   upload: "Uploading",
   "download-gpx": "Downloading GPX",
+  "fetch-weather": "Resolving wind",
 };
 
 type JobTask = NonNullable<AppState["jobs"]["current"]>;
@@ -3628,8 +4018,29 @@ function closeConfirm(ok: boolean): void {
 }
 
 function stateSig(): string {
+  // Exclude the verbose, fast-changing job fields (message/progress/history) from the
+  // render signature: they tick on every `report()` during a job and would otherwise
+  // trigger a full render() — which remounts the Leaflet maps and makes them flicker.
+  // The job BAR is refreshed separately every tick (renderJob); the LIST only depends
+  // on WHICH rides are queued/running (active_keys/current_keys), so include just those.
+  const { jobs, rides, ...rest } = STATE;
+  const jobsSig =
+    [...(jobs.active_keys ?? [])].sort().join(",") +
+    ";" +
+    [...(jobs.current ? jobs.current_keys ?? [] : [])].sort().join(",");
+  // Strip the per-ride WEATHER fields too — during a bulk wind resolve they update
+  // one ride at a time, and including them would rebuild the whole list (remounting
+  // maps) on every resolved ride. Weather changes are applied in place by
+  // applyWeatherUpdate instead (toggling the small wind badge), no list rebuild.
+  const ridesSig = JSON.stringify(
+    rides.map(({ wind_resolved, wind_speed_kmh, ...r }) => r),
+  );
   return (
-    JSON.stringify(STATE) +
+    JSON.stringify(rest) +
+    "#" +
+    ridesSig +
+    "#" +
+    jobsSig +
     "|" +
     [...selected].sort().join(",") +
     "|" +
@@ -3643,11 +4054,68 @@ function stateSig(): string {
   );
 }
 
+/** Signature of just the per-ride wind-resolved state, so a weather-only change can
+ *  be applied in place (badges) without a full, map-remounting list rebuild. */
+function weatherSig(): string {
+  return STATE.rides.map((r) => (r.wind_resolved ? "1" : "0")).join("");
+}
+
 /** Re-read controller state and re-render if anything visible changed. */
 function applyState(): void {
   STATE = controller.state();
-  if (stateSig() === lastSig) return;
-  render();
+  // Keep the open big-map wind overlay live as resolution lands, even when the main
+  // list signature hasn't changed (the per-point overlay isn't part of STATE).
+  refreshOpenRideMapWind();
+  // Always refresh the lightweight job bar (it ticks on every job `report`), but only
+  // run the full, map-remounting render() when list-relevant state actually changed —
+  // so job progress updates never flicker the maps.
+  renderJob();
+  if (stateSig() !== lastSig) {
+    render();
+    return;
+  }
+  // Structure unchanged — apply any weather-only change (a ride resolved its wind) in
+  // place, without rebuilding the list (which would remount + flicker the maps).
+  const wsig = weatherSig();
+  if (wsig !== lastWeatherSig) {
+    lastWeatherSig = wsig;
+    applyWeatherUpdate();
+  }
+}
+
+/** Apply a weather-only state change without a full list rebuild: toggle the wind
+ *  badge on each visible ride row in place (so mounted maps survive) and refresh the
+ *  filter bar (the Wind chip/range gate on resolved-wind diversity). If a wind-based
+ *  filter is active the visible SET depends on weather, so fall back to a full render. */
+function applyWeatherUpdate(): void {
+  if (filters.wind !== "any" || filters.windMin !== null || filters.windMax !== null) {
+    render();
+    return;
+  }
+  const multiSource = new Set(STATE.rides.map((r) => r.source)).size > 1;
+  for (const r of STATE.rides) {
+    const titleEl = document.querySelector<HTMLElement>(
+      `.rrow[data-key="${(window.CSS?.escape ?? cssEscape)(r.key)}"] .rtitle`,
+    );
+    if (!titleEl) continue; // off-screen / collapsed group
+    const next = rtitleHtml(r, multiSource);
+    if (titleEl.innerHTML !== next) titleEl.innerHTML = next;
+  }
+  syncFilterBar(STATE.rides);
+}
+
+/** Minimal CSS.escape fallback for environments without it (older jsdom in tests). */
+function cssEscape(s: string): string {
+  return s.replace(/["\\]/g, "\\$&");
+}
+
+/** Redraw the open big map's wind overlay + summary while wind colouring is active
+ *  (called on every controller change so a resolving job paints when it completes). */
+function refreshOpenRideMapWind(): void {
+  if (!rideMapBig || !rideMapKey || rideMapColorMode !== "wind") return;
+  drawRideLine();
+  syncRideMapControls();
+  renderRideMapWind();
 }
 
 /** Run a controller action, surfacing errors to a persistent error card. */
@@ -3800,6 +4268,27 @@ async function flushGpxCache(): Promise<void> {
   toast("Download cache cleared.");
 }
 
+/** Clear the global historical-wind cache (re-fetched from Open-Meteo on demand). */
+async function flushWindCache(): Promise<void> {
+  openMenu = null; // close the Data menu we were invoked from
+  const n = controller.windCacheCount();
+  if (n === 0) {
+    toast("No cached wind data to clear.");
+    return;
+  }
+  if (
+    !confirm(
+      `Clear cached historical wind (${fmtBytes(
+        controller.windCacheBytes(),
+      )})? Your rides and settings are kept; wind is re-fetched from Open-Meteo next time you open a ride.`,
+    )
+  ) {
+    return;
+  }
+  await controller.flushWindCache();
+  toast("Wind cache cleared.");
+}
+
 // --------------------------------------------------------------------------- //
 // Events
 // --------------------------------------------------------------------------- //
@@ -3840,7 +4329,12 @@ document.addEventListener("click", (e) => {
   if (t.id === "btnRideMapFull") {
     return fetchRideMapFull();
   }
+  if (t.id === "btnRideMapWind") {
+    return toggleRideMapWind();
+  }
   if (t.dataset?.color && t.closest("#rideMapColor")) {
+    // Choosing an explicit elevation/speed/route mode turns wind colouring off.
+    document.getElementById("rideMapWind")?.classList.add("hidden");
     return setRideMapColor(t.dataset.color as "none" | "height" | "speed");
   }
   if (t.dataset?.profile && t.closest("#rideMapProfileMetric")) {
@@ -3973,14 +4467,10 @@ document.addEventListener("click", (e) => {
     return;
   }
   if (t.id === "btnSource") return showSources();
-  // The disconnect slot only shows for an offline Beeline session, where it's a
-  // "Sign in" shortcut to the focused re-auth prompt (connected/demo hide it; the
-  // password is never stored so there's no "Sign out" — refresh/"Change source"
-  // handle leaving).
-  if (t.id === "btnDisconnect") return showSources({ reauth: true });
   if (t.id === "btnImport") return void ($("#importFile") as HTMLInputElement).click();
   if (t.id === "btnExport") return exportRides();
-  if (t.id === "btnFlushGpx") return void flushGpxCache();
+  if (t.dataset?.clear === "gpx") return void flushGpxCache();
+  if (t.dataset?.clear === "wind") return void flushWindCache();
   if (t.id === "btnReset") return void resetEverything();
   if (t.id === "btnScan") return pullFromBeeline();
   if (t.id === "btnCancel") return run(() => controller.cancel(null));
@@ -4034,6 +4524,11 @@ document.addEventListener("click", (e) => {
     if (!selected.size) return toast("Select some rides first.");
     return fetchFullGpx([...selected]);
   }
+  if (t.id === "btnResolveWindSel") {
+    openMenu = null;
+    if (!selected.size) return toast("Select some rides first.");
+    return resolveWindFor([...selected]);
+  }
   if (t.id === "btnUploadSel") {
     if (!selected.size) return toast("Select some rides first.");
     const keys = [...selected].filter(
@@ -4073,6 +4568,10 @@ document.addEventListener("click", (e) => {
   if (act === "gpx-fetch-one") {
     openMenu = null;
     return fetchFullGpx([t.dataset.key!]);
+  }
+  if (act === "resolve-wind-one") {
+    openMenu = null;
+    return resolveWindFor([t.dataset.key!], controller.hasResolvedWind(t.dataset.key!));
   }
   if (act === "upload-one") {
     const ride = STATE.rides.find((r) => r.key === t.dataset.key);
@@ -4305,6 +4804,15 @@ document.addEventListener("input", (e) => {
     const km = v !== null && Number.isFinite(v) && v >= 0 ? v : null;
     if (el.id === "fDistMin") filters.distMin = km;
     else filters.distMax = km;
+    saveFilters();
+    applyState();
+    return;
+  }
+  if (el.id === "fWindMin" || el.id === "fWindMax") {
+    const v = el.value.trim() === "" ? null : Number(el.value);
+    const kmh = v !== null && Number.isFinite(v) && v >= 0 ? v : null;
+    if (el.id === "fWindMin") filters.windMin = kmh;
+    else filters.windMax = kmh;
     saveFilters();
     applyState();
     return;

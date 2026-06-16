@@ -47,6 +47,8 @@ function ride(over: Partial<RideView> = {}): RideView {
     deleted: false,
     deleted_at: "",
     gpx_cached: false,
+    wind_resolved: false,
+    wind_speed_kmh: null,
     ...over,
   };
 }

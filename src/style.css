@@ -379,12 +379,16 @@ button.small {
 .filterbar.hidden {
   display: none;
 }
-/* The filter controls are grouped so related chips/fields wrap as cohesive
-   blocks instead of as ragged single items: the status segment keeps its
-   "Filter" label attached, the three tri-state chips travel together, and the
-   Source + Distance fields stay paired. Each group is a transparent flex box. */
+/* The filter controls are grouped in the markup (chips vs. fields), but on desktop
+   the groups are FLATTENED with `display: contents` so every chip, the Distance and
+   wind-speed fields, and Clear become direct flex children of the bar — wrapping
+   together and packing into as few lines as possible. (A group kept as its own
+   inline-flex box fills its line and pushes the next group onto a fresh row, wasting
+   space — the same problem `.conn` solves on mobile.) The base flex props below are
+   inert under `display: contents` but re-apply on mobile, where the media query
+   restores each group to an `inline-flex` box for the stacked "Filters" panel. */
 .fgroup {
-  display: inline-flex;
+  display: contents;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
@@ -456,6 +460,18 @@ button.small {
 }
 .fdist input {
   width: 3.6ch;
+}
+/* Contextual wind-speed range — appears inline right after the Wind chip (only when
+   filtering to resolved-wind rides). Reuses the .custom input vocabulary; the `km/h`
+   suffix sits in the label. Needs an explicit `.hidden` backing rule like .fchip. */
+.fwind {
+  gap: 2px;
+}
+.fwind input {
+  width: 3.4ch;
+}
+.fwind.hidden {
+  display: none;
 }
 
 main {
@@ -645,6 +661,21 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
   border-top-color: var(--blue);
   animation: spin 0.8s linear infinite;
 }
+/* Determinate progress ring (minimized handle): the spinner becomes a ring that
+   FILLS clockwise to --p (0..1), so the tiny pill shows real progress instead of an
+   endless spin. A conic gradient draws the arc; a radial mask cuts the centre to a
+   ring. Falls back to the spinner above when --p is unknown. */
+.job-handle .spin.det {
+  border: 0;
+  animation: none;
+  background: conic-gradient(
+    var(--blue) calc(var(--p, 0) * 360deg),
+    rgba(76, 141, 255, 0.22) 0
+  );
+  -webkit-mask: radial-gradient(closest-side, transparent 62%, #000 64%);
+  mask: radial-gradient(closest-side, transparent 62%, #000 64%);
+  transition: background 0.3s ease;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -669,13 +700,16 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
   white-space: nowrap;
 }
 /* The live message is verbose by design (it names the exact ride/step we're on),
-   so let it wrap to two lines before clamping — far more useful than a one-line
-   ellipsis that hides the very detail the user is watching for. */
+   so let it wrap to two lines before clamping. RESERVE the full two-line height at
+   all times (min-height) so a short message doesn't shrink the pill and a long one
+   doesn't grow it — the panel keeps a stable shape as the text rapidly changes,
+   instead of jumping between one- and two-line heights (jarring to read). */
 .job .msg {
   color: #adc2e8;
   font-size: 12px;
   min-width: 0;
   line-height: 1.35;
+  min-height: 2.7em; /* exactly two lines at this line-height */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
@@ -948,6 +982,12 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
   margin: 0 0 10px 18px;
   overflow: hidden;
   background: var(--panel);
+}
+/* When this month holds the open per-ride "⋮" menu, let the dropdown escape the
+   box instead of being clipped by `overflow: hidden`. Only one menu is open at a
+   time, so at most one month relaxes its corner clipping, transiently. */
+.month.menu-open {
+  overflow: visible;
 }
 .mhead {
   display: flex;
@@ -1225,6 +1265,21 @@ span.caret.open::before {
   border-radius: 50%;
   background: #2ec27e;
   flex: 0 0 auto;
+}
+/* "Wind resolved" — an icon-only breeze glyph, deliberately quiet (no pill/border),
+   tinted the wind accent. A subtle "wind ready" hint that pairs with the Wind filter. */
+.badge.wind {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  color: #7fc8e8;
+}
+.badge.wind svg {
+  width: 15px;
+  height: 15px;
+  display: block;
 }
 .badge.working {
   color: var(--blue);
@@ -1608,9 +1663,15 @@ span.caret.open::before {
   display: none;
 }
 /* Storage breakdown at the top of the Data menu: a small, non-interactive caption
-   spelling out the cache-vs-data split (so "Clear download cache" is unambiguous). */
+   spelling out the cache-vs-data split (so each "Clear" is unambiguous). A grid so
+   the columns line up — labels left, sizes right-aligned in their own column, notes,
+   and the Clear buttons all flush at the end (even on rows without a button). */
 .menu-storage {
-  display: block;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 1px;
   padding: 4px 11px 6px;
   margin-bottom: 3px;
   border-bottom: 1px solid var(--line);
@@ -1620,13 +1681,59 @@ span.caret.open::before {
 .menu-storage.hidden {
   display: none;
 }
+/* Each row's cells participate directly in the parent grid for column alignment. */
 .menu-storage .ms-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
+  display: contents;
 }
-.menu-storage .ms-row span:last-child {
+/* Subheading separating the "your data" rows above from the re-fetchable caches
+   below — spans the whole grid, with a hairline rule + a little breathing room so
+   the two groups read as distinct. */
+.menu-storage .ms-sub {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  opacity: 0.75;
+}
+.menu-storage .ms-size {
+  text-align: right;
   font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.menu-storage .ms-act {
+  justify-self: end;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+}
+/* Inline per-cache "Clear" — a compact, quiet button that only colours on hover, so
+   the row still reads as info rather than a row of actions. The explicit display/width/
+   margin reset overrides the generic `.splitmenu button` (block, 100%-wide) styling so
+   it stays a small inline pill instead of a full-width row. */
+.menu-storage .ms-clear {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  margin: 0;
+  padding: 1px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+.menu-storage .ms-clear:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .rmap {
@@ -1691,6 +1798,82 @@ span.caret.open::before {
   color: var(--text);
 }
 
+/* --- Historical wind overlay ----------------------------------------------
+   The big-map wind summary line + the map arrows/footprints. Shares the card look
+   and accent vocabulary; arrows are drawn as inline SVG (never glyphs) and rotated
+   by a CSS transform to the compass bearing. */
+.ridemap-wind {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(127, 212, 255, 0.06);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.ridemap-wind .wind-main {
+  font-variant-numeric: tabular-nums;
+}
+.ridemap-wind .wind-main b {
+  color: var(--text);
+}
+.ridemap-wind .wind-prov {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.ridemap-wind .wind-prov a {
+  color: var(--muted);
+  text-decoration: underline;
+}
+.windbadge-pending,
+.windbadge-none {
+  color: var(--muted);
+  font-style: italic;
+}
+/* Inline SVG arrow, rotated by transform to a compass bearing. */
+.wind-arrow {
+  display: inline-flex;
+  width: 1em;
+  height: 1em;
+  transform-origin: 50% 50%;
+}
+.wind-arrow svg {
+  width: 100%;
+  height: 100%;
+}
+.wind-arrow-badge {
+  width: 18px;
+  height: 18px;
+  color: #7fd4ff;
+  flex: 0 0 auto;
+}
+/* Map arrows (Leaflet divIcon): the chosen wind-direction marker. ITERATION: finalist
+   #4 — double chevron (»), larger, with a dedicated dark casing underlay drawn beneath
+   the white chevrons for a crisp outline on any basemap. */
+.wind-arrow-icon .wind-arrow {
+  width: 38px;
+  height: 38px;
+}
+.wind-arrow-icon svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.wa-pick .wa-casing {
+  stroke: #0b1722;
+  stroke-width: 4.6;
+  opacity: 0.9;
+}
+.wa-pick .wa-stroke {
+  stroke: #ffffff;
+  stroke-width: 2.2;
+}
+.wind-cell {
+  pointer-events: none;
+}
+
 /* --- Full-screen single-ride route map ------------------------------------
    Opened from a ride mini-map's expand button. A fixed overlay (below the source
    picker at z-80) with a top bar (title · hover readout · close) over a big
@@ -1729,6 +1912,62 @@ body.ridemap-open {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+/* The along-track wind in the hover readout — a tiny compass DIAL: "up" is your
+   direction of travel (the fixed muted tick), and a colour-tinted arrow rotates to
+   show where the wind pushes RELATIVE to your movement. Rotation + colour transition
+   smoothly as you scrub the route (the element is persistent, never recreated). */
+.ridemap-hover .rmh-dial {
+  --wind: #cdbf3e;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 10px;
+  padding: 1px 8px 1px 4px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--wind) 45%, transparent);
+  background: color-mix(in srgb, var(--wind) 12%, transparent);
+  cursor: help;
+  vertical-align: baseline;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+.ridemap-hover .rmh-dial.hidden {
+  display: none;
+}
+.rmh-dial svg {
+  width: 20px;
+  height: 20px;
+  overflow: visible;
+}
+.rmh-dial .rd-ring {
+  fill: rgba(11, 23, 34, 0.45);
+  stroke: rgba(255, 255, 255, 0.22);
+  stroke-width: 1;
+}
+.rmh-dial .rd-fwd {
+  fill: rgba(255, 255, 255, 0.5);
+}
+.rmh-dial .rd-arrow {
+  transform-origin: 12px 12px;
+  transition: transform 0.18s ease;
+}
+.rmh-dial .rd-arrow path {
+  fill: none;
+  stroke: var(--wind);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 0.18s ease;
+}
+.rmh-dial .rd-val {
+  font-weight: 700;
+  color: var(--wind);
+  transition: color 0.18s ease;
+}
+.rmh-dial i {
+  font-style: normal;
+  opacity: 0.65;
+  font-size: 11px;
 }
 /* Quiet disclosure that the hover time is an estimate (Beeline has no per-point
    GPS timestamps). Hidden until the ride actually has a time to estimate from. */
@@ -2862,13 +3101,9 @@ body.job-active .toast {
   header button.small {
     padding: 3px 7px;
   }
-  /* Reclaim horizontal space so the action clusters pack onto fewer rows:
-     - drop the local-storage size pill (a nice-to-have stat, not an action);
-     - tighten the cluster gaps the base sheet leaves at a roomy 12px/8px, which
-       the mobile block otherwise never overrides, so buttons sit closer. */
-  #stateSize {
-    display: none;
-  }
+  /* Reclaim horizontal space so the action clusters pack onto fewer rows by
+     tightening the cluster gaps the base sheet leaves at a roomy 12px/8px, which
+     the mobile block otherwise never overrides, so buttons sit closer. */
   .hdr-info,
   .hdr-actions {
     gap: 6px;

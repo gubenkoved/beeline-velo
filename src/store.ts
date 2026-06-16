@@ -195,6 +195,15 @@ export interface RideRecord extends RideMetrics {
   /** True when the ride was known locally but has since vanished from the source. */
   deleted: boolean;
   deleted_at: string;
+  /** JSON-encoded `RideWind` summary (provenance + averages) once wind is resolved.
+   *  The heavy per-cell hourly arrays live in the separate global wind cache, never
+   *  here — this keeps the re-serialized state blob small. Empty until resolved. */
+  weather_blob?: string;
+  /** ISO-8601 time the wind summary was resolved (presence = cached, skip refetch). */
+  weather_fetched_at?: string;
+  /** Denormalized average wind speed (km/h) from the summary, for cheap filtering
+   *  without re-parsing `weather_blob` per render. 0 when resolved-but-no-data. */
+  weather_speed_kmh?: number;
 }
 
 /**
@@ -229,6 +238,9 @@ function blankRecord(uid: string): RideRecord {
     uploaded_at: "",
     deleted: false,
     deleted_at: "",
+    weather_blob: "",
+    weather_fetched_at: "",
+    weather_speed_kmh: 0,
   };
 }
 
@@ -301,6 +313,10 @@ export interface UpsertFields extends Partial<RideMetrics> {
   device_model?: string;
   source?: RideSource;
   source_id?: string;
+  /** Resolved wind summary (JSON `RideWind`); set together with `weather_fetched_at`. */
+  weather_blob?: string;
+  weather_fetched_at?: string;
+  weather_speed_kmh?: number;
 }
 
 export class Store {
@@ -488,6 +504,13 @@ export class Store {
     if (fields.device_model) rec.device_model = fields.device_model;
     if (fields.source) rec.source = fields.source;
     if (fields.source_id) rec.source_id = fields.source_id;
+    // Wind summary is set as a unit; an empty string explicitly clears a stale one
+    // (e.g. a forced refresh), so use `!== undefined` rather than a truthy check.
+    if (fields.weather_blob !== undefined) {
+      rec.weather_blob = fields.weather_blob;
+      rec.weather_fetched_at = fields.weather_fetched_at ?? nowIso();
+      rec.weather_speed_kmh = fields.weather_speed_kmh ?? 0;
+    }
     if (fields.strava_status && fields.strava_status !== "unknown") {
       if (fields.strava_status === "uploaded" && rec.strava_status !== "uploaded") {
         rec.uploaded_at = nowIso();

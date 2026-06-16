@@ -20,6 +20,12 @@ export interface Filters {
   gps: TriState;
   /** Full recorded GPX present in the local cache (real time + elevation). */
   cached: TriState;
+  /** Historical wind resolved (Open-Meteo summary cached) for the ride. */
+  wind: TriState;
+  /** Inclusive average-wind-speed bounds in km/h (only meaningful with `wind: "yes"`);
+   *  null means unbounded on that side. */
+  windMin: number | null;
+  windMax: number | null;
   /** Routed-destination presence (a ride that navigated/was tagged with a place). */
   destination: TriState;
   /** Real user-given name vs the auto time-of-day fallback ("Morning ride"). */
@@ -41,6 +47,9 @@ export function emptyFilters(): Filters {
     status: "all",
     gps: "any",
     cached: "any",
+    wind: "any",
+    windMin: null,
+    windMax: null,
     destination: "any",
     named: "any",
     deleted: "any",
@@ -77,6 +86,8 @@ export function filterActiveCount(f: Filters): number {
   if (f.status !== "all") n++;
   if (f.gps !== "any") n++;
   if (f.cached !== "any") n++;
+  if (f.wind !== "any") n++;
+  if (f.windMin !== null || f.windMax !== null) n++;
   if (f.destination !== "any") n++;
   if (f.named !== "any") n++;
   if (f.deleted !== "any") n++;
@@ -106,6 +117,20 @@ export function matchesFilters(f: Filters, r: RideView): boolean {
   // lightweight route preview the `gps` dimension checks.
   if (f.cached === "yes" && !r.gpx_cached) return false;
   if (f.cached === "no" && r.gpx_cached) return false;
+
+  // Historical wind resolved (Open-Meteo summary cached) for the ride.
+  if (f.wind === "yes" && !r.wind_resolved) return false;
+  if (f.wind === "no" && r.wind_resolved) return false;
+
+  // Average-wind-speed band (km/h). Only resolved rides carry a wind speed, so any
+  // bound excludes unresolved (and no-data) rides outright — mirroring how the
+  // distance band treats a missing distance.
+  if (f.windMin !== null || f.windMax !== null) {
+    const ws = r.wind_speed_kmh;
+    if (ws == null) return false;
+    if (f.windMin !== null && ws < f.windMin) return false;
+    if (f.windMax !== null && ws > f.windMax) return false;
+  }
 
   // Routed-destination presence. The location suffix is set only when the ride
   // navigated to a place (Beeline) or was tagged with one (imported GPX), so it
