@@ -30,6 +30,7 @@ class FakeBeelineApi implements BeelineApi {
   uploadCalls: string[] = [];
   renameCalls: { pushId: string; name: string }[] = [];
   deleteCalls: string[] = [];
+  exportCalls: string[] = [];
   constructor(public rides: Record<string, RawBeelineRide>) {}
 
   async fetchRides(): Promise<Record<string, RawBeelineRide>> {
@@ -64,6 +65,19 @@ class FakeBeelineApi implements BeelineApi {
     this.deleteCalls.push(pushId);
     if (!this.rides[pushId]) throw new Error("no such ride");
     delete this.rides[pushId];
+  }
+  async exportRideGpx(_s: BeelineSession, pushId: string): Promise<Uint8Array> {
+    this.exportCalls.push(pushId);
+    const raw = this.rides[pushId];
+    if (!raw || !raw.polyline) throw new Error("ride has no recorded track to export");
+    // A tiny full GPX with real per-point ele + time so extractFullTrack has data.
+    const start = raw.start ?? 0;
+    const gpx =
+      `<gpx version="1.1" creator="Beeline"><trk><trkseg>` +
+      `<trkpt lat="52.0" lon="5.0"><ele>10</ele><time>${new Date(start).toISOString()}</time></trkpt>` +
+      `<trkpt lat="52.001" lon="5.0"><ele>12</ele><time>${new Date(start + 10000).toISOString()}</time></trkpt>` +
+      `</trkseg></trk></gpx>`;
+    return new TextEncoder().encode(gpx);
   }
 }
 
@@ -268,6 +282,51 @@ describe("Controller + BeelineRideSource (no network)", () => {
     expect(gpx).toContain("<gpx");
     expect(gpx).toContain("<trkpt ");
     expect(gpx).toContain("Evening ride, Springharbor");
+  });
+
+  it("downloads the FULL GPX from the cloud in full mode and caches the full track", async () => {
+    const api = new FakeBeelineApi(structuredClone(FIXTURE));
+    const c = makeController(api);
+    await c.connect();
+    c.scan("all", null);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    const key = beelineRideKey(FIXTURE[UPLOADED].start as number);
+    const files: { bytes: Uint8Array }[] = [];
+    c.onGpx((f) => files.push(f));
+
+    // Full mode must hit the cloud export even though the ride already has a cached track.
+    c.downloadGpx([key], "", "full");
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    expect(api.exportCalls).toContain(UPLOADED);
+    expect(files.length).toBe(1);
+    const gpx = new TextDecoder().decode(files[0].bytes);
+    expect(gpx).toContain("<ele>");
+    expect(gpx).toContain("<time>");
+    // The full track (with real timestamps) is cached in memory for the session.
+    const ft = c.getFullTrack(key);
+    expect(ft).not.toBeNull();
+    expect(ft?.times.every((t) => t != null)).toBe(true);
+    expect(ft?.eles.every((e) => e != null)).toBe(true);
+  });
+
+  it("fetchFullTrack returns the parsed track and caches it (one fetch on revisit)", async () => {
+    const api = new FakeBeelineApi(structuredClone(FIXTURE));
+    const c = makeController(api);
+    await c.connect();
+    c.scan("all", null);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    const key = beelineRideKey(FIXTURE[UPLOADED].start as number);
+    const ft = await c.fetchFullTrack(key);
+    expect(ft.points.length).toBeGreaterThanOrEqual(2);
+    expect(ft.eles[0]).toBe(10);
+    expect(api.exportCalls).toEqual([UPLOADED]);
+
+    // A second call is served from the in-memory cache — no extra cloud fetch.
+    await c.fetchFullTrack(key);
+    expect(api.exportCalls).toEqual([UPLOADED]);
   });
 
   it("renames a ride on the backend and mirrors the new name locally (keeping its place suffix)", async () => {

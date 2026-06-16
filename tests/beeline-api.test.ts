@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
   type BeelineSession,
   deleteRide,
+  exportRideGpx,
+  gunzip,
   isTerminalStatus,
   mapBeelineRide,
   type RawBeelineRide,
@@ -288,6 +291,84 @@ describe("renameRide / deleteRide (RTDB writes)", () => {
     vi.stubGlobal("fetch", stub);
     try {
       await expect(deleteRide(SESSION, "-PushId123")).rejects.toThrow(/HTTP 401/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("gunzip", () => {
+  it("decompresses gzip bytes", async () => {
+    const gz = new Uint8Array(gzipSync(Buffer.from("hello gpx")));
+    expect(new TextDecoder().decode(await gunzip(gz))).toBe("hello gpx");
+  });
+
+  it("passes through bytes that aren't gzipped", async () => {
+    const plain = new TextEncoder().encode("<gpx/>");
+    expect(await gunzip(plain)).toEqual(plain);
+  });
+});
+
+describe("exportRideGpx (full cloud track)", () => {
+  const SESSION: BeelineSession = {
+    idToken: "tok/+=en", // chars that MUST be URL-encoded where used in a URL
+    uid: "uid123",
+    email: "rider@example.com",
+    expiresAt: Date.now() + 3_600_000,
+  };
+
+  it("calls exportRide, then downloads + gunzips the storage object", async () => {
+    const gpx = `<gpx creator="Beeline"><trk><trkseg><trkpt lat="1" lon="2"><ele>3</ele></trkpt></trkseg></trk></gpx>`;
+    const gz = new Uint8Array(gzipSync(Buffer.from(gpx)));
+    const path = "ride-gpx-export/uid123/-Ride1.gpx.gz";
+    const calls: { url: string; init: RequestInit }[] = [];
+    const stub = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      if (url.includes("/exportRide")) {
+        return new Response(JSON.stringify({ result: path }), { status: 200 });
+      }
+      return new Response(gz, { status: 200 });
+    });
+    vi.stubGlobal("fetch", stub);
+    try {
+      const bytes = await exportRideGpx(SESSION, "-Ride1");
+      expect(new TextDecoder().decode(bytes)).toBe(gpx);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(calls).toHaveLength(2);
+    // 1) POST exportRide with a Bearer token + the rideId payload.
+    expect(calls[0].url).toContain("/exportRide");
+    expect(calls[0].init.method).toBe("POST");
+    expect((calls[0].init.headers as Record<string, string>).Authorization).toBe(
+      `Bearer ${SESSION.idToken}`,
+    );
+    expect(JSON.parse(calls[0].init.body as string)).toEqual({
+      data: { rideId: "-Ride1" },
+    });
+    // 2) GET the storage object: URL-encoded path, alt=media, Firebase auth header.
+    expect(calls[1].url).toContain("firebasestorage.googleapis.com");
+    expect(calls[1].url).toContain(encodeURIComponent(path));
+    expect(calls[1].url).toContain("alt=media");
+    expect((calls[1].init.headers as Record<string, string>).Authorization).toBe(
+      `Firebase ${SESSION.idToken}`,
+    );
+  });
+
+  it("maps a NOT_FOUND export to a clear 'no recorded track' error", async () => {
+    const stub = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: { status: "NOT_FOUND", message: "Unable to export ride due lack of ride points" },
+          }),
+          { status: 404 },
+        ),
+    );
+    vi.stubGlobal("fetch", stub);
+    try {
+      await expect(exportRideGpx(SESSION, "-Ride1")).rejects.toThrow(/no recorded track/);
     } finally {
       vi.unstubAllGlobals();
     }

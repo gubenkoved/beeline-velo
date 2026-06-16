@@ -19,13 +19,14 @@ import {
 } from "./parsing";
 import {
   type GpxFile,
+  type GpxMode,
   gpxDownloadName,
   gpxFilename,
   type RideSource,
   type SourceFactory,
 } from "./source";
 import { monthKey, monthLabel, type Settings, type Store, type UpsertFields } from "./store";
-import { encodedTrackToGpx, gpxToRoughTrack } from "./track";
+import { encodedTrackToGpx, extractFullTrack, type FullTrack, gpxToRoughTrack } from "./track";
 
 export interface RideView extends RideMetrics {
   key: string;
@@ -77,6 +78,13 @@ export class Controller {
   private deviceLabel = "";
   private readonly listeners = new Set<() => void>();
   private readonly gpxListeners = new Set<GpxListener>();
+  /**
+   * Full recorded tracks (real per-point time + elevation), fetched on demand and
+   * kept in memory for THIS SESSION ONLY — never persisted. They are ~500 KB each,
+   * so caching them across reloads would bloat IndexedDB at the thousands-of-rides
+   * scale; a revisit simply re-fetches.
+   */
+  private readonly fullTracks = new Map<string, FullTrack>();
 
   constructor(
     private readonly sourceFactory: SourceFactory,
@@ -108,6 +116,27 @@ export class Controller {
 
   private emitGpx(file: GpxFile): void {
     for (const fn of this.gpxListeners) fn(file);
+  }
+
+  /** The in-memory full track for a ride, or null when not fetched this session. */
+  getFullTrack(key: string): FullTrack | null {
+    return this.fullTracks.get(key) ?? null;
+  }
+
+  /**
+   * Fetch (or return the cached) FULL recorded track for one ride — the real ~1 Hz
+   * trace with per-point time + elevation. Interactive (not queued): the UI awaits
+   * it to upgrade a ride's map. Cached in memory for the session; throws when the
+   * ride has no recorded track or the source isn't connected.
+   */
+  async fetchFullTrack(key: string): Promise<FullTrack> {
+    const cached = this.fullTracks.get(key);
+    if (cached) return cached;
+    const source = this.sourceFor();
+    const ft = await source.fetchFullTrack(key);
+    this.fullTracks.set(key, ft);
+    this.notify();
+    return ft;
   }
 
   // -- connection --------------------------------------------------------
@@ -335,33 +364,40 @@ export class Controller {
     let removed = 0;
     let succeeded = 0;
     const failures: string[] = [];
+    const mode: GpxMode = (task.payload.mode as GpxMode) ?? "light";
     // Seed live progress so the queue panel shows "0 of N" while the sweep runs.
     task.progress = { done: 0, total: task.keys.length };
 
-    // Rides that already carry their FULL route in the cache (Beeline-sourced) can
-    // be exported entirely locally — no device, no network, no sign-in. Split those
-    // out and synthesize their GPX from the stored track; only the rest need the
-    // source. This is why GPX export works in Beeline's offline, cached-rides mode.
+    // In LIGHT mode, rides that already carry their route in the cache (Beeline-
+    // sourced) can be exported entirely locally — no device, no network, no sign-in.
+    // Split those out and synthesize their GPX from the stored track; only the rest
+    // need the source. (This is why light GPX export works in the offline, cached-
+    // rides mode.) In FULL mode every ride must be fetched from the cloud render, so
+    // nothing is handled locally.
     const remote: string[] = [];
-    for (const key of task.keys) {
-      const rec = this.store.rides.get(key);
-      if (rec && rec.source === "beeline" && rec.track) {
-        const title = rec.title || rec.title_base || "";
-        const xml = encodedTrackToGpx(rec.track, title || rideShortLabel(key) || key);
-        if (xml) {
-          this.emitGpx({
-            key,
-            filename: gpxFilename(key),
-            downloadName: gpxDownloadName(key, title),
-            bytes: new TextEncoder().encode(xml),
-          });
-          succeeded++;
+    if (mode === "full") {
+      remote.push(...task.keys);
+    } else {
+      for (const key of task.keys) {
+        const rec = this.store.rides.get(key);
+        if (rec && rec.source === "beeline" && rec.track) {
+          const title = rec.title || rec.title_base || "";
+          const xml = encodedTrackToGpx(rec.track, title || rideShortLabel(key) || key);
+          if (xml) {
+            this.emitGpx({
+              key,
+              filename: gpxFilename(key),
+              downloadName: gpxDownloadName(key, title),
+              bytes: new TextEncoder().encode(xml),
+            });
+            succeeded++;
+          } else {
+            failures.push(`${rideShortLabel(key) || key}: no route track to export`);
+          }
+          if (task.progress) task.progress.done++;
         } else {
-          failures.push(`${rideShortLabel(key) || key}: no route track to export`);
+          remote.push(key);
         }
-        if (task.progress) task.progress.done++;
-      } else {
-        remote.push(key);
       }
     }
 
@@ -375,7 +411,20 @@ export class Controller {
         new Set(remote),
         (msg) => report(msg),
         (file) => {
-          // Keep only a rough, compressed sketch of the route — never the full GPX.
+          // Keep only a rough, compressed sketch of the route in the cache — never the
+          // full GPX. In full mode we ALSO parse the real track into the in-memory
+          // session cache so the ride's map can use its real time + elevation at once.
+          if (mode === "full") {
+            try {
+              this.fullTracks.set(
+                file.key,
+                extractFullTrack(new TextDecoder().decode(file.bytes)),
+              );
+            } catch {
+              // A malformed GPX shouldn't sink the download; the rough sketch below
+              // still drives the display map.
+            }
+          }
           const rough = gpxToRoughTrack(file.bytes, this.store.settings.trackPointsPerKm);
           if (rough.polyline) {
             this.store.upsert(file.key, {
@@ -407,6 +456,7 @@ export class Controller {
         // Capture the ride's detail read during the export so a GPX download on a
         // ride we never opened still records its title/stats/Strava status.
         (detail) => this.persistDetail(detail),
+        mode,
       );
       succeeded += files.length;
     }
@@ -486,11 +536,14 @@ export class Controller {
     });
   }
 
-  /** Export each given ride's route as a GPX file handed to the UI to write to disk. */
-  downloadGpx(keys: string[], label = ""): TaskSnapshotResult {
+  /** Export each given ride's route as a GPX file handed to the UI to write to disk.
+   *  `mode` selects the lightweight stored-shape GPX (default, local) or the full
+   *  recorded track fetched from the cloud (see `GpxMode`). */
+  downloadGpx(keys: string[], label = "", mode: GpxMode = "light"): TaskSnapshotResult {
     return this.jobs.submit("download-gpx", {
       label: label || `${keys.length} rides`,
       keys,
+      payload: { mode },
     });
   }
 

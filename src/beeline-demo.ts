@@ -14,7 +14,7 @@
 
 import type { BeelineSession, RawBeelineRide } from "./beeline-api";
 import type { BeelineApi, BeelineSourceDeps } from "./beeline-source";
-import { encodePolyline, type LatLon, trackLengthKm } from "./track";
+import { decodePolyline, encodePolyline, type LatLon, trackLengthKm } from "./track";
 
 const DEMO_EMAIL = "demo@beeline.app";
 
@@ -320,6 +320,41 @@ class DemoBeelineApi implements BeelineApi {
     await this.delay(200);
     delete this.rides[pushId];
   }
+
+  async exportRideGpx(_s: BeelineSession, pushId: string): Promise<Uint8Array> {
+    await this.delay(300); // simulate the cloud render + download
+    const raw = this.rides[pushId];
+    if (!raw || !raw.polyline) {
+      throw new Error("ride has no recorded track to export");
+    }
+    return new TextEncoder().encode(buildDemoFullGpx(raw));
+  }
+}
+
+/**
+ * Synthesize a FULL recorded GPX (per-point `<ele>` + `<time>`) for one demo ride
+ * from its stored polyline. Timestamps are spread evenly across the ride's duration
+ * and elevation follows a gentle wave, so the demo's full-track map + elevation
+ * profile look real — mirroring what the cloud `exportRide` returns (decompressed).
+ */
+function buildDemoFullGpx(raw: RawBeelineRide): string {
+  const pts = raw.polyline ? decodePolyline(raw.polyline) : [];
+  const start = raw.start ?? Date.now();
+  const dur = raw.duration ?? raw.movingTime ?? pts.length * 1000;
+  const n = pts.length;
+  const trkpts = pts
+    .map(([lat, lon], i) => {
+      const frac = n > 1 ? i / (n - 1) : 0;
+      const t = new Date(start + frac * dur).toISOString();
+      const ele = (50 + Math.sin(frac * Math.PI * 3) * 20).toFixed(1);
+      return `<trkpt lat="${lat}" lon="${lon}"><ele>${ele}</ele><time>${t}</time></trkpt>`;
+    })
+    .join("");
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<gpx version="1.1" creator="Beeline" xmlns="http://www.topografix.com/GPX/1/1">` +
+    `<trk><name>Demo ride</name><trkseg>${trkpts}</trkseg></trk></gpx>`
+  );
 }
 
 /** Fake sign-in for demo mode — returns a throwaway session instantly. */

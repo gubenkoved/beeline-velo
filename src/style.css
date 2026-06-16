@@ -1738,6 +1738,120 @@ body.ridemap-open {
 .ridemap-canvas .leaflet-tile-pane {
   filter: grayscale(85%) brightness(0.6) contrast(1.1);
 }
+/* Cluster of full-track controls (status / fetch / recolour / hide profile). */
+.ridemap-tools {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ridemap-tools .hidden {
+  display: none;
+}
+.ridemap-color button {
+  cursor: pointer;
+}
+/* Inline, in-context feedback for the full-track fetch — visible even in the
+   full-screen map (where the bottom toast is easy to miss). Empty by default. */
+.ridemap-status {
+  flex: 0 1 auto;
+  max-width: 38vw;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ridemap-status:empty {
+  display: none;
+}
+.ridemap-status.busy::before {
+  /* tiny spinner reusing the app's accent so "working" reads at a glance */
+  content: "";
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.ridemap-status.err {
+  color: #ff9b8f;
+  white-space: normal;
+}
+/* The elevation profile drawn below the map from the full recorded track. Fixed
+   height so the map keeps the rest; hideable. The SVG fills the width. */
+.ridemap-profile {
+  flex: 0 0 auto;
+  height: 132px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  padding: 6px 12px 10px;
+  box-sizing: border-box;
+}
+.ridemap-profile.hidden {
+  display: none;
+}
+/* Persistent strip of headline stats the full recorded track unlocks (point
+   count, measured distance, real elevation gain/loss, recording span, speeds).
+   Sits between the bar and the map; only shown once a full track is loaded. */
+.ridemap-summary {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 8px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.ridemap-summary.hidden {
+  display: none;
+}
+.rms-chip {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.rms-chip b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.ridemap-profile svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+}
+.ridemap-profile .rp-area {
+  fill: rgba(252, 82, 0, 0.16);
+}
+.ridemap-profile .rp-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.ridemap-profile .rp-axis {
+  fill: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.ridemap-profile .rp-cursor {
+  stroke: #fff;
+  stroke-width: 1;
+  opacity: 0.7;
+}
+.ridemap-profile .rp-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--muted);
+  font-size: 13px;
+}
 .rdetailhint {
   margin-top: 8px;
   padding: 9px 11px;
@@ -2555,6 +2669,9 @@ body.heat-expanded {
   font-size: 13px;
   display: none;
   cursor: pointer;
+  /* Above the full-screen ride map (z-index 75) so a failure/notice is never
+     hidden behind it — the toast is the fallback when the map is closed. */
+  z-index: 80;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
 }
 .toast.err {

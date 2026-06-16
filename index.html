@@ -35,7 +35,8 @@
       <span class="split" id="selSplit">
         <button class="ghost small caret" data-splitmenu="sel" aria-haspopup="true" aria-expanded="false" title="More actions for the selected rides">More selected-ride actions</button>
         <span class="splitmenu" id="selMenu">
-          <button class="ghost small" id="btnGpxSaveSel" title="Download the full GPX file for the selected rides and save them to disk">Save .gpx files</button>
+          <button class="ghost small" id="btnGpxSaveSel" title="Save the lightweight route-only GPX (shape only, instant) for the selected rides">Save .gpx files</button>
+          <button class="ghost small" id="btnGpxSaveSelFull" title="Download the full recorded GPX (real per-point timestamps + elevation) for the selected rides and save them">Save full .gpx files</button>
           <button class="ghost small" id="btnUploadSel" title="Upload the selected pending rides to Strava">Upload selected to Strava</button>
         </span>
       </span>
@@ -221,10 +222,22 @@
   <div class="ridemap-bar">
     <span class="ridemap-title" id="rideMapTitle"></span>
     <span class="ridemap-hover" id="rideMapHover"></span>
-    <span class="ridemap-est" id="rideMapEst" title="Beeline's track has no per-point timestamps, so the time/clock shown on hover is estimated — interpolated from the ride's start/end (total elapsed) time assuming an even pace, not measured from the GPS track.">~ time is estimated</span>
+    <span class="ridemap-est" id="rideMapEst" title="Beeline's route polyline has no per-point timestamps, so the time/clock shown on hover is estimated — interpolated from the ride's start/end (total elapsed) time assuming an even pace, not measured. Fetch the full track for the real recorded time.">~ time is estimated</span>
+    <span class="ridemap-tools">
+      <span class="ridemap-status" id="rideMapStatus" role="status" aria-live="polite"></span>
+      <button class="small ghost" id="btnRideMapFull" type="button" title="Download the full recorded track (real per-point timestamps + elevation) and use it for this map">Fetch full track</button>
+      <span class="seg ridemap-color hidden" id="rideMapColor" role="group" aria-label="Colour the route by">
+        <button data-color="none" class="active" type="button" title="Plain route line">Route</button>
+        <button data-color="height" type="button" title="Colour the route by elevation">Height</button>
+        <button data-color="speed" type="button" title="Colour the route by speed">Speed</button>
+      </span>
+      <button class="small ghost hidden" id="btnRideMapProfile" type="button" aria-pressed="true" title="Show or hide the elevation profile">Hide profile</button>
+    </span>
     <button class="small ghost" id="btnRideMapClose" type="button" title="Close (Esc)" aria-label="Close">Close</button>
   </div>
+  <div class="ridemap-summary hidden" id="rideMapSummary" aria-live="polite"></div>
   <div class="ridemap-canvas" id="rideMapBig"></div>
+  <div class="ridemap-profile hidden" id="rideMapProfile" aria-hidden="true"></div>
 </div>
 
 <div class="srcpick hidden" id="srcPick" role="dialog" aria-modal="true" aria-label="Choose a data source">

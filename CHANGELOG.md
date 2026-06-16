@@ -17,6 +17,19 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Full recorded GPX track: fetch on demand, real time/elevation map + profile
+- **What:** Fetch a ride's full recorded GPX on demand (cloud `exportRide` → Firebase
+  Storage → gunzip: the real ~1 Hz track with per-point time + elevation), kept in
+  memory for the session and never persisted; the lightweight polyline still drives the
+  list/heatmap. On the single-ride map it replaces the even-pace time *estimate* with
+  real time/elevation/speed on hover, adds a hideable elevation profile, a height/speed
+  route recolour, and a summary strip (points, measured distance, elevation gain/loss,
+  recording span, peak/avg speed). Save-GPX offers light (route-only, local) and full
+  (cloud) variants, per-ride and bulk; a failed fetch shows inline (with Retry) + toast.
+- **Why:** The ride record only carries a downsampled polyline (no time/elevation), so
+  every per-point readout was an estimate. The cloud holds the real trace; exposing it
+  on demand gives honest time attribution and elevation without bloating storage.
+
 ## Compact the distance/speed chart panel on narrow screens
 - **What:** On ≤560px the Explore chart panel's header no longer wastes vertical
   space. The four KPIs (total / rides / avg / avg-per-ride) dropped their

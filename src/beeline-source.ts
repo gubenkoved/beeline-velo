@@ -19,6 +19,7 @@
 import {
   type BeelineSession,
   deleteRide,
+  exportRideGpx,
   fetchRides,
   fetchStravaActivity,
   isTerminalStatus,
@@ -40,6 +41,7 @@ import {
 import {
   type CatalogResult,
   type GpxFile,
+  type GpxMode,
   gpxDownloadName,
   gpxFilename,
   type Progress,
@@ -48,7 +50,7 @@ import {
   type Sleep,
 } from "./source";
 import type { UpsertFields } from "./store";
-import { encodedTrackToGpx } from "./track";
+import { encodedTrackToGpx, extractFullTrack, type FullTrack } from "./track";
 
 /** The backend surface the source depends on — injectable so tests use a fake. */
 export interface BeelineApi {
@@ -60,6 +62,8 @@ export interface BeelineApi {
   ): Promise<RawBeelineRide["strava_activity"]>;
   renameRide(session: BeelineSession, pushId: string, newName: string): Promise<void>;
   deleteRide(session: BeelineSession, pushId: string): Promise<void>;
+  /** Fetch one ride's full recorded GPX (decompressed bytes) from the cloud. */
+  exportRideGpx(session: BeelineSession, pushId: string): Promise<Uint8Array>;
 }
 
 const realApi: BeelineApi = {
@@ -68,6 +72,7 @@ const realApi: BeelineApi = {
   fetchStravaActivity,
   renameRide,
   deleteRide,
+  exportRideGpx,
 };
 
 /** Optional dependency overrides (used by tests to avoid the network). */
@@ -265,22 +270,67 @@ export class BeelineRideSource implements RideSource {
     onMissing: (keys: string[]) => void = () => {},
     onFail: (key: string, reason: string) => void = () => {},
     onDetail: (detail: RideDetail) => void = () => {},
+    mode: GpxMode = "light",
   ): Promise<GpxFile[]> {
     if (this.byKey.size === 0) await this.refresh(null);
 
-    const results: GpxFile[] = [];
+    // Split requested keys into found vs. vanished (deleted on the server).
+    const found: string[] = [];
     const missing: string[] = [];
     for (const key of keys) {
+      if (this.byKey.has(key)) found.push(key);
+      else missing.push(key);
+    }
+    if (missing.length) onMissing(missing);
+
+    const results: GpxFile[] = [];
+    let cancelled = false;
+    const rep: Progress = async (msg) => {
+      const stop = await progress(msg);
+      if (stop) cancelled = true;
+      return stop;
+    };
+
+    if (mode === "full") {
+      // Full mode: fetch each ride's real recorded track from the cloud. These are
+      // independent network calls, so run them through the same bounded pool the
+      // uploads use (a ride's GPX is ~500 KB and a render takes a moment).
+      const handle = async (key: string): Promise<void> => {
+        const entry = this.byKey.get(key);
+        if (!entry) return;
+        const name = rideShortLabel(key) || key;
+        const detail = this.detailFor(key, entry.raw);
+        onDetail(detail);
+        if (await rep(`downloading full GPX: ${name}…`)) return;
+        try {
+          const bytes = await this.api.exportRideGpx(this.session, entry.pushId);
+          const file: GpxFile = {
+            key,
+            filename: gpxFilename(key),
+            downloadName: gpxDownloadName(key, detail.title),
+            bytes,
+          };
+          results.push(file);
+          onGpx(file);
+        } catch (err) {
+          onFail(key, err instanceof Error ? err.message : String(err));
+        }
+      };
+      const poolSize = Math.max(1, this.concurrency());
+      await runPool(found, poolSize, handle, () => cancelled);
+      return results;
+    }
+
+    // Light mode: synthesize a shape-only GPX from the cached polyline. Instant and
+    // entirely local, so a simple sequential pass is plenty.
+    for (const key of found) {
       const entry = this.byKey.get(key);
+      if (!entry) continue;
       const name = rideShortLabel(key) || key;
-      if (!entry) {
-        missing.push(key);
-        continue;
-      }
-      if (await progress(`building GPX: ${name}…`)) break;
-      // Record the ride's detail too, alongside the GPX.
-      onDetail(this.detailFor(key, entry.raw));
-      const file = synthesizeGpx(key, entry.raw, this.detailFor(key, entry.raw).title);
+      if (await rep(`building GPX: ${name}…`)) break;
+      const detail = this.detailFor(key, entry.raw);
+      onDetail(detail);
+      const file = synthesizeGpx(key, entry.raw, detail.title);
       if (!file) {
         onFail(key, "ride has no route track to export");
         continue;
@@ -288,8 +338,15 @@ export class BeelineRideSource implements RideSource {
       results.push(file);
       onGpx(file);
     }
-    if (missing.length) onMissing(missing);
     return results;
+  }
+
+  async fetchFullTrack(key: string, progress: Progress = () => false): Promise<FullTrack> {
+    const name = rideShortLabel(key) || key;
+    await progress(`downloading full track: ${name}…`);
+    const pushId = await this.resolvePushId(key);
+    const bytes = await this.api.exportRideGpx(this.session, pushId);
+    return extractFullTrack(new TextDecoder().decode(bytes));
   }
 
   /**

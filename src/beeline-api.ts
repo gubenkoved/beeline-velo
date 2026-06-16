@@ -42,6 +42,11 @@ const FIREBASE_API_KEY = "AIzaSyDS48dtvbuXhM5mWwygLY7CM5kpFbe6L0U";
 const RTDB_BASE = "https://beeline-e46ed.firebaseio.com";
 const FUNCTIONS_BASE = "https://us-central1-beeline-e46ed.cloudfunctions.net";
 const IDENTITY_BASE = "https://www.googleapis.com/identitytoolkit/v3/relyingparty";
+// Firebase Storage REST host + bucket holding the server-rendered full-track GPX
+// (`exportRide` writes `ride-gpx-export/<uid>/<pushId>.gpx.gz` here). The same
+// host the Firebase JS SDK downloads through, so it is browser/CORS-friendly.
+const STORAGE_BASE = "https://firebasestorage.googleapis.com";
+const STORAGE_BUCKET = "beeline-e46ed.appspot.com";
 const ANDROID_PACKAGE = "co.beeline";
 const ANDROID_CERT = "8DB76C76142E30EEF0D04F5BF738A4BAA6049642";
 
@@ -132,6 +137,13 @@ async function request<T>(
   try {
     resp = await fetch(url, {
       method,
+      // NEVER use credentials:"include" here. Beeline's auth rides in the `?auth=`
+      // query param / `Authorization` header, not cookies, and credentialed mode
+      // makes the browser reject Storage's wildcard `ACAO: *` and an `Origin: null`
+      // (file://) match — turning every call into a CORS block. The default
+      // ("same-origin") is what keeps the cross-origin reads/writes working from any
+      // origin. Proven in temp/beeline-protocol.md §10.8.
+      credentials: "same-origin",
       headers: {
         Accept: "application/json",
         ...(opts.body !== undefined
@@ -222,6 +234,98 @@ export async function uploadRideToStrava(
     headers: { Authorization: `Bearer ${session.idToken}` },
     body: { data: { rideId: pushId } },
   });
+}
+
+// -- 3b. full-track GPX export ----------------------------------------------
+//
+// The RTDB ride record only carries a downsampled `polyline` (lat/lon, no time or
+// elevation). The app's "export GPX" is instead a SERVER-SIDE render behind the
+// callable Cloud Function `exportRide`, which returns a Firebase Storage path to a
+// gzipped GPX holding the real ~1 Hz recorded trace WITH per-point `<time>` and
+// `<ele>`. See temp/beeline-protocol.md §6 (verified live). Two hops + a gunzip:
+//   1. POST {FUNCTIONS}/exportRide  Bearer idToken  {data:{rideId}}
+//        -> { result: "ride-gpx-export/<uid>/<pushId>.gpx.gz" }   (a Storage path)
+//   2. GET {STORAGE}/v0/b/<bucket>/o/<urlenc path>?alt=media  Authorization: Firebase idToken
+//        -> gzipped GPX bytes  ->  gunzip
+
+/**
+ * Export one ride's FULL recorded track as GPX bytes (decompressed text). This is
+ * the genuine ~1 Hz trace with real timestamps and elevation — far richer than the
+ * `polyline` in the ride record — fetched only on demand (it is ~500 KB/ride).
+ * Throws a clear BeelineError when the ride has no recorded points to export.
+ */
+export async function exportRideGpx(
+  session: BeelineSession,
+  pushId: string,
+): Promise<Uint8Array> {
+  let res: { result?: string };
+  try {
+    res = await request<{ result?: string }>("POST", `${FUNCTIONS_BASE}/exportRide`, {
+      headers: { Authorization: `Bearer ${session.idToken}` },
+      body: { data: { rideId: pushId } },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Partial rides (no on-device track) come back as a callable NOT_FOUND.
+    if (/ride points|NOT_FOUND|not\s*found/i.test(msg)) {
+      throw new BeelineError("ride has no recorded track to export");
+    }
+    throw err;
+  }
+  const path = res.result;
+  if (!path || typeof path !== "string") {
+    throw new BeelineError("Beeline exportRide returned no GPX file path");
+  }
+  const gz = await downloadStorageObject(session, path);
+  return gunzip(gz);
+}
+
+/** Download a Firebase Storage object's raw bytes by its object path. */
+async function downloadStorageObject(
+  session: BeelineSession,
+  objectPath: string,
+): Promise<Uint8Array> {
+  const url =
+    `${STORAGE_BASE}/v0/b/${STORAGE_BUCKET}/o/${encodeURIComponent(objectPath)}` +
+    `?alt=media`;
+  let resp: Response;
+  try {
+    // Storage returns a wildcard `Access-Control-Allow-Origin: *` and allow-lists
+    // the `Authorization` header, so this cross-origin GET is readable from any
+    // origin — but ONLY with the default ("same-origin") credentials: a wildcard
+    // ACAO is rejected by the browser under credentials:"include". Keep it default.
+    // See temp/beeline-protocol.md §10.6/§10.8.
+    resp = await fetch(url, {
+      credentials: "same-origin",
+      headers: { Authorization: `Firebase ${session.idToken}` },
+    });
+  } catch (err) {
+    throw new BeelineError(
+      `network error downloading GPX from Beeline storage: ${(err as Error).message}`,
+    );
+  }
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new BeelineError(
+      `Beeline storage download failed: HTTP ${resp.status} ${detail.slice(0, 300)}`,
+    );
+  }
+  return new Uint8Array(await resp.arrayBuffer());
+}
+
+/**
+ * Gunzip bytes via the native `DecompressionStream` (evergreen browsers + Node 18+;
+ * no dependency). When the bytes lack the gzip magic header (`1f 8b`) — e.g. a host
+ * that transparently decoded `Content-Encoding: gzip` — they're returned unchanged
+ * so a plain GPX still parses.
+ */
+export async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
+  if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
+  const ds = new DecompressionStream("gzip");
+  const writer = ds.writable.getWriter();
+  void writer.write(bytes as BufferSource);
+  void writer.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
 }
 
 // -- 4. rename / delete -----------------------------------------------------

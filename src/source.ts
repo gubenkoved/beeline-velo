@@ -15,6 +15,7 @@
 
 import { type RideCard, type RideDetail, rideDatetime } from "./parsing";
 import type { UpsertFields } from "./store";
+import type { FullTrack } from "./track";
 
 /** Which backend a source talks to (mirrors RideRecord.source). */
 export type SourceKind = "beeline";
@@ -32,6 +33,15 @@ export interface GpxFile {
 
 /** Per-ride outcome of a GPX export. */
 export type GpxExport = { ok: true; file: GpxFile } | { ok: false; reason: string };
+
+/**
+ * Which GPX a download produces:
+ * - `light` — the lightweight, shape-only file synthesized from the stored route
+ *   polyline (no timestamps/elevation; instant, local, no network).
+ * - `full`  — the genuine recorded track fetched from the backend on demand, with
+ *   real per-point `<time>` and `<ele>` (richer, but a network round-trip per ride).
+ */
+export type GpxMode = "light" | "full";
 
 /** Result of a catalogue scan. `complete` is true only when the ride list was
  *  read end-to-end — the precondition for trusting that an in-window ride we knew
@@ -122,7 +132,8 @@ export interface RideSource {
     onError?: (key: string, reason: string) => void,
   ): Promise<RideDetail[]>;
 
-  /** Obtain a GPX file per ride, streaming each via `onGpx`. */
+  /** Obtain a GPX file per ride, streaming each via `onGpx`. The `mode` selects the
+   *  lightweight stored-shape export or the full recorded track (see `GpxMode`). */
   downloadGpx(
     keys: Set<string>,
     progress?: Progress,
@@ -130,7 +141,12 @@ export interface RideSource {
     onMissing?: (keys: string[]) => void,
     onFail?: (key: string, reason: string) => void,
     onDetail?: (detail: RideDetail) => void,
+    mode?: GpxMode,
   ): Promise<GpxFile[]>;
+
+  /** Fetch one ride's FULL recorded track (real per-point time + elevation) on
+   *  demand. Throws when the ride has no recorded points to export. */
+  fetchFullTrack(key: string, progress?: Progress): Promise<FullTrack>;
 
   /** Rename a ride on the backend; resolves to the updated detail. */
   renameRide(key: string, newTitle: string, progress?: Progress): Promise<RideDetail>;

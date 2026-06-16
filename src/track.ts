@@ -26,6 +26,165 @@ export function extractTrack(gpx: string): LatLon[] {
   return out;
 }
 
+/**
+ * A FULL recorded track: route geometry plus per-point elevation and timestamp.
+ *
+ * Unlike the rough display polyline (shape only), this is the genuine ~1 Hz trace
+ * the Beeline cloud renders on demand (see `extractFullTrack`). `eles[i]`/`times[i]`
+ * are null when that point lacked the datum, so callers must tolerate gaps.
+ */
+export interface FullTrack {
+  points: LatLon[];
+  /** Elevation in metres per point (null when the point had no `<ele>`). */
+  eles: (number | null)[];
+  /** Epoch milliseconds per point (null when the point had no `<time>`). */
+  times: (number | null)[];
+}
+
+/**
+ * Parse a full GPX track — `<trkpt>` lat/lon plus each point's optional `<ele>`
+ * (metres) and `<time>` (ISO-8601 → epoch ms). Falls back to `<rtept>` when there
+ * are no track points. Points with an unparseable lat/lon are skipped entirely.
+ */
+export function extractFullTrack(gpx: string): FullTrack {
+  const doc = new DOMParser().parseFromString(gpx, "text/xml");
+  let nodes = Array.from(doc.getElementsByTagName("trkpt"));
+  if (nodes.length === 0) nodes = Array.from(doc.getElementsByTagName("rtept"));
+  const points: LatLon[] = [];
+  const eles: (number | null)[] = [];
+  const times: (number | null)[] = [];
+  for (const p of nodes) {
+    const lat = Number(p.getAttribute("lat"));
+    const lon = Number(p.getAttribute("lon"));
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    points.push([lat, lon]);
+    const eleEl = p.getElementsByTagName("ele")[0];
+    const ele = eleEl ? Number(eleEl.textContent) : Number.NaN;
+    eles.push(Number.isFinite(ele) ? ele : null);
+    const timeEl = p.getElementsByTagName("time")[0];
+    const t = timeEl ? Date.parse(timeEl.textContent ?? "") : Number.NaN;
+    times.push(Number.isFinite(t) ? t : null);
+  }
+  return { points, eles, times };
+}
+
+/** True when at least two points carry a real `<ele>` (an elevation profile exists). */
+export function hasElevation(ft: FullTrack): boolean {
+  return ft.eles.filter((e) => e != null).length >= 2;
+}
+
+/** True when at least two points carry a real `<time>` (real time attribution exists). */
+export function hasTimes(ft: FullTrack): boolean {
+  return ft.times.filter((t) => t != null).length >= 2;
+}
+
+/**
+ * Per-point speed in km/h derived from a full track's timestamps + geometry. Each
+ * point's speed measures the hop to the NEXT point (Δdistance / Δtime); the final
+ * point repeats the previous value so the series has no trailing gap. Entries are
+ * null where either endpoint lacked a timestamp or time didn't advance.
+ */
+export function fullTrackSpeedsKmh(ft: FullTrack): (number | null)[] {
+  const n = ft.points.length;
+  const out: (number | null)[] = new Array(n).fill(null);
+  for (let i = 1; i < n; i++) {
+    const t0 = ft.times[i - 1];
+    const t1 = ft.times[i];
+    if (t0 == null || t1 == null) continue;
+    const dtH = (t1 - t0) / 3_600_000; // ms → hours
+    if (dtH <= 0) continue;
+    out[i - 1] = haversineKm(ft.points[i - 1], ft.points[i]) / dtH;
+  }
+  if (n >= 2 && out[n - 1] == null) out[n - 1] = out[n - 2];
+  return out;
+}
+
+/**
+ * Centered moving average over a numeric series that tolerates null gaps (nulls are
+ * skipped, and a window with no real values stays null). `radius` is the number of
+ * neighbours on each side. Used to tame noisy ~1 Hz GPS speed before colouring.
+ */
+export function movingAverage(values: (number | null)[], radius: number): (number | null)[] {
+  const r = Math.max(0, Math.floor(radius));
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  for (let i = 0; i < values.length; i++) {
+    let sum = 0;
+    let count = 0;
+    for (let j = i - r; j <= i + r; j++) {
+      const v = values[j];
+      if (j >= 0 && j < values.length && v != null) {
+        sum += v;
+        count++;
+      }
+    }
+    if (count > 0) out[i] = sum / count;
+  }
+  return out;
+}
+
+/** Rich, full-track-only stats — what fetching the recorded trace unlocks beyond
+ *  the downsampled polyline. Fields are null when the track lacks the inputs. */
+export interface FullTrackSummary {
+  /** Number of recorded GPS points. */
+  points: number;
+  /** Total distance measured along the recorded track (km). */
+  distanceKm: number;
+  /** Cumulative ascent / descent in metres (from per-point `<ele>`); null without elevation. */
+  gainM: number | null;
+  lossM: number | null;
+  /** Wall-clock recording span in seconds (last − first timestamp); null without times. */
+  recordedSec: number | null;
+  /** Peak / average speed in km/h derived from the per-point timestamps; null without times. */
+  maxKmh: number | null;
+  avgKmh: number | null;
+}
+
+/**
+ * Summarize a full recorded track into the headline stats it uniquely provides —
+ * point count, measured distance, real elevation gain/loss, recording span and
+ * peak/average speed. Elevation and time-based fields fall back to null when the
+ * track carries no `<ele>` / `<time>`, so callers render only what's real.
+ */
+export function fullTrackSummary(ft: FullTrack): FullTrackSummary {
+  const distanceKm = trackLengthKm(ft.points);
+
+  let gainM: number | null = null;
+  let lossM: number | null = null;
+  if (hasElevation(ft)) {
+    let gain = 0;
+    let loss = 0;
+    let prev: number | null = null;
+    for (const e of ft.eles) {
+      if (e == null) continue;
+      if (prev != null) {
+        const d = e - prev;
+        if (d > 0) gain += d;
+        else loss -= d;
+      }
+      prev = e;
+    }
+    gainM = gain;
+    lossM = loss;
+  }
+
+  let recordedSec: number | null = null;
+  let maxKmh: number | null = null;
+  let avgKmh: number | null = null;
+  if (hasTimes(ft)) {
+    const times = ft.times.filter((t): t is number => t != null);
+    const span = (times[times.length - 1] - times[0]) / 1000;
+    recordedSec = span > 0 ? span : null;
+    // Peak speed from the smoothed per-point series (raw ~1 Hz GPS is noisy).
+    const speeds = movingAverage(fullTrackSpeedsKmh(ft), 3);
+    let max = 0;
+    for (const s of speeds) if (s != null && s > max) max = s;
+    maxKmh = max > 0 ? max : null;
+    if (recordedSec) avgKmh = distanceKm / (recordedSec / 3600);
+  }
+
+  return { points: ft.points.length, distanceKm, gainM, lossM, recordedSec, maxKmh, avgKmh };
+}
+
 /** Great-circle distance between two lat/lon points, in kilometres (haversine). */
 function haversineKm(a: LatLon, b: LatLon): number {
   const R = 6371; // mean Earth radius (km)

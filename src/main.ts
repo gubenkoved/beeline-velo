@@ -46,7 +46,16 @@ import { BeelineRideSource, type BeelineSourceDeps } from "./beeline-source";
 import { idbBackend, memoryBackend } from "./kv";
 import type { SourceFactory } from "./source";
 import { Store } from "./store";
-import { cumulativeKm, decodePolyline } from "./track";
+import {
+  cumulativeKm,
+  decodePolyline,
+  type FullTrack,
+  fullTrackSpeedsKmh,
+  fullTrackSummary,
+  hasElevation,
+  hasTimes,
+  movingAverage,
+} from "./track";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string): T =>
   document.querySelector(sel) as T;
@@ -500,9 +509,9 @@ function trackBlock(key: string, track: string): string {
 }
 
 /**
- * Expanded-details body for an open ride. When a ride has never been Checked its
- * detail stats (speeds / moving time / elevation) are unknown, so instead of an
- * empty bordered grid we show a clear prompt telling the user to press Check.
+ * Expanded-details body for an open ride. A ride with no stats has none recorded
+ * yet — almost always because it's still in progress (the device hasn't finished
+ * and synced the ride), so instead of an empty grid we say so.
  */
 function detailsBlock(r: RideView): string {
   const hasStats =
@@ -515,8 +524,8 @@ function detailsBlock(r: RideView): string {
   if (!hasStats) {
     const checking = RUNNING.has(r.key) || ACTIVE.has(r.key);
     const msg = checking
-      ? `Checking… loading this ride's stats and route.`
-      : `No details yet — press <b>Check</b> to load this ride's stats and route.`;
+      ? `Loading this ride's stats and route…`
+      : `No stats for this ride yet — it may still be in progress. Stats and route appear once the ride finishes and syncs (re-sync to refresh).`;
     return `<div class="rdetailhint">${msg}</div>`;
   }
   return (
@@ -580,14 +589,23 @@ function mountMaps(): void {
 // --------------------------------------------------------------------------- //
 // Full-screen single-ride route map (opened from a ride's mini-map). Shows the
 // one track big and interactive; hovering the track reports how far into the ride
-// that point is. NOTE: Beeline gives us only the route geometry (lat/lon) with NO
-// per-point timestamps, so the time is an EVEN-PACE ESTIMATE (cumulative-distance
-// fraction × elapsed time) — always rendered with a "~" and an "estimated" note,
-// never as if it were a real recorded timestamp.
+// that point is. By default Beeline gives us only the route geometry (lat/lon),
+// so the time is an EVEN-PACE ESTIMATE (cumulative-distance fraction × elapsed
+// time) — rendered with a "~" and an "estimated" note. The user can fetch the
+// FULL recorded track on demand (real per-point time + elevation); once loaded
+// the hover readout, route colouring and elevation profile use those real values
+// and the "~" estimate disclaimer is dropped.
 // --------------------------------------------------------------------------- //
 let rideMapBig: L.Map | null = null;
-let rideMapLine: L.Polyline | null = null;
+/** Layer group holding the route line(s) — one orange line, or recoloured segments. */
+let rideMapLineLayer: L.LayerGroup | null = null;
 let rideMapMarker: L.CircleMarker | null = null;
+/** The ride key currently open in the full-screen map (null when closed). */
+let rideMapKey: string | null = null;
+/** How the route line is coloured: plain, by elevation, or by speed. */
+let rideMapColorMode: "none" | "height" | "speed" = "none";
+/** Whether the elevation profile panel is shown (when a full track is loaded). */
+let rideMapProfileShown = true;
 /** Cached hover state for the open ride map, recomputed on pan/zoom/resize. */
 let rideHover: {
   pts: [number, number][];
@@ -596,6 +614,10 @@ let rideHover: {
   elapsedSec: number;
   startMs: number | null;
   px: L.Point[]; // track points projected to container pixels (cache)
+  /** The full recorded track, when fetched — enables real time + elevation. */
+  full: FullTrack | null;
+  /** Smoothed per-point speed (km/h) when a full track with timestamps is loaded. */
+  speeds: (number | null)[] | null;
 } | null = null;
 
 /** Seconds → "H:MM:SS" / "M:SS" for the hover readout. */
@@ -608,22 +630,208 @@ function fmtSecsShort(sec: number): string {
   return hh > 0 ? `${hh}:${p2(mm)}:${p2(ss)}` : `${mm}:${p2(ss)}`;
 }
 
+/**
+ * Write an inline status message into the ride-map bar (`#rideMapStatus`). This is
+ * the in-context feedback channel for the full-screen map, where the bottom toast
+ * is easy to miss — an error here stays put next to the "Fetch full track" button
+ * until the next action. `kind` controls styling; "" clears it.
+ */
+function setRideMapStatus(msg: string, kind: "info" | "error" | "" = ""): void {
+  const el = document.getElementById("rideMapStatus");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.toggle("err", kind === "error");
+  el.classList.toggle("busy", kind === "info");
+}
+
+/** Min/max of the finite entries in a (possibly null-holed) numeric series. */
+function finiteRange(values: (number | null)[]): { lo: number; hi: number } | null {
+  let lo = Number.POSITIVE_INFINITY;
+  let hi = Number.NEGATIVE_INFINITY;
+  for (const v of values) {
+    if (v == null) continue;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  return Number.isFinite(lo) && Number.isFinite(hi) ? { lo, hi } : null;
+}
+
+/** Map a normalized value t∈[0,1] to a blue→green→red heat colour (low→high). */
+function heatColor(t: number): string {
+  const c = Math.max(0, Math.min(1, t));
+  return `hsl(${Math.round((1 - c) * 240)}, 82%, 55%)`;
+}
+
 /** Re-project the open track to container pixels (after a pan / zoom / resize). */
 function reprojectRideHover(): void {
   if (!rideMapBig || !rideHover) return;
   rideHover.px = rideHover.pts.map((p) => rideMapBig!.latLngToContainerPoint(p));
 }
 
+/** Draw (or redraw) the route line for the open ride, honouring the colour mode.
+ *  Plain orange unless a full track is loaded AND a height/speed mode is active,
+ *  in which case the route is split into colour-graded segments. */
+function drawRideLine(): void {
+  if (!rideMapBig || !rideHover) return;
+  if (rideMapLineLayer) {
+    rideMapLineLayer.remove();
+    rideMapLineLayer = null;
+  }
+  const layer = L.layerGroup().addTo(rideMapBig);
+  rideMapLineLayer = layer;
+  const pts = rideHover.pts;
+  // White casing underneath for legibility over the basemap.
+  L.polyline(pts, { color: "#ffffff", weight: 7, opacity: 0.9 }).addTo(layer);
+
+  const full = rideHover.full;
+  const values =
+    rideMapColorMode === "height"
+      ? (full?.eles ?? null)
+      : rideMapColorMode === "speed"
+        ? rideHover.speeds
+        : null;
+  const range = values ? finiteRange(values) : null;
+  if (rideMapColorMode === "none" || !full || !values || !range) {
+    L.polyline(pts, { color: "#fc5200", weight: 4 }).addTo(layer);
+    return;
+  }
+  const span = range.hi - range.lo || 1;
+  // Cap the number of drawn segments so a multi-thousand-point track stays snappy;
+  // the colour gradient reads smoothly at a few hundred segments.
+  const maxSeg = 500;
+  const stride = Math.max(1, Math.floor((pts.length - 1) / maxSeg));
+  for (let i = stride; i < pts.length; i += stride) {
+    const seg = pts.slice(i - stride, i + 1);
+    const v = values[Math.min(i, values.length - 1)];
+    const t = v == null ? 0.5 : (v - range.lo) / span;
+    L.polyline(seg, { color: heatColor(t), weight: 4, opacity: 0.95 }).addTo(layer);
+  }
+}
+
+/** Render the elevation-vs-distance profile below the map from the full track. */
+function renderRideProfile(): void {
+  const host = document.getElementById("rideMapProfile");
+  if (!host) return;
+  const full = rideHover?.full ?? null;
+  if (!rideMapProfileShown || !full || !hasElevation(full)) {
+    host.classList.add("hidden");
+    host.setAttribute("aria-hidden", "true");
+    host.innerHTML = "";
+    return;
+  }
+  host.classList.remove("hidden");
+  host.setAttribute("aria-hidden", "false");
+
+  const cum = rideHover!.cum;
+  const eles = full.eles;
+  const range = finiteRange(eles);
+  if (!range) {
+    host.innerHTML = `<div class="rp-empty">No elevation data in this track.</div>`;
+    return;
+  }
+  const W = 1000;
+  const H = 120;
+  const padX = 4;
+  const padTop = 8;
+  const padBot = 18;
+  const totalKm = rideHover!.totalKm || 1;
+  const eSpan = range.hi - range.lo || 1;
+  const xOf = (km: number) => padX + (km / totalKm) * (W - 2 * padX);
+  const yOf = (e: number) => padTop + (1 - (e - range.lo) / eSpan) * (H - padTop - padBot);
+
+  // Build the area + line path over points that carry an elevation.
+  let line = "";
+  let firstX = padX;
+  let lastX = padX;
+  let started = false;
+  for (let i = 0; i < eles.length; i++) {
+    const e = eles[i];
+    if (e == null) continue;
+    const x = xOf(cum[i]);
+    const y = yOf(e);
+    if (!started) {
+      firstX = x;
+      line = `M${x.toFixed(1)},${y.toFixed(1)}`;
+      started = true;
+    } else {
+      line += ` L${x.toFixed(1)},${y.toFixed(1)}`;
+    }
+    lastX = x;
+  }
+  const baseY = (H - padBot).toFixed(1);
+  const area = `${line} L${lastX.toFixed(1)},${baseY} L${firstX.toFixed(1)},${baseY} Z`;
+  host.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" ` +
+    `aria-label="Elevation profile">` +
+    `<path class="rp-area" d="${area}"/>` +
+    `<path class="rp-line" d="${line}"/>` +
+    `<line class="rp-cursor" id="rpCursor" x1="0" y1="${padTop}" x2="0" y2="${baseY}" style="display:none"/>` +
+    `<text class="rp-axis" x="${padX}" y="12">${Math.round(range.hi)} m</text>` +
+    `<text class="rp-axis" x="${padX}" y="${H - 5}">${Math.round(range.lo)} m</text>` +
+    `</svg>`;
+}
+
+/** Move the elevation-profile cursor to a given along-track distance (km). */
+function moveProfileCursor(km: number | null): void {
+  const cursor = document.getElementById("rpCursor");
+  if (!cursor || !rideHover) return;
+  if (km == null) {
+    cursor.style.display = "none";
+    return;
+  }
+  const W = 1000;
+  const padX = 4;
+  const x = padX + (km / (rideHover.totalKm || 1)) * (W - 2 * padX);
+  cursor.setAttribute("x1", x.toFixed(1));
+  cursor.setAttribute("x2", x.toFixed(1));
+  cursor.style.display = "";
+}
+
+/**
+ * Render the persistent full-track summary strip — the headline stats fetching the
+ * recorded trace unlocks beyond the polyline (point count, measured distance, real
+ * elevation gain/loss, recording span, peak/avg speed). Shown only once a full track
+ * is loaded; hidden (and emptied) otherwise. Each chip is dropped when its datum is
+ * absent, so a track without `<ele>`/`<time>` shows only what's real.
+ */
+function renderRideSummary(): void {
+  const host = document.getElementById("rideMapSummary");
+  if (!host) return;
+  const full = rideHover?.full ?? null;
+  if (!full) {
+    host.classList.add("hidden");
+    host.innerHTML = "";
+    return;
+  }
+  const s = fullTrackSummary(full);
+  const chip = (label: string, value: string) =>
+    `<span class="rms-chip"><b>${value}</b> ${label}</span>`;
+  const chips: string[] = [
+    chip("recorded points", s.points.toLocaleString()),
+    chip("measured", `${s.distanceKm.toFixed(2)} km`),
+  ];
+  if (s.gainM != null && s.lossM != null) {
+    chips.push(chip("elevation", `↑${Math.round(s.gainM)} m ↓${Math.round(s.lossM)} m`));
+  }
+  if (s.recordedSec != null) chips.push(chip("recording time", fmtSecsShort(s.recordedSec)));
+  if (s.maxKmh != null) chips.push(chip("max speed", `${s.maxKmh.toFixed(1)} km/h`));
+  if (s.avgKmh != null) chips.push(chip("avg speed", `${s.avgKmh.toFixed(1)} km/h`));
+  host.innerHTML = chips.join("");
+  host.classList.remove("hidden");
+}
+
 /** Handle a hover over the big ride map: find the nearest point along the track,
- *  move the marker there, and report distance + estimated time into the ride. */
+ *  move the marker there, and report distance + time into the ride. With a full
+ *  track loaded the time/elevation are REAL (read from the nearest recorded point);
+ *  otherwise the time is an even-pace estimate (rendered with a "~"). */
 function onRideMapHover(e: L.LeafletMouseEvent): void {
   const out = document.getElementById("rideMapHover");
   if (!rideMapBig || !rideHover || !out) return;
   const cur = e.containerPoint;
   const px = rideHover.px;
-  // Nearest segment in pixel space; interpolate the cumulative distance across it.
   let best = Number.POSITIVE_INFINITY;
   let bestKm = 0;
+  let bestIdx = 0;
   let bestLatLng: [number, number] | null = null;
   for (let i = 1; i < px.length; i++) {
     const a = px[i - 1];
@@ -641,16 +849,17 @@ function onRideMapHover(e: L.LeafletMouseEvent): void {
     if (d < best) {
       best = d;
       bestKm = rideHover.cum[i - 1] + t * (rideHover.cum[i] - rideHover.cum[i - 1]);
+      bestIdx = t < 0.5 ? i - 1 : i;
       const la = rideHover.pts[i - 1];
       const lb = rideHover.pts[i];
       bestLatLng = [la[0] + t * (lb[0] - la[0]), la[1] + t * (lb[1] - la[1])];
     }
   }
-  // Only react when the cursor is reasonably near the line (px), else clear.
   if (best > 28 || !bestLatLng) {
     out.textContent = "";
     rideMapMarker?.remove();
     rideMapMarker = null;
+    moveProfileCursor(null);
     return;
   }
   if (!rideMapMarker) {
@@ -664,9 +873,26 @@ function onRideMapHover(e: L.LeafletMouseEvent): void {
   } else {
     rideMapMarker.setLatLng(bestLatLng);
   }
-  const frac = rideHover.totalKm > 0 ? bestKm / rideHover.totalKm : 0;
-  const parts = [`~${bestKm.toFixed(2)} km`];
-  if (rideHover.elapsedSec > 0) {
+
+  const full = rideHover.full;
+  const parts = [`${full ? "" : "~"}${bestKm.toFixed(2)} km`];
+  if (full && hasTimes(full) && rideHover.startMs !== null) {
+    // Real recorded time at the nearest point — no estimate.
+    const tMs = full.times[bestIdx];
+    if (tMs != null) {
+      const intoSec = (tMs - rideHover.startMs) / 1000;
+      if (intoSec >= 0) parts.push(`${fmtSecsShort(intoSec)} in`);
+      const clock = new Date(tMs);
+      const p2 = (n: number) => String(n).padStart(2, "0");
+      parts.push(`${p2(clock.getHours())}:${p2(clock.getMinutes())}`);
+    }
+    const ele = full.eles[bestIdx];
+    if (ele != null) parts.push(`${Math.round(ele)} m`);
+    const spd = rideHover.speeds?.[bestIdx];
+    if (spd != null) parts.push(`${spd.toFixed(1)} km/h`);
+  } else if (rideHover.elapsedSec > 0) {
+    // Even-pace estimate from total elapsed time.
+    const frac = rideHover.totalKm > 0 ? bestKm / rideHover.totalKm : 0;
     parts.push(`~${fmtSecsShort(frac * rideHover.elapsedSec)} in`);
     if (rideHover.startMs !== null) {
       const clock = new Date(rideHover.startMs + frac * rideHover.elapsedSec * 1000);
@@ -675,36 +901,110 @@ function onRideMapHover(e: L.LeafletMouseEvent): void {
     }
   }
   out.textContent = parts.join(" · ");
+  moveProfileCursor(bestKm);
+}
+
+/** Show/hide the full-track controls in the bar to match the loaded state. */
+function syncRideMapControls(): void {
+  const ride = rideMapKey ? STATE.rides.find((r) => r.key === rideMapKey) : null;
+  const full = rideMapKey ? controller.getFullTrack(rideMapKey) : null;
+  const fetchBtn = document.getElementById("btnRideMapFull") as HTMLButtonElement | null;
+  const colorSeg = document.getElementById("rideMapColor");
+  const profileBtn = document.getElementById("btnRideMapProfile") as HTMLButtonElement | null;
+  const est = document.getElementById("rideMapEst");
+  const hasTime = (ride?.elapsed_sec || ride?.moving_sec || 0) > 0;
+
+  if (full) {
+    fetchBtn?.classList.add("hidden");
+    colorSeg?.classList.remove("hidden");
+    // The elevation profile + its toggle only make sense with real elevation.
+    const showProfileBtn = hasElevation(full);
+    profileBtn?.classList.toggle("hidden", !showProfileBtn);
+    est?.classList.add("hidden"); // real time now — no estimate disclaimer
+    setRideMapStatus(""); // loaded — clear any prior fetching/error note
+    // Reflect the colour-mode selection.
+    colorSeg?.querySelectorAll<HTMLButtonElement>("button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.color === rideMapColorMode);
+    });
+    if (profileBtn) {
+      const shown = rideMapProfileShown && showProfileBtn;
+      profileBtn.textContent = shown ? "Hide profile" : "Show profile";
+      profileBtn.setAttribute("aria-pressed", String(shown));
+    }
+  } else {
+    if (fetchBtn) {
+      fetchBtn.classList.remove("hidden");
+      fetchBtn.disabled = false;
+      fetchBtn.textContent = "Fetch full track";
+    }
+    colorSeg?.classList.add("hidden");
+    profileBtn?.classList.add("hidden");
+    est?.classList.toggle("hidden", !hasTime);
+  }
+}
+
+/** Build the hover/line/profile state for the open ride from its display track and
+ *  (when available) the in-memory full recorded track, then draw everything. */
+function buildRideMapState(): void {
+  const key = rideMapKey;
+  if (!rideMapBig || !key) return;
+  const ride = STATE.rides.find((r) => r.key === key);
+  if (!ride) return;
+  const full = controller.getFullTrack(key);
+  let pts: [number, number][];
+  if (full && full.points.length >= 2) {
+    pts = full.points;
+  } else {
+    try {
+      pts = decodePolyline(ride.track);
+    } catch {
+      return;
+    }
+  }
+  if (pts.length < 2) return;
+  const cum = cumulativeKm(pts);
+  const speeds = full && hasTimes(full) ? movingAverage(fullTrackSpeedsKmh(full), 3) : null;
+  rideHover = {
+    pts,
+    cum,
+    totalKm: cum[cum.length - 1],
+    elapsedSec: ride.elapsed_sec || ride.moving_sec || 0,
+    startMs: rideDatetime(ride.key)?.getTime() ?? null,
+    px: [],
+    full: full && full.points.length >= 2 ? full : null,
+    speeds,
+  };
+  rideMapMarker = null;
+  drawRideLine();
+  renderRideProfile();
+  renderRideSummary();
+  syncRideMapControls();
+  setTimeout(() => {
+    rideMapBig?.invalidateSize();
+    reprojectRideHover();
+  }, 0);
 }
 
 /** Open the full-screen route map for one ride. */
 function openRideMap(key: string): void {
   const ride = STATE.rides.find((r) => r.key === key);
-  if (!ride?.track) return;
-  let pts: [number, number][];
-  try {
-    pts = decodePolyline(ride.track);
-  } catch {
-    return;
-  }
-  if (pts.length < 2) return;
+  if (!ride?.track && !controller.getFullTrack(key)) return;
 
   const modal = document.getElementById("rideMapModal");
   const host = document.getElementById("rideMapBig");
   if (!modal || !host) return;
 
+  rideMapKey = key;
+  rideMapColorMode = "none";
+  setRideMapStatus("");
+
   // Title: the ride's name + location, then its short date.
-  const name = (ride.title || "Ride") + (ride.location || "");
-  const when = rideShortLabel(ride.key) || ride.key;
+  const name = (ride?.title || "Ride") + (ride?.location || "");
+  const when = rideShortLabel(key) || key;
   const titleEl = document.getElementById("rideMapTitle");
   if (titleEl) titleEl.textContent = `${name} · ${when}`;
   const hoverEl = document.getElementById("rideMapHover");
   if (hoverEl) hoverEl.textContent = "";
-
-  // The "~ time is estimated" note only makes sense when we actually have a ride
-  // time to interpolate from; hide it for tracks with no usable duration.
-  const hasTime = (ride.elapsed_sec || ride.moving_sec || 0) > 0;
-  document.getElementById("rideMapEst")?.classList.toggle("hidden", !hasTime);
 
   modal.classList.remove("hidden");
   document.body.classList.add("ridemap-open");
@@ -714,6 +1014,7 @@ function openRideMap(key: string): void {
     rideMapBig.remove();
     rideMapBig = null;
   }
+  rideMapLineLayer = null;
   const map = L.map(host, { attributionControl: true, zoomControl: true });
   map.attributionControl.setPrefix(false); // compact credit, no "Leaflet" flag
   rideMapBig = map;
@@ -722,26 +1023,12 @@ function openRideMap(key: string): void {
     attribution: OSM_ATTRIBUTION,
     className: "rmap-tiles",
   }).addTo(map);
-  L.polyline(pts, { color: "#ffffff", weight: 7, opacity: 0.9 }).addTo(map);
-  rideMapLine = L.polyline(pts, { color: "#fc5200", weight: 4 }).addTo(map);
-  map.fitBounds(rideMapLine.getBounds(), { padding: [24, 24] });
 
-  const cum = cumulativeKm(pts);
-  rideHover = {
-    pts,
-    cum,
-    totalKm: cum[cum.length - 1],
-    // Prefer elapsed (wall-clock) time; fall back to moving time.
-    elapsedSec: ride.elapsed_sec || ride.moving_sec || 0,
-    startMs: rideDatetime(ride.key)?.getTime() ?? null,
-    px: [],
-  };
-  rideMapMarker = null;
+  buildRideMapState();
+  if (rideHover) {
+    map.fitBounds(L.latLngBounds(rideHover.pts), { padding: [24, 24] });
+  }
 
-  setTimeout(() => {
-    map.invalidateSize();
-    reprojectRideHover();
-  }, 0);
   map.on("move zoom resize zoomend moveend", reprojectRideHover);
   map.on("mousemove", onRideMapHover);
   map.on("mouseout", () => {
@@ -749,7 +1036,73 @@ function openRideMap(key: string): void {
     if (out) out.textContent = "";
     rideMapMarker?.remove();
     rideMapMarker = null;
+    moveProfileCursor(null);
   });
+}
+
+/** Fetch the open ride's full recorded track, then upgrade the map in place. On
+ *  failure the error is shown BOTH inline in the map bar (so it's visible in the
+ *  full-screen view, where the bottom toast is easy to miss) and as a toast, and
+ *  the button is re-enabled so the user can retry. */
+function fetchRideMapFull(): void {
+  const key = rideMapKey;
+  if (!key) return;
+  const fetchBtn = document.getElementById("btnRideMapFull") as HTMLButtonElement | null;
+  // Gate on a live connection first (may pop the re-auth picker in offline mode);
+  // only show the "downloading…" busy state once the fetch actually starts, so a
+  // cancelled re-auth doesn't leave the button stuck spinning.
+  withBeelineAccess(() => {
+    if (rideMapKey !== key) return; // user moved on while signing in
+    if (fetchBtn) {
+      fetchBtn.disabled = true;
+      fetchBtn.textContent = "Fetching…";
+    }
+    setRideMapStatus("Downloading the full recorded track…", "info");
+    controller
+      .fetchFullTrack(key)
+      .then(() => {
+        // The user may have closed or switched rides while it loaded.
+        if (rideMapKey === key && rideMapBig) {
+          buildRideMapState();
+          if (rideHover) {
+            rideMapBig.fitBounds(L.latLngBounds(rideHover.pts), { padding: [24, 24] });
+          }
+        }
+        setRideMapStatus("");
+        toast("Full track loaded — time, elevation and speed are now real.");
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        // In-context, persistent feedback in the bar (survives in full-screen)…
+        if (rideMapKey === key) {
+          setRideMapStatus(`Couldn't fetch full track: ${msg}`, "error");
+          if (fetchBtn) {
+            fetchBtn.disabled = false;
+            fetchBtn.textContent = "Retry full track";
+          }
+        }
+        // …plus a toast for when the map was already closed.
+        toast(`Couldn't fetch the full track: ${msg}`, true);
+      });
+  });
+}
+
+/** Switch the route-colouring mode (plain / by elevation / by speed). */
+function setRideMapColor(mode: "none" | "height" | "speed"): void {
+  rideMapColorMode = mode;
+  drawRideLine();
+  syncRideMapControls();
+}
+
+/** Toggle the elevation profile panel, re-measuring the map afterwards. */
+function toggleRideMapProfile(): void {
+  rideMapProfileShown = !rideMapProfileShown;
+  renderRideProfile();
+  syncRideMapControls();
+  setTimeout(() => {
+    rideMapBig?.invalidateSize();
+    reprojectRideHover();
+  }, 0);
 }
 
 /** Close the full-screen route map and release its Leaflet instance. */
@@ -761,9 +1114,12 @@ function closeRideMap(): void {
     rideMapBig.remove();
     rideMapBig = null;
   }
-  rideMapLine = null;
+  rideMapLineLayer = null;
   rideMapMarker = null;
   rideHover = null;
+  rideMapKey = null;
+  setRideMapStatus("");
+  document.getElementById("rideMapSummary")?.classList.add("hidden");
 }
 
 // --------------------------------------------------------------------------- //
@@ -2211,6 +2567,7 @@ function render(): void {
   // too when empty.
   const selBtns: Array<[string, string]> = [
     ["btnGpxSaveSel", "Save .gpx files"],
+    ["btnGpxSaveSelFull", "Save full .gpx files"],
     ["btnUploadSel", "Upload selected to Strava"],
   ];
   for (const [id, base] of selBtns) {
@@ -2335,7 +2692,8 @@ function render(): void {
             <button class="small accent" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ' title="Upload to Strava"'}>${UPLOAD_ICON}<span class="btn-label">Upload to Strava</span></button>
             <button class="small ghost ovr" data-splitmenu="ovr-r:${r.key}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-r:${r.key}`}" title="More ride actions">${KEBAB_ICON}</button>
             <span class="ovr-items">
-              <button class="small ghost" data-act="gpx-save-one" data-key="${r.key}" title="Download the full GPX and save it to disk">Save .gpx file</button>
+              <button class="small ghost" data-act="gpx-save-one" data-key="${r.key}" title="Save the lightweight route-only GPX (shape only, instant)">Save .gpx (route)</button>
+              <button class="small ghost" data-act="gpx-save-full-one" data-key="${r.key}" title="Download the full recorded GPX (real timestamps + elevation) and save it">Save full .gpx</button>
               ${r.deleted ? "" : `<button class="small ghost" data-act="rename-one" data-key="${r.key}" title="Rename this ride on Beeline">Rename…</button>`}
               ${r.deleted ? "" : `<button class="small danger" data-act="delete-one" data-key="${r.key}" title="Delete this ride from Beeline">Delete…</button>`}
             </span>
@@ -2862,6 +3220,15 @@ document.addEventListener("click", (e) => {
   if (t.dataset?.expand) {
     return openRideMap(t.dataset.expand);
   }
+  if (t.id === "btnRideMapFull") {
+    return fetchRideMapFull();
+  }
+  if (t.dataset?.color && t.closest("#rideMapColor")) {
+    return setRideMapColor(t.dataset.color as "none" | "height" | "speed");
+  }
+  if (t.id === "btnRideMapProfile") {
+    return toggleRideMapProfile();
+  }
   if (t.id === "btnRideMapClose" || target.id === "rideMapModal") {
     return closeRideMap();
   }
@@ -3023,6 +3390,12 @@ document.addEventListener("click", (e) => {
     if (!selected.size) return toast("Select some rides first.");
     return run(() => controller.downloadGpx([...selected]));
   }
+  if (t.id === "btnGpxSaveSelFull") {
+    openMenu = null;
+    if (!selected.size) return toast("Select some rides first.");
+    const keys = [...selected];
+    return withBeelineAccess(() => run(() => controller.downloadGpx(keys, "", "full")));
+  }
   if (t.id === "btnUploadSel") {
     if (!selected.size) return toast("Select some rides first.");
     const keys = [...selected].filter(
@@ -3053,6 +3426,11 @@ document.addEventListener("click", (e) => {
   if (act === "gpx-save-one") {
     openMenu = null;
     return run(() => controller.downloadGpx([t.dataset.key!]));
+  }
+  if (act === "gpx-save-full-one") {
+    openMenu = null;
+    const key = t.dataset.key!;
+    return withBeelineAccess(() => run(() => controller.downloadGpx([key], "", "full")));
   }
   if (act === "upload-one") {
     const ride = STATE.rides.find((r) => r.key === t.dataset.key);
