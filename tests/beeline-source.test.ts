@@ -28,6 +28,8 @@ const PENDING = "demo-pending-0002";
 /** In-memory Beeline backend: serves the fixture and simulates an upload completing. */
 class FakeBeelineApi implements BeelineApi {
   uploadCalls: string[] = [];
+  renameCalls: { pushId: string; name: string }[] = [];
+  deleteCalls: string[] = [];
   constructor(public rides: Record<string, RawBeelineRide>) {}
 
   async fetchRides(): Promise<Record<string, RawBeelineRide>> {
@@ -52,6 +54,16 @@ class FakeBeelineApi implements BeelineApi {
     };
     this.rides[pushId] = { ...this.rides[pushId], strava_activity: act };
     return act;
+  }
+  async renameRide(_s: BeelineSession, pushId: string, name: string): Promise<void> {
+    this.renameCalls.push({ pushId, name });
+    if (!this.rides[pushId]) throw new Error("no such ride");
+    this.rides[pushId] = { ...this.rides[pushId], name };
+  }
+  async deleteRide(_s: BeelineSession, pushId: string): Promise<void> {
+    this.deleteCalls.push(pushId);
+    if (!this.rides[pushId]) throw new Error("no such ride");
+    delete this.rides[pushId];
   }
 }
 
@@ -256,5 +268,86 @@ describe("Controller + BeelineRideSource (no network)", () => {
     expect(gpx).toContain("<gpx");
     expect(gpx).toContain("<trkpt ");
     expect(gpx).toContain("Evening ride, Springharbor");
+  });
+
+  it("renames a ride on the backend and mirrors the new name locally (keeping its place suffix)", async () => {
+    const api = new FakeBeelineApi(structuredClone(FIXTURE));
+    const c = makeController(api);
+    await c.connect();
+    c.scan("all", null);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    const key = beelineRideKey(FIXTURE[UPLOADED].start as number);
+    const before = c.store.rides.get(key)!;
+    const suffix = before.title.slice(before.title_base.length); // ", <place>"
+
+    c.rename(key, "Sunday spin");
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    // The backend was asked to rename the right push-id…
+    expect(api.renameCalls).toEqual([{ pushId: UPLOADED, name: "Sunday spin" }]);
+    expect(api.rides[UPLOADED].name).toBe("Sunday spin");
+    // …and the local record reflects the new base name while keeping the location suffix.
+    const after = c.store.rides.get(key)!;
+    expect(after.title_base).toBe("Sunday spin");
+    expect(after.title).toBe(`Sunday spin${suffix}`);
+    expect(after.deleted).toBe(false);
+  });
+
+  it("renames even when cold (no prior scan this session) by refreshing first", async () => {
+    const api = new FakeBeelineApi(structuredClone(FIXTURE));
+    const c = makeController(api);
+    await c.connect(); // connected but byKey is empty — like an offline re-auth
+
+    const key = beelineRideKey(FIXTURE[UPLOADED].start as number);
+    c.rename(key, "Cold rename");
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    expect(api.renameCalls).toEqual([{ pushId: UPLOADED, name: "Cold rename" }]);
+    expect(c.store.rides.get(key)?.title_base).toBe("Cold rename");
+  });
+
+  it("deletes a ride on the backend but keeps it locally as a tombstone", async () => {
+    const api = new FakeBeelineApi(structuredClone(FIXTURE));
+    const c = makeController(api);
+    await c.connect();
+    c.scan("all", null);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    const key = beelineRideKey(FIXTURE[UPLOADED].start as number);
+    const before = c.store.rides.get(key)!;
+    const keptTrack = before.track;
+    expect(before.deleted).toBe(false);
+
+    c.deleteRide(key);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    // Gone from the account…
+    expect(api.deleteCalls).toEqual([UPLOADED]);
+    expect(api.rides[UPLOADED]).toBeUndefined();
+    // …but still present locally, flagged deleted, with its data intact.
+    const after = c.store.rides.get(key);
+    expect(after).toBeDefined();
+    expect(after?.deleted).toBe(true);
+    expect(after?.deleted_at).toBeTruthy();
+    expect(after?.track).toBe(keptTrack);
+    expect(after?.source_id).toBe(UPLOADED);
+  });
+
+  it("fails the delete task (without tombstoning) when the ride is unknown to the backend", async () => {
+    const api = new FakeBeelineApi(structuredClone(FIXTURE));
+    const c = makeController(api);
+    await c.connect();
+    c.scan("all", null);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    // A key that was never on the server.
+    const ghost = "Mon Jan 1 2001 at 00:00";
+    c.deleteRide(ghost);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    expect(api.deleteCalls).toEqual([]); // never reached the write
+    const task = c.state().jobs.history.find((t) => t.kind === "delete");
+    expect(task?.status).toBe("error");
   });
 });

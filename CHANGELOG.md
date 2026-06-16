@@ -17,6 +17,36 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Rename & delete rides (cloud, through the RideSource seam) (v0.4.0)
+- **What:** Added per-ride **Rename** and **Delete** as cloud actions. New
+  `renameRide`/`deleteRide` on the `RideSource` seam ([src/source.ts](src/source.ts)),
+  backed by direct Realtime-Database writes in [src/beeline-api.ts](src/beeline-api.ts)
+  — `PATCH …/rides/<uid>/<pushId>.json {name}` to rename, `DELETE …/rides/<uid>/<pushId>.json`
+  to delete (per the APK-verified protocol, temp/beeline-protocol.md §5a). The
+  `BeelineRideSource` resolves a ride key → push-id from its index (refreshing when cold,
+  e.g. after an offline re-auth) and mirrors the change locally; the demo backend mutates
+  its in-memory rides so demo/tests exercise the path. Both run as single-ride `JobQueue`
+  tasks (`"rename"`/`"delete"`, never coalesced) so they can't race a scan/upload mutating
+  the source index. UI: the kebab menu gained **Rename…** (themed prompt dialog, prefilled,
+  Enter-to-accept) and **Delete…** (strong confirm naming the ride). Both gate through
+  `withBeelineAccess` re-auth like uploads.
+- **Why:** Bring the two remaining destructive account actions into the app instead of
+  forcing a trip to the phone. **Delete keeps the ride locally as a tombstone** (reusing the
+  existing `deleted`/`deleted_at` state via `store.markDeleted`) rather than dropping the
+  row — the cloud node is gone but the ride stays visible, marked deleted, and a later
+  complete scan won't resurrect it. Routing through the seam (not a local-only edit) keeps
+  the change authoritative and consistent with how uploads already work.
+
+## Declutter the ride row: only "Upload to Strava" stays inline; the rest move under "⋯"
+- **What:** Restructured the per-ride action cluster in [src/main.ts](src/main.ts) so the
+  primary **Upload to Strava** is the only always-visible button; **Save .gpx**, **Rename…**
+  and **Delete…** now live in the "⋯" overflow menu at *every* width (not just mobile).
+  Scoped the overflow-dropdown CSS to `.rbtns` in [src/style.css](src/style.css) so the
+  single-action group headers keep their inline-on-desktop behaviour.
+- **Why:** Adding Rename + Delete pushed the row to four inline buttons on desktop — a wall
+  of controls. Collapsing everything but the primary action behind the existing kebab keeps
+  the row minimal and identical on desktop and mobile, without inventing new UI.
+
 ## Reliably scroll-to + blink a ride opened from a map's "Selected" list on mobile
 - **What:** Reworked `openRideInExplore` in [src/main.ts](src/main.ts) to scroll the
   target `.rrow` into view across several settle passes (rAF → 120ms → 360ms) using

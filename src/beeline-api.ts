@@ -224,6 +224,32 @@ export async function uploadRideToStrava(
   });
 }
 
+// -- 4. rename / delete -----------------------------------------------------
+
+// Both are direct Realtime-Database writes (not Cloud Functions): the app's own
+// RideRepository merges `{name}` into the ride node to rename and clears the node
+// to delete (auth in the query string, RTDB-style). See temp/beeline-protocol.md §5a.
+
+/** Rename a ride by merging a new `name` into its node (RTDB PATCH). */
+export async function renameRide(
+  session: BeelineSession,
+  pushId: string,
+  newName: string,
+): Promise<void> {
+  const url =
+    `${RTDB_BASE}/rides/${session.uid}/${pushId}.json` +
+    `?auth=${encodeURIComponent(session.idToken)}`;
+  await request("PATCH", url, { body: { name: newName } });
+}
+
+/** Delete a ride by clearing its whole node (RTDB DELETE). */
+export async function deleteRide(session: BeelineSession, pushId: string): Promise<void> {
+  const url =
+    `${RTDB_BASE}/rides/${session.uid}/${pushId}.json` +
+    `?auth=${encodeURIComponent(session.idToken)}`;
+  await request("DELETE", url);
+}
+
 // -- status mapping ---------------------------------------------------------
 
 /** Strava upload-status strings the backend writes that mean "done, on Strava". */

@@ -2309,10 +2309,12 @@ function render(): void {
             ${so ? detailsBlock(r) : ""}
           </div>
           <div class="rbtns${openMenu === `ovr-r:${r.key}` ? " open" : ""}">
-            <button class="small ghost ovr" data-splitmenu="ovr-r:${r.key}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-r:${r.key}`}" title="Ride actions">${KEBAB_ICON}</button>
+            <button class="small accent" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ""}>Upload to Strava</button>
+            <button class="small ghost ovr" data-splitmenu="ovr-r:${r.key}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-r:${r.key}`}" title="More ride actions">${KEBAB_ICON}</button>
             <span class="ovr-items">
               <button class="small ghost" data-act="gpx-save-one" data-key="${r.key}" title="Download the full GPX and save it to disk">Save .gpx file</button>
-              <button class="small accent" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ""}>Upload to Strava</button>
+              ${r.deleted ? "" : `<button class="small ghost" data-act="rename-one" data-key="${r.key}" title="Rename this ride on Beeline">Rename…</button>`}
+              ${r.deleted ? "" : `<button class="small danger" data-act="delete-one" data-key="${r.key}" title="Delete this ride from Beeline">Delete…</button>`}
             </span>
           </div>`;
         rowsEl.appendChild(el);
@@ -2570,8 +2572,10 @@ function dismissToast(): void {
   t.style.display = "none";
 }
 
-// Resolver for the currently-open styled confirm dialog (null when closed).
-let confirmResolve: ((ok: boolean) => void) | null = null;
+// Resolver for the currently-open styled confirm/prompt dialog (null when closed).
+let confirmResolve: ((value: boolean | string | null) => void) | null = null;
+// True while the open dialog is a prompt (collects text) rather than a yes/no.
+let confirmIsPrompt = false;
 
 /**
  * Show the styled confirmation modal (a themed replacement for window.confirm)
@@ -2587,22 +2591,61 @@ function confirmDialog(opts: {
   const modal = document.getElementById("confirmModal");
   if (!modal) return Promise.resolve(true);
   confirmResolve?.(false); // abandon any prior pending dialog
+  confirmIsPrompt = false;
+  $("#confirmInput").classList.add("hidden");
   $("#confirmTitle").textContent = opts.title;
   $("#confirmBody").textContent = opts.body;
   $("#confirmOk").textContent = opts.confirmLabel ?? "Confirm";
   modal.classList.remove("hidden");
   $<HTMLButtonElement>("#confirmOk").focus();
   return new Promise<boolean>((resolve) => {
-    confirmResolve = resolve;
+    confirmResolve = resolve as (v: boolean | string | null) => void;
   });
 }
 
-/** Close the confirm modal and settle its promise with the user's choice. */
+/**
+ * Like `confirmDialog`, but with a single text field — a themed replacement for
+ * window.prompt. Resolves to the (trimmed) entered string, or null when cancelled.
+ * Pre-fills `value` and selects it so the common "tweak then accept" is one gesture.
+ */
+function promptDialog(opts: {
+  title: string;
+  body: string;
+  value?: string;
+  confirmLabel?: string;
+}): Promise<string | null> {
+  const modal = document.getElementById("confirmModal");
+  if (!modal) return Promise.resolve(null);
+  confirmResolve?.(false); // abandon any prior pending dialog
+  confirmIsPrompt = true;
+  $("#confirmTitle").textContent = opts.title;
+  $("#confirmBody").textContent = opts.body;
+  $("#confirmOk").textContent = opts.confirmLabel ?? "Save";
+  const input = $<HTMLInputElement>("#confirmInput");
+  input.classList.remove("hidden");
+  input.value = opts.value ?? "";
+  modal.classList.remove("hidden");
+  input.focus();
+  input.select();
+  return new Promise<string | null>((resolve) => {
+    confirmResolve = resolve as (v: boolean | string | null) => void;
+  });
+}
+
+/** Close the confirm/prompt modal and settle its promise with the user's choice. */
 function closeConfirm(ok: boolean): void {
   document.getElementById("confirmModal")?.classList.add("hidden");
   const resolve = confirmResolve;
+  const isPrompt = confirmIsPrompt;
   confirmResolve = null;
-  resolve?.(ok);
+  confirmIsPrompt = false;
+  if (!resolve) return;
+  if (isPrompt) {
+    const value = $<HTMLInputElement>("#confirmInput").value.trim();
+    resolve(ok ? value : null);
+  } else {
+    resolve(ok);
+  }
 }
 
 function stateSig(): string {
@@ -2984,6 +3027,44 @@ document.addEventListener("click", (e) => {
     if (ride && ride.status === "uploaded") return toast("Already uploaded to Strava.");
     return withBeelineAccess(() => run(() => controller.upload([t.dataset.key!])));
   }
+  if (act === "rename-one") {
+    const key = t.dataset.key!;
+    openMenu = null;
+    render();
+    const ride = STATE.rides.find((r) => r.key === key);
+    if (!ride) return;
+    void (async () => {
+      const newName = await promptDialog({
+        title: "Rename ride",
+        body: `New name for ${rideShortLabel(key) || key}:`,
+        value: ride.title || "",
+        confirmLabel: "Rename",
+      });
+      if (newName === null) return; // cancelled
+      if (newName === "") return toast("Ride name can't be empty.", true);
+      if (newName === (ride.title || "")) return; // unchanged
+      withBeelineAccess(() => run(() => controller.rename(key, newName)));
+    })();
+    return;
+  }
+  if (act === "delete-one") {
+    const key = t.dataset.key!;
+    openMenu = null;
+    render();
+    const ride = STATE.rides.find((r) => r.key === key);
+    if (!ride) return;
+    void (async () => {
+      const ok = await confirmDialog({
+        title: "Delete ride?",
+        body:
+          `Permanently delete “${ride.title || "Ride"}” (${rideShortLabel(key) || key}) ` +
+          `from your Beeline account? This can't be undone. It stays listed here, marked as deleted.`,
+        confirmLabel: "Delete",
+      });
+      if (ok) withBeelineAccess(() => run(() => controller.deleteRide(key)));
+    })();
+    return;
+  }
   if (act === "upload-month") {
     const keys = pendingOfMonth(t.dataset.m!);
     if (!keys.length) return toast("No known pending rides this month.");
@@ -3082,6 +3163,13 @@ document.getElementById("confirmOk")?.addEventListener("click", () => closeConfi
 document.getElementById("confirmCancel")?.addEventListener("click", () => closeConfirm(false));
 document.getElementById("confirmModal")?.addEventListener("click", (e) => {
   if (e.target === e.currentTarget) closeConfirm(false);
+});
+// Enter in the prompt input accepts (Escape is handled by the global keydown).
+document.getElementById("confirmInput")?.addEventListener("keydown", (e) => {
+  if ((e as KeyboardEvent).key === "Enter") {
+    e.preventDefault();
+    closeConfirm(true);
+  }
 });
 
 document.addEventListener("change", (e) => {

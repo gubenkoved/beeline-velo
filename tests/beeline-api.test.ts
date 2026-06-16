@@ -1,11 +1,14 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  type BeelineSession,
+  deleteRide,
   isTerminalStatus,
   mapBeelineRide,
   type RawBeelineRide,
+  renameRide,
   stravaStatusOf,
 } from "../src/beeline-api";
 import { beelineRideKey, rideDatetime } from "../src/parsing";
@@ -226,5 +229,67 @@ describe("stravaStatusOf", () => {
     expect(isTerminalStatus("processing")).toBe(false);
     expect(isTerminalStatus("uploaded")).toBe(true);
     expect(isTerminalStatus("pending")).toBe(true);
+  });
+});
+
+describe("renameRide / deleteRide (RTDB writes)", () => {
+  const SESSION: BeelineSession = {
+    idToken: "tok/+=en", // contains chars that MUST be URL-encoded in the query
+    uid: "uid123",
+    email: "rider@example.com",
+    expiresAt: Date.now() + 3_600_000,
+  };
+
+  it("renames via a PATCH that merges {name} into the ride node", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const stub = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ name: "Sunday spin" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", stub);
+    try {
+      await renameRide(SESSION, "-PushId123", "Sunday spin");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(calls).toHaveLength(1);
+    const { url, init } = calls[0];
+    expect(init.method).toBe("PATCH");
+    expect(url).toContain("/rides/uid123/-PushId123.json");
+    // The auth token (with /+= ) must be URL-encoded into the query string.
+    expect(url).toContain(`auth=${encodeURIComponent(SESSION.idToken)}`);
+    expect(JSON.parse(init.body as string)).toEqual({ name: "Sunday spin" });
+  });
+
+  it("deletes via a DELETE that clears the whole ride node (no body)", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const stub = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response("null", { status: 200 });
+    });
+    vi.stubGlobal("fetch", stub);
+    try {
+      await deleteRide(SESSION, "-PushId123");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(calls).toHaveLength(1);
+    const { url, init } = calls[0];
+    expect(init.method).toBe("DELETE");
+    expect(url).toContain("/rides/uid123/-PushId123.json");
+    expect(url).toContain(`auth=${encodeURIComponent(SESSION.idToken)}`);
+    expect(init.body).toBeUndefined();
+  });
+
+  it("surfaces a Beeline error when the write fails", async () => {
+    const stub = vi.fn(async () => new Response("permission denied", { status: 401 }));
+    vi.stubGlobal("fetch", stub);
+    try {
+      await expect(deleteRide(SESSION, "-PushId123")).rejects.toThrow(/HTTP 401/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

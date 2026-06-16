@@ -18,11 +18,13 @@
 
 import {
   type BeelineSession,
+  deleteRide,
   fetchRides,
   fetchStravaActivity,
   isTerminalStatus,
   mapBeelineRide,
   type RawBeelineRide,
+  renameRide,
   signIn,
   stravaStatusOf,
   uploadRideToStrava,
@@ -56,9 +58,17 @@ export interface BeelineApi {
     session: BeelineSession,
     pushId: string,
   ): Promise<RawBeelineRide["strava_activity"]>;
+  renameRide(session: BeelineSession, pushId: string, newName: string): Promise<void>;
+  deleteRide(session: BeelineSession, pushId: string): Promise<void>;
 }
 
-const realApi: BeelineApi = { fetchRides, uploadRideToStrava, fetchStravaActivity };
+const realApi: BeelineApi = {
+  fetchRides,
+  uploadRideToStrava,
+  fetchStravaActivity,
+  renameRide,
+  deleteRide,
+};
 
 /** Optional dependency overrides (used by tests to avoid the network). */
 export interface BeelineSourceDeps {
@@ -280,6 +290,50 @@ export class BeelineRideSource implements RideSource {
     }
     if (missing.length) onMissing(missing);
     return results;
+  }
+
+  /**
+   * Resolve a ride key to its backend push-id, refreshing the index first when the
+   * source is cold (e.g. after an offline re-auth, before any scan this session).
+   * Throws when the ride is unknown to the backend (already deleted there).
+   */
+  private async resolvePushId(key: string): Promise<string> {
+    if (this.byKey.size === 0) await this.refresh(null);
+    let entry = this.byKey.get(key);
+    if (!entry) {
+      // Re-read once in case our cached index is simply stale.
+      await this.refresh(null);
+      entry = this.byKey.get(key);
+    }
+    if (!entry) throw new Error(`ride not found on Beeline: ${rideShortLabel(key) || key}`);
+    return entry.pushId;
+  }
+
+  async renameRide(
+    key: string,
+    newTitle: string,
+    progress: Progress = () => false,
+  ): Promise<RideDetail> {
+    const name = rideShortLabel(key) || key;
+    await progress(`renaming ${name}…`);
+    const pushId = await this.resolvePushId(key);
+    await this.api.renameRide(this.session, pushId, newTitle);
+    // Reflect the new name in the cached record so re-reads (and the returned
+    // detail) carry it without a full refresh.
+    const entry = this.byKey.get(key);
+    if (entry) {
+      entry.raw = { ...entry.raw, name: newTitle };
+      this.byKey.set(key, entry);
+    }
+    return this.detailFor(key, entry?.raw ?? { name: newTitle });
+  }
+
+  async deleteRide(key: string, progress: Progress = () => false): Promise<void> {
+    const name = rideShortLabel(key) || key;
+    await progress(`deleting ${name}…`);
+    const pushId = await this.resolvePushId(key);
+    await this.api.deleteRide(this.session, pushId);
+    this.byKey.delete(key);
   }
 
   async close(): Promise<void> {

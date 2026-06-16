@@ -1399,6 +1399,42 @@ span.caret.open::before {
   display: contents;
 }
 
+/* Ride-row actions: keep only the primary (Upload to Strava) inline and tuck the
+   rest (Save .gpx / Rename / Delete) behind the "⋯" overflow at EVERY width, so a
+   row never becomes a wall of buttons on desktop or mobile. Scoped to `.rbtns`
+   (the per-ride cluster) so the single-action group headers (.yactions/.mactions)
+   keep their inline-on-desktop behavior. These two-class rules win over the
+   `.ovr`/`.ovr-items` base above by specificity. */
+.rbtns {
+  position: relative;
+}
+.rbtns .ovr {
+  display: inline-flex;
+}
+.rbtns .ovr-items {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 184px;
+  padding: 6px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.rbtns.open .ovr-items {
+  display: flex;
+}
+.rbtns .ovr-items > button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+}
+
 /* Split button: a primary action fused with a caret that reveals a dropdown of related
    actions (used for GPX Preview / Save .gpx file). The two buttons read as ONE segmented
    control — shared border, a single internal divider, rounded only on the outer edges. */
@@ -2948,6 +2984,25 @@ body.job-active .toast {
   font-size: 13.5px;
   margin: 10px 0 20px;
   line-height: 1.45;
+}
+.confirm-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 11px;
+  margin: 0 0 20px;
+  font: inherit;
+  line-height: 1.4;
+}
+.confirm-input.hidden {
+  display: none;
+}
+.confirm-input:focus {
+  outline: none;
+  border-color: var(--accent-dim);
 }
 .confirm-actions {
   display: flex;

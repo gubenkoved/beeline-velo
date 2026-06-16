@@ -132,6 +132,12 @@ export interface RideSource {
     onDetail?: (detail: RideDetail) => void,
   ): Promise<GpxFile[]>;
 
+  /** Rename a ride on the backend; resolves to the updated detail. */
+  renameRide(key: string, newTitle: string, progress?: Progress): Promise<RideDetail>;
+
+  /** Permanently delete a ride on the backend. */
+  deleteRide(key: string, progress?: Progress): Promise<void>;
+
   /** Release the underlying connection (clears the session). */
   close(): Promise<void>;
 }

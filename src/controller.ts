@@ -208,6 +208,8 @@ export class Controller {
     if (task.kind === "scan") await this.doScan(task, report);
     else if (task.kind === "upload") await this.doUpload(task, report);
     else if (task.kind === "download-gpx") await this.doDownloadGpx(task, report);
+    else if (task.kind === "rename") await this.doRename(task, report);
+    else if (task.kind === "delete") await this.doDelete(task, report);
   }
 
   private async doScan(task: Task, report: Report): Promise<void> {
@@ -422,6 +424,50 @@ export class Controller {
     }
   }
 
+  /**
+   * Rename a ride on the backend, then mirror the new name locally. The cloud is
+   * the source of truth (the name lives on the Beeline ride node); we only update
+   * the cache once the write succeeds. The fuller `title` keeps any location suffix
+   * the ride already carried, so only the user-facing name part changes.
+   */
+  private async doRename(task: Task, report: Report): Promise<void> {
+    const key = task.keys[0];
+    const newTitle = ((task.payload.title as string) ?? "").trim();
+    if (!key) return;
+    const source = this.sourceFor();
+    const detail = await source.renameRide(key, newTitle, (msg) => report(msg));
+    // Preserve any ", <place>" suffix the existing title carried beyond the base.
+    const rec = this.store.rides.get(key);
+    const suffix =
+      rec && rec.title.startsWith(rec.title_base) && rec.title.length > rec.title_base.length
+        ? rec.title.slice(rec.title_base.length)
+        : "";
+    this.store.upsert(key, {
+      ...this.deviceFields(),
+      title_base: detail.title,
+      title: detail.title + suffix,
+    });
+    this.store.save();
+    this.notify();
+    report(`renamed to “${detail.title}”`);
+  }
+
+  /**
+   * Delete a ride on the backend, then keep it locally as a tombstone (the existing
+   * `deleted`/`deleted_at` state) rather than dropping it — so the row stays visible
+   * as “deleted” and a later complete scan won't resurrect it (it's gone upstream).
+   */
+  private async doDelete(task: Task, report: Report): Promise<void> {
+    const key = task.keys[0];
+    if (!key) return;
+    const source = this.sourceFor();
+    await source.deleteRide(key, (msg) => report(msg));
+    this.store.markDeleted(key);
+    this.store.save();
+    this.notify();
+    report(`deleted ${rideShortLabel(key) || key}`);
+  }
+
   // -- enqueue helpers / API surface ------------------------------------
 
   scan(preset: string, days: number | null): TaskSnapshotResult {
@@ -445,6 +491,23 @@ export class Controller {
     return this.jobs.submit("download-gpx", {
       label: label || `${keys.length} rides`,
       keys,
+    });
+  }
+
+  /** Rename a ride (on the backend, then locally). One ride per task; not coalesced. */
+  rename(key: string, newTitle: string): TaskSnapshotResult {
+    return this.jobs.submit("rename", {
+      label: rideShortLabel(key) || key,
+      keys: [key],
+      payload: { title: newTitle },
+    });
+  }
+
+  /** Delete a ride (on the backend, then tombstoned locally). One ride per task. */
+  deleteRide(key: string): TaskSnapshotResult {
+    return this.jobs.submit("delete", {
+      label: rideShortLabel(key) || key,
+      keys: [key],
     });
   }
 

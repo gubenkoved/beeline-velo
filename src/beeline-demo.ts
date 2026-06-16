@@ -308,6 +308,18 @@ class DemoBeelineApi implements BeelineApi {
     }
     return this.rides[pushId].strava_activity;
   }
+
+  async renameRide(_s: BeelineSession, pushId: string, newName: string): Promise<void> {
+    await this.delay(200);
+    if (this.rides[pushId]) {
+      this.rides[pushId] = { ...this.rides[pushId], name: newName };
+    }
+  }
+
+  async deleteRide(_s: BeelineSession, pushId: string): Promise<void> {
+    await this.delay(200);
+    delete this.rides[pushId];
+  }
 }
 
 /** Fake sign-in for demo mode — returns a throwaway session instantly. */

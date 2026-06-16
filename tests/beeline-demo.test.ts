@@ -57,4 +57,26 @@ describe("beeline demo", () => {
 
     expect(store.pending().length).toBe(0);
   });
+
+  it("renames and deletes rides against the demo backend", async () => {
+    const session = {
+      idToken: "x",
+      uid: "x",
+      email: DEMO_BEELINE_EMAIL,
+      expiresAt: Date.now() + 1000,
+    };
+    const deps = demoBeelineDeps();
+    const before = await deps.api.fetchRides(session);
+    const ids = Object.keys(before);
+    const renameId = ids[0];
+    const deleteId = ids[1];
+
+    await deps.api.renameRide(session, renameId, "My favourite loop");
+    await deps.api.deleteRide(session, deleteId);
+
+    const after = await deps.api.fetchRides(session);
+    expect(after[renameId].name).toBe("My favourite loop");
+    expect(after[deleteId]).toBeUndefined();
+    expect(Object.keys(after)).toHaveLength(ids.length - 1);
+  });
 });
