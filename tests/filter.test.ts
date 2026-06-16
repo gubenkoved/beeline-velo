@@ -4,6 +4,7 @@ import type { RideView } from "../src/controller";
 import {
   emptyFilters,
   type Filters,
+  filterActiveCount,
   filtersActive,
   matchesFilters,
   rideKm,
@@ -75,6 +76,26 @@ describe("filtersActive", () => {
     expect(filtersActive(f({ device: "Pixel 10 Pro" }))).toBe(true);
     expect(filtersActive(f({ distMin: 5 }))).toBe(true);
     expect(filtersActive(f({ distMax: 50 }))).toBe(true);
+  });
+});
+
+describe("filterActiveCount", () => {
+  it("is 0 for a neutral filter set", () => {
+    expect(filterActiveCount(emptyFilters())).toBe(0);
+  });
+
+  it("counts one per narrowed dimension", () => {
+    expect(filterActiveCount(f({ status: "uploaded" }))).toBe(1);
+    expect(filterActiveCount(f({ status: "uploaded", gps: "yes" }))).toBe(2);
+    expect(
+      filterActiveCount(f({ status: "uploaded", gps: "yes", device: "Pixel 10 Pro" })),
+    ).toBe(3);
+  });
+
+  it("counts distance once whether one or both bounds are set", () => {
+    expect(filterActiveCount(f({ distMin: 5 }))).toBe(1);
+    expect(filterActiveCount(f({ distMax: 50 }))).toBe(1);
+    expect(filterActiveCount(f({ distMin: 5, distMax: 50 }))).toBe(1);
   });
 });
 

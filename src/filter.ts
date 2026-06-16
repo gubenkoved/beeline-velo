@@ -59,17 +59,27 @@ export function rideKm(r: RideView): number {
 
 /** True when at least one dimension narrows the list (drives Clear + totals hint). */
 export function filtersActive(f: Filters): boolean {
-  return (
-    f.status !== "all" ||
-    f.gps !== "any" ||
-    f.details !== "any" ||
-    f.destination !== "any" ||
-    f.named !== "any" ||
-    f.deleted !== "any" ||
-    f.device !== "all" ||
-    f.distMin !== null ||
-    f.distMax !== null
-  );
+  return filterActiveCount(f) > 0;
+}
+
+/**
+ * How many filter dimensions are currently narrowing the list (0 = neutral).
+ * Distance counts once (min and/or max share the one "Distance" field group), so
+ * the number matches the count of active controls a user sees in the bar. Drives
+ * the mobile "Filters" toggle badge; `filtersActive` is just the `> 0` case, so
+ * this stays the single source of truth for "is anything filtered".
+ */
+export function filterActiveCount(f: Filters): number {
+  let n = 0;
+  if (f.status !== "all") n++;
+  if (f.gps !== "any") n++;
+  if (f.details !== "any") n++;
+  if (f.destination !== "any") n++;
+  if (f.named !== "any") n++;
+  if (f.deleted !== "any") n++;
+  if (f.device !== "all") n++;
+  if (f.distMin !== null || f.distMax !== null) n++;
+  return n;
 }
 
 /** Does a ride pass every active filter? (AND across all dimensions.) */

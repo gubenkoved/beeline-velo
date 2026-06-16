@@ -17,6 +17,40 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Compact the distance/speed chart panel on narrow screens
+- **What:** On ≤560px the Explore chart panel's header no longer wastes vertical
+  space. The four KPIs (total / rides / avg / avg-per-ride) dropped their
+  `margin-left:auto` right-push and 22px gaps and now pack left on a single
+  full-width row (~37px instead of a right-aligned ~100px two-row block); their
+  numbers shrink 16px → 14px. The Distance/Speed and 5-way granularity segmented
+  controls are compacted (4px/8px, 11px) and made `overflow-x:auto` so the
+  granularity row never clips on a phone instead of overflowing the panel. Panel
+  padding, head gap and the trim-slider widths are trimmed to match.
+- **Why:** The chart header ate ~127px before a single bar showed, most of it the
+  big right-aligned KPI block and a granularity segment that overflowed/clipped at
+  phone width. Left-packing the KPIs onto one row and letting the segments scroll
+  reclaims that space and keeps the chart — the actual content — above the fold.
+  Desktop is untouched (KPIs stay right-aligned at full size).
+
+## Collapse the filter bar behind a "Filters" toggle on narrow screens
+- **What:** On ≤560px the Explore filter bar (status segment + five tri-state chips +
+  Source/Distance fields + Clear) — which otherwise wraps into ~4 rows (~100px) above
+  the list — now collapses behind a single **"Filters"** disclosure pill that expands
+  the controls as a stacked panel. The pill carries an active-dimension **count badge**
+  (new canonical `filterActiveCount` in [src/filter.ts](src/filter.ts), with `filtersActive`
+  redefined as its `> 0` case) so a collapsed bar still signals that filtering is on, and
+  goes accent when any filter is set. Toggling flips an `.open` class on the static
+  `#filterbar` directly (ephemeral view state, not routed through render). Also fixed a
+  latent bug surfaced here: **"Clear filters"** was permanently visible — the JS toggles
+  `.hidden` on it, but no rule backed that bare class (the sheet's convention is
+  component-scoped `.hidden`); added the missing `#fClear.hidden { display: none }`.
+- **Why:** After the ride-row and header mobile passes, the always-open filter bar was the
+  last thing eating a big chunk of a phone screen before any rides showed. Collapsing it
+  (same disclosure idea, ≤560px to match the header's icon-only cut-off) reclaims the space
+  while a count badge keeps active filters discoverable; desktop is untouched (the bar stays
+  inline, toggle hidden). Reused the accent-pill vocabulary and inline-SVG icon rule
+  throughout.
+
 ## Narrow-mobile iteration: icon-only actions for ride rows + header
 - **What:** Reworked the narrow-viewport layout so it's usable on a ~390px phone.
   Ride rows: the per-ride **"Upload to Strava"** button collapses to an icon-only

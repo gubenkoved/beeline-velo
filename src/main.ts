@@ -17,6 +17,7 @@ import { type AppState, Controller, type RideView } from "./controller";
 import {
   emptyFilters,
   type Filters,
+  filterActiveCount,
   filtersActive,
   type TriState,
   visibleRides,
@@ -1873,6 +1874,16 @@ function syncFilterBar(allRides: AppState["rides"]): void {
 
   // Clear button visibility.
   $("#fClear").classList.toggle("hidden", !filtersActive(filters));
+
+  // Mobile "Filters" toggle: badge the count of active dimensions so a collapsed
+  // bar still signals that filtering is on, and accent the toggle to match.
+  const n = filterActiveCount(filters);
+  const count = document.getElementById("fCount");
+  if (count) {
+    count.textContent = String(n);
+    count.toggleAttribute("hidden", n === 0);
+  }
+  document.getElementById("fToggle")?.classList.toggle("on", n > 0);
 }
 
 /** Advance a tri-state chip one step on click. */
@@ -2912,6 +2923,15 @@ document.addEventListener("click", (e) => {
     filters.status = t.dataset.fstatus as Filters["status"];
     saveFilters();
     applyState();
+    return;
+  }
+  // Mobile: the "Filters" toggle expands/collapses the otherwise space-hungry
+  // filter bar. Ephemeral view state, so flip the class directly (the filter bar
+  // is static markup that syncFilterBar mutates in place, never rebuilds) rather
+  // than routing through render().
+  if (t.id === "fToggle") {
+    const open = document.getElementById("filterbar")?.classList.toggle("open");
+    t.setAttribute("aria-expanded", open ? "true" : "false");
     return;
   }
   if (t.dataset?.fchip) {

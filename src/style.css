@@ -424,6 +424,45 @@ button.small {
   color: var(--text);
   font-weight: 600;
 }
+/* The "Filters" disclosure toggle collapses the whole filter bar on narrow
+   screens (revealed by the ≤560px block); on desktop the bar is always open with
+   room to spare, so the toggle stays hidden. */
+.ffilters-toggle {
+  display: none;
+  align-items: center;
+  gap: 7px;
+}
+.ffilters-toggle .mi {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+/* The long-intended hide of "Clear filters" when nothing is filtered. The JS
+   toggles `.hidden` on it, but — unlike every other `.hidden` in this sheet —
+   no rule backed it, so it stayed visible; this is that missing rule. */
+#fClear.hidden {
+  display: none;
+}
+/* Count of active filter dimensions, shown on the toggle so a collapsed bar
+   still signals that filtering is on. Reuses the accent pill vocabulary. */
+.fcount {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 20px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+.fcount[hidden] {
+  display: none;
+}
+.ffilters-toggle.on {
+  border-color: var(--accent);
+  color: var(--text);
+}
 /* The Source dropdown reads as a pill, not a text field: pointer cursor, a
    CSS-drawn chevron (same two-border recipe as .menubtn) instead of the native
    off-baseline glyph, and the accent "on" state shared with the tri-state chips
@@ -2842,6 +2881,72 @@ body.job-active .toast {
   body[data-src="beeline"] #btnScan,
   .hdr-actions .menubtn {
     padding: 6px 8px;
+  }
+  /* Filters collapse behind the "Filters" toggle: the bar otherwise wraps into
+     ~4 rows (status segment + tri-state chips + Source/Distance + Clear) and eats
+     a big chunk of a phone screen above the list. The toggle stays; the groups
+     and Clear hide until the bar carries `.open`, then stack below the toggle. */
+  .ffilters-toggle {
+    display: inline-flex;
+  }
+  .filterbar .fgroup,
+  .filterbar #fClear {
+    display: none;
+  }
+  .filterbar.open .fgroup {
+    display: inline-flex;
+  }
+  .filterbar.open #fClear:not(.hidden) {
+    display: inline-flex;
+  }
+  /* Open: the toggle holds the first line so every group wraps full-width below
+     it, reading as a stacked filter panel rather than trailing the toggle. */
+  .filterbar.open .ffilters-toggle {
+    flex-basis: 100%;
+  }
+
+  /* -- distance/speed chart panel: reclaim the vertical space its header ate.
+        The KPI block was a right-aligned flex with 22px gaps and 16px numbers
+        that stacked into ~100px of mostly-whitespace; recast it as a compact,
+        left-aligned two-column grid. The two segmented controls (Distance/Speed
+        and the 5-way granularity) are compacted and allowed to scroll-x so the
+        granularity row never clips on a phone, instead of overflowing the panel. */
+  .stats-panel {
+    padding: 12px 12px;
+  }
+  .sp-head {
+    gap: 8px 10px;
+  }
+  .sp-metric,
+  .sp-gran {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .sp-metric button,
+  .sp-gran button {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+  /* Drop the margin-left:auto right-push and let the four KPIs pack left on
+     their own full-width row beneath the controls (the base flex-wrap keeps all
+     four on one line at phone width, folding to 2×2 only on ultra-narrow). */
+  .sp-kpis {
+    margin-left: 0;
+    flex-basis: 100%;
+    gap: 8px 16px;
+  }
+  .kpi {
+    align-items: flex-start;
+  }
+  .kpi b {
+    font-size: 14px;
+  }
+  /* The trim sliders pair likewise sits full-width with tighter spacing. */
+  .sp-trim {
+    gap: 10px 16px;
+  }
+  .sp-trim .trim input[type="range"] {
+    width: 96px;
   }
 }
 
