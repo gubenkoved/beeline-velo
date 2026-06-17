@@ -17,6 +17,16 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Error-card “Details” stays open while jobs run
+- **What:** the expanded state of an error card's “Details” panel is now tracked
+  in a module-scope `expandedErrIds` set (mirroring `dismissedErrIds`/`shownErrIds`)
+  and re-applied in `renderError()`, instead of living only as a DOM `.errfull.show`
+  class toggled on click.
+- **Why:** while a batch runs, the job ticker re-renders frequently and
+  `renderError()` rebuilds the whole error stack from scratch (`stack.textContent
+  = ""`), which dropped the open panel — so an expanded error collapsed on its own
+  mid-task. Persisting the toggle outside the DOM keeps it open across re-renders.
+
 ## Mini-maps no longer flicker when the status/queue panel updates
 - **What:** `mountMaps()` now RE-ADOPTS each already-mounted Leaflet mini-map
   across a list rebuild — moving the live container into the freshly-rendered

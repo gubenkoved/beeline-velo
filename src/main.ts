@@ -721,6 +721,10 @@ let statMetric: "distance" | "speed" = "distance";
 // dismissed/already-flashed ids by string so the two error sources share one model.
 const dismissedErrIds = new Set<string>();
 const shownErrIds = new Set<string>();
+// Error cards the user has expanded ("Details"). Kept at module scope so the
+// expansion survives the frequent re-renders the job ticker triggers — otherwise
+// renderError() rebuilds the stack from scratch and the open panel collapses.
+const expandedErrIds = new Set<string>();
 interface PushedError {
   id: string;
   title: string;
@@ -3220,6 +3224,7 @@ function renderError(jobs: AppState["jobs"]): void {
 
     const full = document.createElement("pre");
     full.className = "errfull";
+    if (expandedErrIds.has(c.id)) full.classList.add("show");
     full.textContent = c.full;
 
     card.append(bar, full);
@@ -3891,7 +3896,12 @@ document.addEventListener("click", (e) => {
   }
   if (t.dataset && "errDetails" in t.dataset) {
     const card = t.closest(".errcard") as HTMLElement | null;
-    card?.querySelector(".errfull")?.classList.toggle("show");
+    const open = card?.querySelector(".errfull")?.classList.toggle("show");
+    // Remember the expand state so the next job-ticker re-render doesn't collapse it.
+    if (card?.dataset.id) {
+      if (open) expandedErrIds.add(card.dataset.id);
+      else expandedErrIds.delete(card.dataset.id);
+    }
     return;
   }
   if (t.id === "selClear") {
