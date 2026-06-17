@@ -828,31 +828,45 @@ function detailsBlock(r: RideView): string {
   );
 }
 
-/** (Re)create Leaflet maps for every visible track container after a render. */
+/** (Re)create Leaflet maps for every visible track container after a render.
+ *
+ * `render()` rebuilds the whole list DOM (`#months` innerHTML wipe) on every
+ * list-relevant state change — including each ride starting/finishing during a
+ * bulk job, which ticks the status/queue panel. A naive teardown-then-recreate
+ * would destroy and remount every mini-map's Leaflet instance on each of those
+ * ticks, reloading its tiles → a visible flicker. So instead we RE-ADOPT each
+ * already-mounted map: when a fresh `.rmap` placeholder appears for a key we
+ * already have a live map for, we move the existing (fully-rendered) Leaflet
+ * container into the new slot rather than rebuilding it. Only maps whose ride is
+ * no longer present are torn down. */
 function mountMaps(): void {
-  // Tear down any maps whose container no longer exists (collapsed/replaced DOM).
-  for (const [k, map] of mapRegistry) {
-    if (!document.body.contains(map.getContainer())) {
-      map.remove();
-      mapRegistry.delete(k);
+  // Snapshot the current placeholders up front: we mutate the DOM (replaceWith)
+  // while iterating, and a static array won't re-visit the elements we swap in.
+  const hosts = [...document.querySelectorAll<HTMLElement>(".rmap")];
+  const wanted = new Set(hosts.map((h) => h.dataset.map!));
+
+  for (const host of hosts) {
+    const key = host.dataset.map!;
+    const existing = mapRegistry.get(key);
+    if (existing) {
+      const el = existing.getContainer();
+      if (el === host) continue; // already mounted on this exact node
+      // Re-adopt the live map: swap the freshly-rendered placeholder for the
+      // existing Leaflet container (its tiles/line/zoom are intact), then nudge
+      // Leaflet to re-measure in case the slot's size changed. No flicker.
+      host.replaceWith(el);
+      existing.invalidateSize();
+      continue;
     }
-  }
-  document.querySelectorAll<HTMLElement>(".rmap").forEach((host) => {
-    if (
-      mapRegistry.has(host.dataset.map!) &&
-      mapRegistry.get(host.dataset.map!)!.getContainer() === host
-    ) {
-      return; // already mounted on this exact node
-    }
-    const ride = STATE.rides.find((r) => esc(r.key) === host.dataset.map);
-    if (!ride?.track) return;
+    const ride = STATE.rides.find((r) => esc(r.key) === key);
+    if (!ride?.track) continue;
     let pts: [number, number][];
     try {
       pts = decodePolyline(ride.track);
     } catch {
-      return;
+      continue;
     }
-    if (pts.length < 2) return;
+    if (pts.length < 2) continue;
     const map = L.map(host, {
       // Mini-maps drop the per-map credit (the header carries the page-level one)
       // so the badge doesn't repeat on every ride card.
@@ -876,8 +890,17 @@ function mountMaps(): void {
     map.fitBounds(line.getBounds(), { padding: [12, 12] });
     // The container was sized by CSS only after insertion; nudge Leaflet to re-measure.
     setTimeout(() => map.invalidateSize(), 0);
-    mapRegistry.set(host.dataset.map!, map);
-  });
+    mapRegistry.set(key, map);
+  }
+
+  // Tear down only maps whose ride is no longer shown (collapsed group, filtered
+  // out, deleted) — never the ones we just re-adopted above.
+  for (const [k, map] of mapRegistry) {
+    if (!wanted.has(k)) {
+      map.remove();
+      mapRegistry.delete(k);
+    }
+  }
 }
 
 // --------------------------------------------------------------------------- //

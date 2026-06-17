@@ -17,6 +17,17 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Mini-maps no longer flicker when the status/queue panel updates
+- **What:** `mountMaps()` now RE-ADOPTS each already-mounted Leaflet mini-map
+  across a list rebuild — moving the live container into the freshly-rendered
+  `.rmap` slot (`replaceWith` + `invalidateSize`) — and only tears down maps whose
+  ride is no longer shown, instead of removing every detached map and recreating it.
+- **Why:** A bulk job (upload / re-sync) ticks `active_keys`/`current_keys` as each
+  ride starts and finishes, so `render()` wipes and rebuilds `#months` on every
+  tick. The old teardown-then-recreate path destroyed and remounted every open
+  ride's Leaflet instance each time, reloading its tiles — a visible flicker. Re-
+  adopting the live map keeps tiles/zoom intact, so progress updates are silent.
+
 ## Year/month batch select only selects rides passing the active filters
 - **What:** `keysOfMonth`/`keysOfYear` now gather keys from `visibleRides(filters,
   STATE.rides)` instead of the full unfiltered `STATE.rides`.
