@@ -3522,6 +3522,34 @@ function exportRides(): void {
   URL.revokeObjectURL(url);
 }
 
+/** Export all state (rides, settings, GPX cache, wind cache) into a single ZIP file. */
+async function exportAll(): Promise<void> {
+  try {
+    const meta = {
+      app: {
+        version: __APP_VERSION__,
+        commit: __APP_COMMIT__,
+        build_date: __APP_BUILD_DATE__,
+      },
+    };
+    toast("Building full backup…");
+    const zipBytes = await controller.exportAllZip(meta);
+    const now = new Date();
+    const yyyymmdd = now.toISOString().slice(0, 10);
+    const filename = `${yyyymmdd}-gpx-toolkit-backup.zip`;
+    saveGpxFile({
+      filename: filename,
+      downloadName: filename,
+      bytes: zipBytes,
+      mime: "application/zip",
+    });
+    toast("Full backup exported.");
+  } catch (err) {
+    console.error("[exportAll] failed", err);
+    pushError("Backup export failed", err instanceof Error ? err.message : String(err));
+  }
+}
+
 /** Trigger a browser "Save As" for a downloaded ride file (GPX, or a ZIP bundle). */
 function saveGpxFile(file: {
   filename: string;
@@ -3553,33 +3581,44 @@ function saveGpxFile(file: {
 }
 
 function importRides(file: File): void {
+  const isZip = file.name.endsWith(".zip") || file.type === "application/zip";
   const reader = new FileReader();
-  reader.onload = () => {
+
+  reader.onload = async () => {
     try {
-      const n = controller.importJson(String(reader.result));
-      toast(`Imported — ${n} new ride${n === 1 ? "" : "s"}.`);
+      if (isZip) {
+        // Import ZIP backup.
+        const arrayBuf = reader.result as ArrayBuffer;
+        toast("Importing full backup…");
+        const result = await controller.importAllZip(arrayBuf);
+        const msg = `Imported — ${result.ridesImported} ride${result.ridesImported === 1 ? "" : "s"}, ` +
+          `${result.gpxCacheImported} cached GPX${result.gpxCacheImported === 1 ? "" : "s"}, ` +
+          `${result.gpxDataImported} imported GPX${result.gpxDataImported === 1 ? "" : "s"}, ` +
+          `${result.windImported} wind cache entries.`;
+        toast(msg);
+      } else {
+        // Import JSON state file (rides + settings, no caches).
+        const n = controller.importJson(String(reader.result));
+        toast(`Imported — ${n} new ride${n === 1 ? "" : "s"}.`);
+      }
     } catch (err) {
       const e = err as Error;
-      // Log full context to devtools — the toast is space-constrained, so dump the
-      // whole error (with its stack) plus the state that most often explains a
-      // failure here: whether a controller was even wired up yet (imports during
-      // the boot/mode-switch window hit an undefined controller), the mode, and
-      // the file we tried to read.
       console.error("[importRides] import failed", {
         error: e,
         name: e?.name,
         message: e?.message,
+        isZip,
         controllerReady: controller != null,
         isDemo,
         file: { name: file.name, size: file.size, type: file.type },
-        resultLength: typeof reader.result === "string" ? reader.result.length : null,
+        resultLength: typeof reader.result === "string" ? reader.result.length : (reader.result instanceof ArrayBuffer ? reader.result.byteLength : null),
       });
       const label = e?.name ? `${e.name} — ${e.message}` : e?.message;
       pushError("Import failed", e?.stack || label || "unknown import error");
     }
   };
+
   reader.onerror = () => {
-    // A failed *read* (vs. parse) would otherwise be silent — no onload, no catch.
     console.error("[importRides] file read failed", {
       error: reader.error,
       name: reader.error?.name,
@@ -3591,7 +3630,12 @@ function importRides(file: File): void {
       `${file.name}: ${reader.error?.message ?? "unknown read error"}`,
     );
   };
-  reader.readAsText(file);
+
+  if (isZip) {
+    reader.readAsArrayBuffer(file);
+  } else {
+    reader.readAsText(file);
+  }
 }
 
 /**
@@ -3864,6 +3908,7 @@ document.addEventListener("click", (e) => {
   if (target.id === "settingsModal") return hideSettings();
   if (t.id === "btnImport") return void ($("#importFile") as HTMLInputElement).click();
   if (t.id === "btnExport") return exportRides();
+  if (t.id === "btnExportAll") return void exportAll();
   if (t.dataset?.clear === "gpx") return void flushGpxCache();
   if (t.dataset?.clear === "wind") return void flushWindCache();
   if (t.id === "btnReset") return void resetEverything();

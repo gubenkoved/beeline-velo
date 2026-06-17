@@ -58,10 +58,11 @@
           <button class="ghost small" id="btnSettings" title="Open application settings">Settings</button>
           <button class="ghost small" id="btnImport" title="Merge a previously exported (or Python tool) state file into this browser">Import</button>
           <button class="ghost small" id="btnExport" title="Download all locally stored rides, settings and status as a JSON backup">Export</button>
+          <button class="ghost small" id="btnExportAll" title="Download all state (rides, settings, cached GPX and wind) in a single ZIP file for complete backup">Export All</button>
           <button class="ghost small danger" id="btnReset" title="Erase ALL locally stored data — rides, settings, cached downloads and imported GPX files — then return to the source-selection screen.">Reset</button>
         </span>
       </span>
-      <input type="file" id="importFile" accept="application/json,.json" style="display:none" />
+      <input type="file" id="importFile" accept="application/json,.json,application/zip,.zip" style="display:none" />
       <input type="file" id="gpxFile" accept=".gpx,.zip,application/gpx+xml,application/zip" multiple style="display:none" />
     </span>
   </div>

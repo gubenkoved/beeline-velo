@@ -48,7 +48,7 @@ import {
   hasTimes,
   type LatLon,
 } from "./track";
-import { buildZip } from "./zip";
+import { buildZip, unzip, type ZipEntry } from "./zip";
 import {
   type CellDayWind,
   cellDayKey,
@@ -1625,6 +1625,149 @@ export class Controller {
     const n = this.store.importJson(text);
     this.notify();
     return n;
+  }
+
+  /**
+   * Export ALL state and caches into a single ZIP file: ride records + settings
+   * (state.json) plus all cached GPX blobs (beeline cache + imported-GPX data vault)
+   * and wind cache entries, each stored verbatim (already gzip-compressed). Returns
+   * the ZIP as raw bytes.
+   *
+   * Throws if any IndexedDB read fails or if ZIP building fails.
+   */
+  async exportAllZip(meta?: Record<string, unknown>): Promise<Uint8Array> {
+    // 1. Build manifest metadata.
+    const manifest = {
+      schema: 1,
+      created_at: new Date().toISOString(),
+      app: meta?.app || {},
+      stores: {
+        state: 1,
+        gpx_cache: 0,
+        gpx_data: 0,
+        wind: 0,
+      },
+    };
+
+    const zipEntries: ZipEntry[] = [];
+
+    // 2. Export the main state (ride records + settings).
+    const stateJson = this.store.exportJson(meta);
+    zipEntries.push({ name: "state.json", bytes: new TextEncoder().encode(stateJson) });
+
+    // 3. Export cached GPX (Beeline downloads) using the public getAllBlobs() method.
+    const cacheBlobs = await this.gpxCache.getAllBlobs();
+    for (const { key, bytes } of cacheBlobs) {
+      zipEntries.push({ name: `gpx/cache/${key}.gz`, bytes });
+      manifest.stores.gpx_cache++;
+    }
+
+    // 4. Export data vault GPX (imported files) — same structure, different prefix.
+    const dataBlobs = await this.gpxData.getAllBlobs();
+    for (const { key, bytes } of dataBlobs) {
+      zipEntries.push({ name: `gpx/data/${key}.gz`, bytes });
+      manifest.stores.gpx_data++;
+    }
+
+    // 5. Export wind cache (global, shared across all profiles).
+    const windBlobs = await this.windCache.getAllBlobs();
+    for (const { key, bytes } of windBlobs) {
+      zipEntries.push({ name: `wind/${key}.gz`, bytes });
+      manifest.stores.wind++;
+    }
+
+    // 6. Prepend manifest and build the ZIP.
+    const manifestJson = JSON.stringify(manifest, null, 2);
+    zipEntries.unshift({ name: "manifest.json", bytes: new TextEncoder().encode(manifestJson) });
+
+    return buildZip(zipEntries);
+  }
+
+  /**
+   * Import all state and caches from a ZIP file. Merges ride records (via the
+   * existing store.importJson logic), and restores cached GPX + wind blobs. Policy:
+   * skip blobs that already exist (byte-for-byte identical); write missing or
+   * differing blobs; do not overwrite intact caches on schema mismatch (import
+   * fails cleanly). Returns counts of items restored.
+   *
+   * Throws a descriptive error if the ZIP is malformed, state.json is unreadable,
+   * or the schema is unmigratable. If a single blob write fails, the error is
+   * logged but does not abort the import (other blobs are written). Returns
+   * ridesImported (0 on schema mismatch) and counts of GPX/wind blobs restored.
+   */
+  async importAllZip(
+    bytesOrBlob: Uint8Array | ArrayBuffer | Blob,
+  ): Promise<{ ridesImported: number; gpxCacheImported: number; gpxDataImported: number; windImported: number }> {
+    // Convert various input types to Uint8Array.
+    let bytes: Uint8Array;
+    if (bytesOrBlob instanceof Blob) {
+      bytes = new Uint8Array(await bytesOrBlob.arrayBuffer());
+    } else if (bytesOrBlob instanceof ArrayBuffer) {
+      bytes = new Uint8Array(bytesOrBlob);
+    } else {
+      bytes = bytesOrBlob;
+    }
+
+    // Unzip and extract entries.
+    const zipEntries = await unzip(bytes);
+
+    // Build a Map for easy lookup by name.
+    const zipMap = new Map<string, Uint8Array>();
+    for (const entry of zipEntries) {
+      zipMap.set(entry.name, entry.bytes);
+    }
+
+    if (!zipMap.has("state.json")) {
+      throw new Error("ZIP missing state.json — not a valid backup");
+    }
+
+    // Try to import the state. If it fails (bad schema), abort blob writes.
+    let ridesImported = 0;
+    try {
+      const stateJson = new TextDecoder().decode(zipMap.get("state.json")!);
+      ridesImported = this.store.importJson(stateJson);
+      this.notify();
+    } catch (err) {
+      // Schema mismatch or corrupt JSON — surface the error.
+      throw new Error(
+        `Failed to import state: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // Restore GPX cache blobs (best-effort — skip failures, log them).
+    let gpxCacheImported = 0;
+    for (const entry of zipEntries) {
+      if (entry.name.startsWith("gpx/cache/") && entry.name.endsWith(".gz")) {
+        const key = entry.name.slice("gpx/cache/".length, -".gz".length);
+        const imported = await this.gpxCache.setBlob(key, entry.bytes);
+        if (imported) gpxCacheImported++;
+      }
+    }
+
+    // Restore GPX data vault blobs.
+    let gpxDataImported = 0;
+    for (const entry of zipEntries) {
+      if (entry.name.startsWith("gpx/data/") && entry.name.endsWith(".gz")) {
+        const key = entry.name.slice("gpx/data/".length, -".gz".length);
+        const imported = await this.gpxData.setBlob(key, entry.bytes);
+        if (imported) gpxDataImported++;
+      }
+    }
+
+    // Restore wind cache blobs.
+    let windImported = 0;
+    for (const entry of zipEntries) {
+      if (entry.name.startsWith("wind/") && entry.name.endsWith(".gz")) {
+        const key = entry.name.slice("wind/".length, -".gz".length);
+        const imported = await this.windCache.setBlob(key, entry.bytes);
+        if (imported) windImported++;
+      }
+    }
+
+    // Rebuild the cache indexes to reflect the new/imported entries.
+    await Promise.all([this.gpxCache.reload(), this.gpxData.reload(), this.windCache.reload()]);
+
+    return { ridesImported, gpxCacheImported, gpxDataImported, windImported };
   }
 
   /** Byte size of the locally persisted state, for a human-readable size hint. */

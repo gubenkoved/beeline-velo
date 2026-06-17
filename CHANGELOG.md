@@ -17,6 +17,10 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Full export/import in ZIP format
+- **What:** added `exportAllZip()` / `importAllZip()` on Controller to package all ride state, settings, and cached GPX blobs (cache + data vault) + wind cache into a single ZIP file. Import transparently handles both JSON (rides only) and ZIP (full state + caches) files. ZIP carries manifest.json with metadata and entry counts.
+- **Why:** a power user's full dataset (thousands of rides, 500MB+ cache, shared wind history) cannot be backed up as JSON alone — binary blobs must be preserved for offline/restore scenarios. ZIP is universal and enables complete backup/restore workflows. Import merges rather than replaces, skipping blobs with identical bytes, so re-importing is idempotent. Added `reload()` methods to GpxCache and WindCache to rebuild in-memory indexes after bulk blob writes.
+
 ## Error-card “Details” stays open while jobs run
 - **What:** the expanded state of an error card's “Details” panel is now tracked
   in a module-scope `expandedErrIds` set (mirroring `dismissedErrIds`/`shownErrIds`)

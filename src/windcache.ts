@@ -30,6 +30,15 @@ import { type CellDayWind, cellDayKey } from "./weather";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+/** Compare two Uint8Arrays for byte-for-byte equality. */
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 /** Storage-format version for a single cached cell-day entry. */
 export const WIND_ENTRY_VERSION = 1;
 
@@ -178,6 +187,52 @@ export class WindCache {
       await this.blob.del(INDEX_KEY);
     } catch {
       /* storage unavailable — non-fatal, the in-memory index is already cleared */
+    }
+  }
+
+  /** Rebuild the in-memory index from persistent storage (after importing blobs). */
+  async reload(): Promise<void> {
+    this.index.clear();
+    try {
+      const raw = await this.blob.get(INDEX_KEY);
+      if (raw) {
+        const obj = JSON.parse(decoder.decode(raw)) as Record<string, number>;
+        for (const [k, n] of Object.entries(obj)) {
+          if (typeof n === "number" && Number.isFinite(n) && n >= 0) this.index.set(k, n);
+        }
+      }
+    } catch {
+      /* missing or corrupt index — start empty */
+    }
+  }
+
+  /** Export all cached blobs as {key, compressedBytes} for backup. */
+  async getAllBlobs(): Promise<Array<{ key: string; bytes: Uint8Array }>> {
+    const result: Array<{ key: string; bytes: Uint8Array }> = [];
+    for (const key of this.index.keys()) {
+      const bytes = await this.blob.get(key);
+      if (bytes) {
+        result.push({ key, bytes });
+      }
+    }
+    return result;
+  }
+
+  /** Import a blob (already gzipped) for a cell-day key. Returns true if written (or updated). */
+  async setBlob(key: string, compressedBytes: Uint8Array): Promise<boolean> {
+    try {
+      const stored = await this.blob.get(key);
+      // Only write if missing or bytes differ (idempotent import)
+      if (stored && stored.length === compressedBytes.length && bytesEqual(stored, compressedBytes)) {
+        return false; // no change
+      }
+      await this.blob.set(key, compressedBytes);
+      this.index.set(key, compressedBytes.length);
+      await this.persistIndex();
+      return true; // written/updated
+    } catch (err) {
+      this.onError?.("Failed to import wind cache.");
+      return false;
     }
   }
 

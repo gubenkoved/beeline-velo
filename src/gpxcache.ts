@@ -29,6 +29,15 @@ import { memoryBlobBackend } from "./kv";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+/** Compare two Uint8Arrays for byte-for-byte equality. */
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 export class GpxCache {
   /** rideKey → compressed (on-disk) byte length, for size + presence without reads. */
   private index = new Map<string, number>();
@@ -155,6 +164,52 @@ export class GpxCache {
       await this.blob.del(this.indexKey);
     } catch {
       /* storage unavailable — non-fatal, the in-memory index is already cleared */
+    }
+  }
+
+  /** Rebuild the in-memory index from persistent storage (after importing blobs). */
+  async reload(): Promise<void> {
+    this.index.clear();
+    try {
+      const raw = await this.blob.get(this.indexKey);
+      if (raw) {
+        const obj = JSON.parse(decoder.decode(raw)) as Record<string, number>;
+        for (const [k, v] of Object.entries(obj)) {
+          if (typeof v === "number" && Number.isFinite(v) && v >= 0) this.index.set(k, v);
+        }
+      }
+    } catch {
+      /* missing or corrupt index — start empty */
+    }
+  }
+
+  /** Export all cached blobs as {rideKey, compressedBytes} for backup. */
+  async getAllBlobs(): Promise<Array<{ key: string; bytes: Uint8Array }>> {
+    const result: Array<{ key: string; bytes: Uint8Array }> = [];
+    for (const rideKey of this.index.keys()) {
+      const bytes = await this.blob.get(this.rideKeyFor(rideKey));
+      if (bytes) {
+        result.push({ key: rideKey, bytes });
+      }
+    }
+    return result;
+  }
+
+  /** Import a blob (already gzipped) for a ride. Returns true if written (or updated). */
+  async setBlob(rideKey: string, compressedBytes: Uint8Array): Promise<boolean> {
+    try {
+      const stored = await this.blob.get(this.rideKeyFor(rideKey));
+      // Only write if missing or bytes differ (idempotent import)
+      if (stored && stored.length === compressedBytes.length && bytesEqual(stored, compressedBytes)) {
+        return false; // no change
+      }
+      await this.blob.set(this.rideKeyFor(rideKey), compressedBytes);
+      this.index.set(rideKey, compressedBytes.length);
+      await this.persistIndex();
+      return true; // written/updated
+    } catch (err) {
+      this.onError?.("Failed to import cached GPX.");
+      return false;
     }
   }
 
