@@ -977,11 +977,16 @@ function syncRideMapControls(): void {
  */
 function syncRideMapBarCompact(allowExpand = false): void {
   const bar = document.querySelector<HTMLElement>(".ridemap-bar");
-  if (!bar) return;
+  const tools = document.querySelector<HTMLElement>(".ridemap-tools");
+  if (!bar || !tools) return;
   if (allowExpand) bar.classList.remove("compact");
-  // A small slack so we don't toggle on a sub-pixel overshoot. (When already compact and
-  // not allowed to expand, this is a no-op — the bar stays folded.)
-  if (bar.scrollWidth > bar.clientWidth + 1) bar.classList.add("compact");
+  // Measure the TOOLS cluster, not the whole bar: the cluster is the bar's overflow
+  // valve (it scrolls horizontally as a last resort, with the title capped and Close
+  // pinned), so the bar itself no longer reports overflow even when the controls don't
+  // fit. The cluster's own scrollWidth > clientWidth is the honest "not enough room"
+  // signal — fold to icon-only first; only the extreme-narrow case then scrolls. A
+  // small slack avoids toggling on a sub-pixel overshoot.
+  if (tools.scrollWidth > tools.clientWidth + 1) bar.classList.add("compact");
 }
 
 /** Build the hover/line/profile state for the open ride from its display track and

@@ -17,6 +17,21 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Fix the full-screen route bar clipping Close on narrow viewports
+- **What:** Made the `.ridemap-tools` control cluster the bar's overflow valve — it may
+  shrink (`flex: 0 1 auto; min-width: 0`) and scroll horizontally as a last resort, with
+  its controls pinned to natural width (`.ridemap-tools > .rmb, > .seg { flex: 0 0 auto }`)
+  and the Close button pinned (`flex: 0 0 auto`). Re-based `syncRideMapBarCompact` to test
+  the cluster's own `scrollWidth > clientWidth` (not the whole bar), and added a
+  `max-width: 560px` block that trims the bar's gap/padding, caps the title, and hides the
+  "~ time is estimated" footnote.
+- **Why:** On a phone-narrow viewport the single non-wrapping bar overran its width and the
+  Close button (last in the row) was clipped off-screen. The first attempt let the cluster
+  shrink but the seg buttons (which `overflow: hidden`) shrank too and clipped their labels
+  ("Elev", "Dist") instead of overflowing, so the icon-fold never fired. Pinning the
+  controls to natural width makes the cluster honestly overflow → fold to icon-only first,
+  then scroll, while title + Close always stay fully visible.
+
 ## Extract the full-screen ride map into its own module
 - **What:** Moved the ~1,200-line full-screen single-ride route map (route colouring,
   elevation/speed profile, hover readout + wind dial, fetch-full-track flow) out of `main.ts`

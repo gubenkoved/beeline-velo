@@ -182,13 +182,17 @@ decisions and values, so the "why" matters more than the "what".
   - **Why:** 1–2 lines — the motivation / decision / value behind it.
   ```
 
-## Committing
+## Versioning
 
-When a logical change is finished and its acceptance checks pass (`npm run build` + `npm test`
-green, CHANGELOG updated), **offer to commit it yourself** rather than leaving it to the user.
+Bump the `version` in [package.json](../package.json) (semver `major.minor.patch`) as part of
+the same change, so the build hash shown in the UI tracks a real version.
 
-- **Match the established commit style** (see `git log`): a single concise, lowercase,
-  imperative subject line, no trailing period, no body, no Conventional-Commits prefix
+- **Patch** (`0.11.0` → `0.11.1`): bug fixes and small UI/layout corrections — do this
+  **automatically** whenever the logical change is a fix, no need to ask.
+- **Minor** (`0.11.1` → `0.12.0`): a new feature or user-visible capability.
+- **Major**: reserved for breaking reworks — confirm with the user first.
+- One bump per logical change, committed alongside the code + CHANGELOG entry.
+
   (e.g. `compact state & selection actions into menus`, `more resilient error handling`).
 - **One commit per logical change.** Stage the related files and commit; don't bundle
   unrelated work.

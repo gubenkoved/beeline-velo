@@ -1998,15 +1998,43 @@ body.ridemap-open {
 .ridemap-canvas .leaflet-tile-pane {
   filter: grayscale(85%) brightness(0.6) contrast(1.1);
 }
-/* Cluster of full-track controls (status / fetch / recolour / hide profile). */
+/* Cluster of full-track controls (status / fetch / recolour / hide profile). The
+   bar's overflow valve: it may shrink below its content and scroll horizontally as a
+   LAST resort (after the JS has already folded every control to icon-only), so the
+   pinned Close button and the title are never pushed off the bar on a phone-narrow
+   viewport. `min-width: 0` lets a flex item shrink past its content; the hidden
+   scrollbar keeps the measurement (scrollWidth vs clientWidth, used by
+   syncRideMapBarCompact) honest and the strip clean. */
 .ridemap-tools {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.ridemap-tools::-webkit-scrollbar {
+  display: none;
 }
 .ridemap-tools .hidden {
   display: none;
+}
+/* The controls must NOT shrink: a shrinking button (or seg, which clips via its own
+   overflow:hidden) would squeeze its label to fit, so the cluster never reports
+   overflow and syncRideMapBarCompact's scrollWidth>clientWidth fold never fires —
+   you'd get clipped half-labels ("Elev", "Dist") instead of icons. Keeping them at
+   natural width makes the cluster honestly overflow → fold to icons first, then
+   scroll. Only the status text may shrink (it ellipsises). */
+.ridemap-tools > .rmb,
+.ridemap-tools > .seg {
+  flex: 0 0 auto;
+}
+/* Close always stays put — it's anchored after the (scrollable) tools cluster and may
+   never be shrunk or scrolled out of view. */
+#btnRideMapClose {
+  flex: 0 0 auto;
 }
 /* Icon-collapse: each bar control carries an inline-SVG icon plus its text label.
    Normally the label shows and the icon is hidden; when the bar runs out of room the
@@ -3541,6 +3569,25 @@ body.job-active .toast {
   }
   .sp-trim .trim input[type="range"] {
     width: 96px;
+  }
+
+  /* -- full-screen route bar: keep the title + Close on one tidy row -------
+        At phone width the bar's gap/padding and the estimate footnote crowd the
+        row; trim them and cap the title so the pinned Close button always has
+        room. The control tiles already fold to icons (and scroll if still tight),
+        so this just buys the row some breathing space. */
+  .ridemap-bar {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .ridemap-title {
+    max-width: 42%;
+  }
+  /* The "~ time is estimated" footnote is non-essential chrome (the same note
+     lives in the estimate tooltip); drop it on narrow screens like the build
+     hash and button labels elsewhere. */
+  .ridemap-est {
+    display: none;
   }
 }
 
