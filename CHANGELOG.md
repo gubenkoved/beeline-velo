@@ -17,6 +17,19 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Extract the full-screen ride map into its own module
+- **What:** Moved the ~1,200-line full-screen single-ride route map (route colouring,
+  elevation/speed profile, hover readout + wind dial, fetch-full-track flow) out of `main.ts`
+  into a new [src/ridemap.ts](src/ridemap.ts). It reaches the rest of the app only through an
+  injected `RideMapDeps` seam (`initRideMap` — the live controller/state, toast, HTML escape,
+  the Beeline/relay re-auth gates and the OSM credit), so it never imports the entry module;
+  `main.ts` wires it once and calls the exported handlers from its central event dispatch.
+  Pure code move + DI seam — no behaviour change. `main.ts` drops 5,572 → 4,330 lines.
+- **Why:** `main.ts` had grown into a monolith mixing app shell, rendering, dialogs and this
+  self-contained subsystem. The ride map is the single most cohesive, separable chunk, so
+  lifting it (behind the repo's established DI-seam style) is the highest-value step toward a
+  maintainable entry file without touching behaviour.
+
 ## Complete & start maintaining the module map in copilot-instructions
 - **What:** Filled in the *Architecture / module map* table so every `src/*.ts` has a row
   (added the wind/weather, stats, heatmap, area-select, location-history and low-level utility
