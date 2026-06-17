@@ -14,6 +14,7 @@ import {
   type LatLon,
   movingAverage,
   simplify,
+  smoothedSpeedsKmh,
   stoppedRanges,
   stableStoppedRanges,
   trackLengthKm,
@@ -109,6 +110,79 @@ describe("fullTrackSpeedsKmh", () => {
   });
 });
 
+// A track that holds one position while the clock advances at 1 Hz, but each fix
+// wanders within a small radius of GPS noise — i.e. the bike is parked. The raw
+// per-hop speed reads several km/h here (positive jitter distance ÷ tiny dt); the
+// displacement-window speed should collapse it toward zero.
+function stationaryJitterGpx(): string {
+  // Deterministic pseudo-random wander so the test is stable.
+  let seed = 1234567;
+  const rnd = (): number => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff; // [0,1)
+  };
+  const lat0 = 52;
+  const lon0 = 5;
+  // ~6 m radius: 1e-4° lat ≈ 11.1 m, so ±5.5e-5° ≈ ±6 m; lon scaled by cos(lat).
+  const jitterDeg = 5.5e-5;
+  const lonScale = 1 / Math.cos((lat0 * Math.PI) / 180);
+  const pts: string[] = [];
+  for (let i = 0; i < 30; i++) {
+    const lat = lat0 + (rnd() - 0.5) * 2 * jitterDeg;
+    const lon = lon0 + (rnd() - 0.5) * 2 * jitterDeg * lonScale;
+    const iso = new Date(i * 1000).toISOString(); // 1 Hz
+    pts.push(`<trkpt lat="${lat.toFixed(7)}" lon="${lon.toFixed(7)}"><time>${iso}</time></trkpt>`);
+  }
+  return `<gpx version="1.1"><trk><trkseg>${pts.join("")}</trkseg></trk></gpx>`;
+}
+
+describe("smoothedSpeedsKmh", () => {
+  it("collapses stationary GPS jitter toward zero where the raw per-hop speed inflates", () => {
+    const ft = extractFullTrack(stationaryJitterGpx());
+
+    // The raw per-hop speed is badly inflated by jitter — several km/h while parked.
+    const raw = fullTrackSpeedsKmh(ft).filter((v): v is number => v != null);
+    const rawMax = Math.max(...raw);
+    expect(rawMax).toBeGreaterThan(5); // the bug: standstill reads multiple km/h
+
+    // The displacement-window speed measures net wander over ~10 s, minus the GPS
+    // noise floor → essentially stopped (below the 1 km/h moving threshold).
+    const smoothed = smoothedSpeedsKmh(ft).filter((v): v is number => v != null);
+    expect(smoothed.length).toBeGreaterThan(0);
+    const smoothedMax = Math.max(...smoothed);
+    expect(smoothedMax).toBeLessThan(1); // parked now reads as stopped
+    expect(smoothedMax).toBeLessThan(rawMax); // strictly better than the raw series
+  });
+
+  it("preserves a genuinely moving speed", () => {
+    // 0.001° lat every 10 s ≈ 111.2 m / 10 s ≈ 40 km/h, dead straight.
+    const pts: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      const lat = (52 + i * 0.001).toFixed(6);
+      const iso = new Date(i * 10_000).toISOString();
+      pts.push(`<trkpt lat="${lat}" lon="5.000000"><time>${iso}</time></trkpt>`);
+    }
+    const ft = extractFullTrack(`<gpx version="1.1"><trk><trkseg>${pts.join("")}</trkseg></trk></gpx>`);
+    const smoothed = smoothedSpeedsKmh(ft).filter((v): v is number => v != null);
+    expect(smoothed.length).toBe(12);
+    for (const s of smoothed) {
+      expect(s).toBeGreaterThan(38);
+      expect(s).toBeLessThan(42);
+    }
+  });
+
+  it("leaves null where a point has no timestamp", () => {
+    const ft = extractFullTrack(
+      `<gpx><trk><trkseg>
+        <trkpt lat="1" lon="2"></trkpt>
+        <trkpt lat="1.001" lon="2"></trkpt>
+      </trkseg></trk></gpx>`,
+    );
+    expect(smoothedSpeedsKmh(ft)).toEqual([null, null]);
+  });
+});
+
+
 describe("fullTrackSummary", () => {
   it("derives the full-track-only headline stats", () => {
     const ft = extractFullTrack(FULL_GPX);
@@ -187,6 +261,42 @@ describe("fullTrackSummary moving speed", () => {
     const lax = fullTrackSummary(ft, 0);
     expect(lax.movingSec).toBeCloseTo(lax.recordedSec as number, 6);
     expect(lax.movingAvgKmh).toBeCloseTo(lax.avgKmh as number, 6);
+  });
+});
+
+describe("fullTrackSummary jitter robustness", () => {
+  it("does not let a stationary GPS-jitter cluster inflate peak speed or moving time", () => {
+    // Ride straight at ~40 km/h, then sit parked while each fix wanders within ~6 m.
+    const pts: string[] = [];
+    let t = 0;
+    const push = (lat: number, lon: number) => {
+      pts.push(
+        `<trkpt lat="${lat.toFixed(7)}" lon="${lon.toFixed(7)}"><time>${new Date(t * 1000).toISOString()}</time></trkpt>`,
+      );
+      t += 10;
+    };
+    // 10 moving points, 0.001° apart every 10 s ≈ 40 km/h.
+    for (let i = 0; i < 10; i++) push(52 + i * 0.001, 5);
+    // 20 stationary points around the final spot, sampled every 10 s, ±~6 m jitter.
+    let seed = 99;
+    const rnd = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const baseLat = 52 + 9 * 0.001;
+    for (let i = 0; i < 20; i++) {
+      push(baseLat + (rnd() - 0.5) * 1.1e-4, 5 + (rnd() - 0.5) * 1.8e-4);
+    }
+    const ft = extractFullTrack(`<gpx version="1.1"><trk><trkseg>${pts.join("")}</trkseg></trk></gpx>`);
+    const s = fullTrackSummary(ft);
+
+    // Peak reflects the ~40 km/h riding, not a wild jitter spike.
+    expect(s.maxKmh as number).toBeLessThan(60);
+    expect(s.maxKmh as number).toBeGreaterThan(30);
+    // The 200 s park is excluded, so moving time is well under the full span.
+    expect(s.movingSec as number).toBeLessThan(s.recordedSec as number);
+    // Moving average stays near the true riding speed despite the parked tail.
+    expect(s.movingAvgKmh as number).toBeGreaterThan(30);
   });
 });
 

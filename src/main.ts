@@ -62,11 +62,10 @@ import {
   decodePolyline,
   type FullTrack,
   filledTimes,
-  fullTrackSpeedsKmh,
   fullTrackSummary,
   hasElevation,
   hasTimes,
-  movingAverage,
+  smoothedSpeedsKmh,
   stableStoppedRanges,
 } from "./track";
 import type { PointWind } from "./weather";
@@ -1218,14 +1217,15 @@ function renderRideProfile(): void {
   const vSpan = range.hi - lo || 1;
   const yOf = (v: number) => padTop + (1 - (v - lo) / vSpan) * (H - padTop - padBot);
   // Bands over the stretches we classified as not moving (same threshold as the
-  // moving-avg figure). Drawn ON TOP of the filled area (but under the line) as a dark
-  // dim, so a stop reads as the chart RECEDING — never as a brighter highlight. A
-  // stopped hop run [s, e] spans points s … e+1, so its x runs axisX[s] → axisX[e+1];
-  // a min width keeps a brief stop visible on the distance axis (where idle time barely
-  // advances), while the time axis shows its true duration.
+  // moving-avg figure). Drawn in the BACKGROUND (behind the area + line, so the orange
+  // profile stays the foreground) as a faint cool fill topped by a crisp cool rule — a
+  // stop reads as a quietly marked "paused" region that's legible even where the speed
+  // line flatlines at zero. A stopped hop run [s, e] spans points s … e+1, so its x runs
+  // axisX[s] → axisX[e+1]; a min width keeps a brief stop visible on the distance axis
+  // (where idle time barely advances), while the time axis shows its true duration.
   const bandTop = padTop;
   const bandH = H - padTop - padBot;
-  const minBandW = 3;
+  const minBandW = 4;
   let stops = "";
   const speeds = rideHover!.speeds;
   if (speeds && full) {
@@ -1240,9 +1240,13 @@ function renderRideProfile(): void {
       const tip = times
         ? `stopped ${fmtSecsShort((times[Math.min(e + 1, times.length - 1)] - times[s]) / 1000)}`
         : "stopped";
+      const xs = x1.toFixed(1);
+      const ws = Math.max(0, x2 - x1).toFixed(1);
+      const topY = (bandTop + 0.5).toFixed(1);
       stops +=
-        `<rect class="rp-stop" x="${x1.toFixed(1)}" y="${bandTop}" ` +
-        `width="${Math.max(0, x2 - x1).toFixed(1)}" height="${bandH}"><title>${tip}</title></rect>`;
+        `<rect class="rp-stop" x="${xs}" y="${bandTop}" width="${ws}" height="${bandH}">` +
+        `<title>${tip}</title></rect>` +
+        `<line class="rp-stop-top" x1="${xs}" y1="${topY}" x2="${(x1 + Math.max(0, x2 - x1)).toFixed(1)}" y2="${topY}"/>`;
     }
   }
 
@@ -1275,8 +1279,10 @@ function renderRideProfile(): void {
   host.innerHTML =
     `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" ` +
     `aria-label="${speed ? "Speed" : "Elevation"} profile vs ${useTime ? "time" : "distance"}">` +
-    `<path class="rp-area" d="${area}"/>` +
+    // Stop bands sit in the BACKGROUND (behind the area + line) so the orange profile
+    // always reads as the foreground (see `.rp-stop` / `.rp-stop-top`).
     stops +
+    `<path class="rp-area" d="${area}"/>` +
     `<path class="rp-line" d="${line}"/>` +
     `<line class="rp-cursor" id="rpCursor" x1="0" y1="${padTop}" x2="0" y2="${baseY}" style="display:none"/>` +
     `<text class="rp-axis" x="${padX}" y="12">${fmt(range.hi)} ${unit}</text>` +
@@ -1766,7 +1772,7 @@ function buildRideMapState(): void {
   }
   if (pts.length < 2) return;
   const cum = cumulativeKm(pts);
-  const speeds = full && hasTimes(full) ? movingAverage(fullTrackSpeedsKmh(full), 3) : null;
+  const speeds = full && hasTimes(full) ? smoothedSpeedsKmh(full) : null;
   rideHover = {
     pts,
     cum,

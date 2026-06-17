@@ -2138,12 +2138,18 @@ body.ridemap-open {
 .ridemap-profile .rp-area {
   fill: rgba(252, 82, 0, 0.16);
 }
-/* Bands marking the stretches detected as not moving (below the stop threshold).
-   Drawn ON TOP of the filled area (under the line) as a dark dim, so a stop reads as
-   the chart receding — never a brighter highlight. On the distance axis they mark
-   WHERE a stop was; on the time axis their width is the stop's true duration. */
+/* Stretches detected as not moving (below the stop threshold). A stop sits at ~0 km/h —
+   the chart floor, where there's no orange fill — so the band is a faint cool panel
+   (`.rp-stop`) topped by a crisp cool rule (`.rp-stop-top`) that marks its top edge. Cool
+   reads as "paused" against the warm orange of riding; both are drawn in the BACKGROUND
+   (behind the area + line) so the profile stays the foreground. On the distance axis the
+   band marks WHERE a stop was; on the time axis its width is the stop's true duration. */
 .ridemap-profile .rp-stop {
-  fill: rgba(5, 7, 10, 0.55);
+  fill: rgba(150, 178, 214, 0.12);
+}
+.ridemap-profile .rp-stop-top {
+  stroke: rgba(150, 178, 214, 0.7);
+  stroke-width: 1;
 }
 .ridemap-profile .rp-line {
   fill: none;

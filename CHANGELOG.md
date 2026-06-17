@@ -17,6 +17,30 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Make "still" stretches legible in the ride profile
+- **What:** Restyled the stopped-range bands in the ride speed/elevation profile: a faint
+  cool fill (`.rp-stop`) topped by a crisp cool rule (`.rp-stop-top`), drawn in the background
+  behind the area + line. Replaced the previous dark dim.
+- **Why:** Stops sit at ~0 km/h — the chart floor, where there's no orange fill — so the old
+  dark-on-dark band was invisible. A cool, top-ruled region reads as a quietly marked "paused"
+  stretch (cool vs. the warm orange of riding) and stays legible exactly where the speed line
+  flatlines, without overdrawing the foreground profile. Picked via a quick live A/B of five
+  treatments (hatch / softfill / gradient / topline / finehatch); the spike was then removed.
+
+## De-jitter GPS speed so a parked bike reads as stopped
+- **What:** Replaced the per-hop speed series (`movingAverage(fullTrackSpeedsKmh, 3)`) with a
+  new `smoothedSpeedsKmh` that derives each point's speed from the **net displacement** over a
+  ~10 s window (`SPEED_WINDOW_SEC`) minus a `GPS_NOISE_FLOOR_M` (12 m) quadrature noise floor.
+  Wired it into peak speed, the moving/stopped split (`fullTrackSummary`, `stableStoppedRanges`)
+  and the ride profile/hover in `main.ts`. Raw `fullTrackSpeedsKmh` is kept (still unit-tested).
+- **Why:** Stationary stretches showed several km/h. Per-hop distance is always positive, so
+  ±5–10 m of ~1 Hz GPS jitter computes as speed, and a moving-average of an always-positive
+  series can never reach zero — it left ~4 km/h, which still exceeded the 1 km/h stop threshold
+  and so counted as "moving". Measuring net displacement (random wander cancels) and shaving the
+  GPS noise floor finally pulls a standstill below the threshold. Trade-off: peak speed is now
+  the fastest *sustained over ~10 s* (a lone GPS spike no longer inflates it) and genuine motion
+  slower than ~walking pace reads as stopped. Total distance is intentionally left untouched.
+
 ## Wind vs speed analytics (new Wind tab)
 - **What:** A fourth view, **Wind**, plots how much the wind helps or hurts you. Each ride
   is split into roughly-straight moving segments (`src/windspeed.ts`); every segment is a

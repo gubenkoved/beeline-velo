@@ -119,6 +119,98 @@ export function fullTrackSpeedsKmh(ft: FullTrack): (number | null)[] {
 }
 
 /**
+ * Baseline time window (seconds) over which `smoothedSpeedsKmh` measures NET
+ * displacement. A single ~1 Hz hop is far too short to denoise a standstill (see
+ * `smoothedSpeedsKmh`); roughly ten seconds is long enough that GPS wander cancels
+ * out yet short enough to still track real acceleration. Trade-off: peak speed
+ * becomes the fastest speed *sustained* over this window (a lone 1-hop GPS spike no
+ * longer inflates it) and tight curves read slightly slow (chord vs. arc).
+ */
+export const SPEED_WINDOW_SEC = 10;
+
+/**
+ * GPS horizontal-noise floor in metres, subtracted (in quadrature) from each window's
+ * net displacement before deriving speed. A consumer-grade fix is uncertain by several
+ * metres, and the displacement between two fixes by ≈√2× that — so a net move under this
+ * floor is indistinguishable from a standstill and must read as zero, not as speed. We
+ * subtract it softly (`√(d² − floor²)`) rather than hard-clipping: a true ride's long
+ * chord is barely touched (110 m → ~109 m) while a parked cluster's few-metre wander
+ * collapses to 0. This is what finally pulls a stationary stretch BELOW the 1 km/h stop
+ * threshold so it's excluded from moving time — a plain window left ~4 km/h of residual
+ * jitter, which still counted as "moving". Cost: genuine motion slower than ≈`floor`
+ * over a `SPEED_WINDOW_SEC` window (a sub-walking-pace crawl) also reads as stopped.
+ */
+export const GPS_NOISE_FLOOR_M = 12;
+
+/**
+ * Per-point speed in km/h that is robust to a stationary GPS jitter — the reason a
+ * parked bike used to read several km/h.
+ *
+ * The naive per-hop speed (`fullTrackSpeedsKmh`) divides each consecutive hop's
+ * haversine distance by its time delta. That distance is ALWAYS positive regardless
+ * of direction, so ±5–10 m of GPS noise over a 1–2 s ~1 Hz hop computes as several
+ * km/h even when standing still — and a moving-average of an always-positive series
+ * can never bring it back to zero. Instead, for each point we measure the **net
+ * straight-line displacement** between the two timestamped points that straddle it
+ * by at least `windowSec` (grown outward, kept time-balanced around the point), shave
+ * off the `GPS_NOISE_FLOOR_M` noise floor (in quadrature), then divide by the real
+ * elapsed time. Over a stop the start/end of the window sit on top of each other and
+ * the residual wander is below the noise floor, so the speed collapses to zero; while
+ * genuinely moving the chord ≈ the path and dwarfs the floor, so true speed survives.
+ *
+ * This is the single denoised series the app consumes for peak/moving speed, the
+ * stop split and the profile colours — it replaces the old
+ * `movingAverage(fullTrackSpeedsKmh(ft), 3)`. Entries are null only where the point
+ * itself has no timestamp or no timed neighbour exists to form a baseline.
+ */
+export function smoothedSpeedsKmh(
+  ft: FullTrack,
+  windowSec: number = SPEED_WINDOW_SEC,
+): (number | null)[] {
+  const n = ft.points.length;
+  const out: (number | null)[] = new Array(n).fill(null);
+  const t = ft.times;
+  const targetMs = Math.max(0, windowSec) * 1000;
+  const floorKm = GPS_NOISE_FLOOR_M / 1000;
+  const prevTimed = (idx: number): number => {
+    let j = idx - 1;
+    while (j >= 0 && t[j] == null) j--;
+    return j; // -1 when none
+  };
+  const nextTimed = (idx: number): number => {
+    let j = idx + 1;
+    while (j < n && t[j] == null) j++;
+    return j; // n when none
+  };
+  for (let i = 0; i < n; i++) {
+    const ti = t[i];
+    if (ti == null) continue;
+    let lo = i;
+    let hi = i;
+    // Grow the window outward until its real time span reaches the baseline, keeping
+    // it balanced around point i by always extending whichever side is closer in time.
+    while ((t[hi] as number) - (t[lo] as number) < targetMs) {
+      const pl = prevTimed(lo);
+      const nh = nextTimed(hi);
+      const canLo = pl >= 0;
+      const canHi = nh < n;
+      if (!canLo && !canHi) break; // window is the whole track; use what we have
+      const lowGap = ti - (t[lo] as number);
+      const highGap = (t[hi] as number) - ti;
+      if (canLo && (!canHi || lowGap <= highGap)) lo = pl;
+      else hi = nh;
+    }
+    const dtH = ((t[hi] as number) - (t[lo] as number)) / 3_600_000;
+    if (dtH <= 0) continue; // no timed neighbour to form a baseline
+    const chordKm = haversineKm(ft.points[lo], ft.points[hi]);
+    // Subtract the GPS noise floor in quadrature: motion under the floor → 0.
+    const movedKm = chordKm > floorKm ? Math.sqrt(chordKm * chordKm - floorKm * floorKm) : 0;
+    out[i] = movedKm / dtH;
+  }
+  return out;
+}
+
+/**
  * Centered moving average over a numeric series that tolerates null gaps (nulls are
  * skipped, and a window with no real values stays null). `radius` is the number of
  * neighbours on each side. Used to tame noisy ~1 Hz GPS speed before colouring.
@@ -215,8 +307,9 @@ export function fullTrackSummary(
     const times = ft.times.filter((t): t is number => t != null);
     const span = (times[times.length - 1] - times[0]) / 1000;
     recordedSec = span > 0 ? span : null;
-    // Peak speed from the smoothed per-point series (raw ~1 Hz GPS is noisy).
-    const speeds = movingAverage(fullTrackSpeedsKmh(ft), 3);
+    // Peak speed from the denoised per-point series (raw ~1 Hz GPS is noisy and reads
+    // several km/h while parked; `smoothedSpeedsKmh` measures net displacement instead).
+    const speeds = smoothedSpeedsKmh(ft);
     let max = 0;
     for (const s of speeds) if (s != null && s > max) max = s;
     maxKmh = max > 0 ? max : null;
@@ -264,9 +357,9 @@ export function fullTrackSummary(
  * A hop `i` (the segment from point `i` to `i+1`) counts as stopped when its smoothed
  * speed is known and below `thresholdKmh`. This is the unsmoothed primitive — it crosses
  * the threshold hop-by-hop, so noisy ~1 Hz GPS fragments it; callers wanting a stable
- * split use `stableStoppedRanges`, which builds on this. `speeds` is the smoothed
- * per-point series (`movingAverage(fullTrackSpeedsKmh)`); its final entry repeats the
- * previous point and carries no real hop, so it's ignored. A range `[s, e]` spans points
+ * split use `stableStoppedRanges`, which builds on this. `speeds` is the denoised
+ * per-point series (`smoothedSpeedsKmh`); its final entry carries no onward hop, so it's
+ * ignored. A range `[s, e]` spans points
  * `s … e+1` (so its distance is `cum[s]…cum[e+1]` and its time `times[s]…times[e+1]`).
  */
 export function stoppedRanges(
@@ -303,15 +396,16 @@ export const STOP_STABILITY_SEC = 10;
  * durations: (1) merge stops separated by only a sub-`minMoveSec` moving blip into one
  * stop, then (2) drop stops shorter than `minStopSec`. A hop with no timestamp counts as
  * 0 s, so it can't sustain a stop on its own. `smoothedSpeeds` defaults to the same
- * radius-3 smoothing the summary uses — pass the already-computed series to avoid
- * recomputing it. This is the single source of truth for "where did the ride stop",
+ * displacement-window series the summary uses (`smoothedSpeedsKmh`) — pass the
+ * already-computed series to avoid recomputing it. This is the single source of truth
+ * for "where did the ride stop",
  * shared by `fullTrackSummary` (moving time/speed) and the profile's grey bands, so the
  * two always agree. Returns inclusive hop ranges `[s, e]` (hop i = point i → i+1).
  */
 export function stableStoppedRanges(
   ft: FullTrack,
   thresholdKmh: number,
-  smoothedSpeeds: (number | null)[] = movingAverage(fullTrackSpeedsKmh(ft), 3),
+  smoothedSpeeds: (number | null)[] = smoothedSpeedsKmh(ft),
   minStopSec: number = STOP_STABILITY_SEC,
   minMoveSec: number = STOP_STABILITY_SEC,
 ): Array<[number, number]> {
