@@ -17,6 +17,15 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Complete & start maintaining the module map in copilot-instructions
+- **What:** Filled in the *Architecture / module map* table so every `src/*.ts` has a row
+  (added the wind/weather, stats, heatmap, area-select, location-history and low-level utility
+  modules that were missing), grouped the table by concern, and added a directive to update
+  the table in the same change that adds/splits/renames/removes a module.
+- **Why:** The map listed only ~16 of 28 source files, so it had silently drifted from the
+  code. As part of the modularization effort we want one canonical, self-maintained structure
+  reference for humans and the assistant — and a rule that keeps it from rotting again.
+
 ## Make "still" stretches legible in the ride profile
 - **What:** Restyled the stopped-range bands in the ride speed/elevation profile: a faint
   cool fill (`.rp-stop`) topped by a crisp cool rule (`.rp-stop-top`), drawn in the background

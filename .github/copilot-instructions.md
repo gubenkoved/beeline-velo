@@ -202,23 +202,79 @@ The Controller is source-agnostic: it holds a `Map<SourceKind, RideSource>`, dis
 ride's action to that ride's source (via `splitUid`), and never touches a concrete backend.
 `main.ts` builds one shared multi-source controller (GPX always registered; Beeline on sign-in).
 
+**Maintain this table.** It is the canonical map of the codebase — when you add, split, rename,
+or remove a `src/*.ts` module (or change what one is fundamentally responsible for), update the
+relevant row in the **same change** (alongside the CHANGELOG entry). A stale map is worse than
+none. The table is grouped by concern; keep new modules in the group they belong to.
+
+*Core: UI · orchestration · source seam*
+
 | File | Responsibility | Key symbols |
 |------|----------------|-------------|
 | [index.html](../index.html) | App shell, markup, styles, Sources dialog (Beeline + GPX) | — |
-| [src/main.ts](../src/main.ts) | UI entry: render + wiring, Sources dialog, re-auth gating, GPX import | `activate()`, `getRealController()`, `openApp()`, `goBeeline()`, `goGpx()`, `pullFromBeeline()`, `importGpxFiles()`, `withBeelineAccess()`, `showSources()` |
-| [src/controller.ts](../src/controller.ts) | Orchestration + app state; source registry; per-ride dispatch | `Controller`, `registerSource()`, `state()`, `runTask()`, `importGpx()` |
+| [src/main.ts](../src/main.ts) | UI entry: render + wiring, Sources dialog, re-auth gating, GPX import, all views (Explore/Map/Stats) | `activate()`, `getRealController()`, `openApp()`, `goBeeline()`, `goGpx()`, `pullFromBeeline()`, `importGpxFiles()`, `withBeelineAccess()`, `showSources()` |
+| [src/controller.ts](../src/controller.ts) | Orchestration + app state; source registry; per-ride dispatch; full-track cache | `Controller`, `registerSource()`, `state()`, `runTask()`, `importGpx()`, `getFullTrack()` |
 | [src/source.ts](../src/source.ts) | `RideSource` seam + capabilities + shared GPX/catalog types | `RideSource`, `SourceCapabilities`, `SourceKind`, `GpxFile`, `ImportResult`, `gpxFilename()` |
+
+*Sources: Beeline account · local GPX*
+
+| File | Responsibility | Key symbols |
+|------|----------------|-------------|
 | [src/gpx-source.ts](../src/gpx-source.ts) | Pure-GPX `RideSource`: import `.gpx`/`.zip`, local metrics/export | `GpxRideSource`, `importFiles()`, `parseGpxFilename()`, `extractGpxName()` |
 | [src/beeline-api.ts](../src/beeline-api.ts) | Beeline cloud backend client + ride mapping | `signIn()`, `fetchRides()`, `uploadRideToStrava()`, `mapBeelineRide()`, `BeelineSession` |
 | [src/beeline-source.ts](../src/beeline-source.ts) | Account `RideSource` over the API (concurrent uploads) | `BeelineRideSource`, `BeelineApi`, `runPool()` |
 | [src/beeline-demo.ts](../src/beeline-demo.ts) | Simulated Beeline backend for the account demo | `demoBeelineDeps()`, `DEMO_BEELINE_EMAIL` |
-| [src/parsing.ts](../src/parsing.ts) | Normalized metrics + ride-key/date + uid helpers | `metricsFromStatStrings()`, `rideDatetime()`, `beelineRideKey()`, `rideUid()`/`splitUid()`, `timeOfDayName()`, `bucketRide()` |
-| [src/jobs.ts](../src/jobs.ts) | Single-worker background queue with coalescing | `JobQueue`, `Task`, `TaskSnapshot` |
+
+*Storage · caches · jobs*
+
+| File | Responsibility | Key symbols |
+|------|----------------|-------------|
 | [src/store.ts](../src/store.ts) | Unified, versioned IndexedDB blob, keyed by ride uid | `Store`, `SCHEMA_VERSION`/`migrate()`, `SETTINGS_SPEC`, `RideRecord`, `upsert()` (uid-normalized) |
-| [src/track.ts](../src/track.ts) | GPS track decode/simplify/render (namespace-robust GPX parse) | `extractTrack()`, `extractFullTrack()`, `fullTrackSummary()`, `simplify()` |
-| [src/zip.ts](../src/zip.ts) | Dependency-free ZIP build + read | `buildZip()`, `unzip()` |
+| [src/gpxcache.ts](../src/gpxcache.ts) | Full-GPX blob store (re-fetchable `cache` vs. primary `data` vault) | `GpxCache` |
+| [src/windcache.ts](../src/windcache.ts) | Compressed per-cell-day wind cache (IndexedDB blobs) | `WindCache`, `encodeCellDay()`, `decodeCellDay()`, `WIND_ENTRY_VERSION` |
+| [src/kv.ts](../src/kv.ts) | Key/value + blob store seams (in-memory for tests, IndexedDB in prod) | `KeyValueStore`, `BlobStore`, `memoryBackend()`, `idbBackend()`, `idbBlobBackend()` |
+| [src/jobs.ts](../src/jobs.ts) | Single-worker background queue with coalescing | `JobQueue`, `Task`, `TaskSnapshot` |
+
+*Parsing · stats · filtering*
+
+| File | Responsibility | Key symbols |
+|------|----------------|-------------|
+| [src/parsing.ts](../src/parsing.ts) | Normalized metrics + ride-key/date + uid helpers + canonical locale number parser | `parseLocaleNumber()`, `metricsFromStatStrings()`, `rideDatetime()`, `beelineRideKey()`, `rideUid()`/`splitUid()`, `bucketRide()` |
+| [src/stats.ts](../src/stats.ts) | Lifetime aggregation: totals, per-period records, biggest rides | `computeStats()`, `RideStats`, `PeriodRecord`, `StatsRide` |
 | [src/filter.ts](../src/filter.ts) | Explore-list filters (incl. `source` dimension) | `matchesFilters()`, `emptyFilters()`, `Filters` |
+
+*Tracks · maps · geometry*
+
+| File | Responsibility | Key symbols |
+|------|----------------|-------------|
+| [src/track.ts](../src/track.ts) | GPS track decode/simplify/render (namespace-robust GPX parse) | `extractTrack()`, `extractFullTrack()`, `fullTrackSummary()`, `simplify()` |
 | [src/mapview.ts](../src/mapview.ts) | Map-view geometry: pick drawable tracks + hover/overlap hit-testing | `ridesWithTracks()`, `nearestRides()`, `RideTrack`, `ProjectedTrack` |
+| [src/heatmap.ts](../src/heatmap.ts) | Route-frequency heatmap geometry: viewport densify + heat points | `buildHeatPoints()`, `densifyTrack()`, `spacingForZoom()`, `HeatPoint` |
+| [src/areaselect.ts](../src/areaselect.ts) | Rubber-band area-select gesture controller (shared by Map + heatmap) | `createAreaSelect()`, `AreaSelect`, `AreaSelectOptions` |
+
+*Wind / weather*
+
+| File | Responsibility | Key symbols |
+|------|----------------|-------------|
+| [src/weather.ts](../src/weather.ts) | Open-Meteo wind client: dataset selection, grid quantization, per-point sampling | `pickDatasets()`, `datasetById()`, `sampleGridCells()`, `quantizeCell()`, `Dataset`, `CellDayWind`, `PointWind`, `RideWind` |
+| [src/windspeed.ts](../src/windspeed.ts) | Wind-vs-speed analytics: ride segmentation, regression, speed capping | `segmentRide()`, `linearRegression()`, `speedCapIndices()`, `WindSeg` |
+| [src/windchart.ts](../src/windchart.ts) | Wind-vs-speed scatter plot (SVG render) | `drawWindSpeedChart()`, `makeScale()`, `niceTicks()` |
+
+*Location history (experimental import)*
+
+| File | Responsibility | Key symbols |
+|------|----------------|-------------|
+| [src/locate.ts](../src/locate.ts) | Reverse-geocode helper (place names for tracks) | `createLocate()`, `Locate`, `LocateOptions` |
+| [src/loc-model.ts](../src/loc-model.ts) | Location-history model types (records, frequent places/trips, profile) | `LocRecord`, `LocProfile`, `LocImport`, `FrequentPlace`, `FrequentTrip` |
+
+*Low-level utilities*
+
+| File | Responsibility | Key symbols |
+|------|----------------|-------------|
+| [src/zip.ts](../src/zip.ts) | Dependency-free ZIP build + read | `buildZip()`, `unzip()` |
+| [src/gzip.ts](../src/gzip.ts) | Gzip compress/decompress (CompressionStream) | `gzip()`, `gunzip()` |
+| [src/varint.ts](../src/varint.ts) | Variable-length int encode/decode (for compact caches) | `ByteWriter`, `ByteReader`, `zigzag()`, `unzigzag()` |
+| [src/env.d.ts](../src/env.d.ts) | Vite env / asset type stubs | — |
 
 ## Conventions
 
