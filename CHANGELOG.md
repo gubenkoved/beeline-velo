@@ -17,6 +17,15 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Year/month batch select only selects rides passing the active filters
+- **What:** `keysOfMonth`/`keysOfYear` now gather keys from `visibleRides(filters,
+  STATE.rides)` instead of the full unfiltered `STATE.rides`.
+- **Why:** clicking a year/month header checkbox selected every ride in that bucket,
+  including ones hidden by the active filters — yet the same checkbox's
+  checked/indeterminate state was already derived from the *visible* rides, so the
+  action and its displayed state disagreed. Sourcing from the filtered set makes
+  batch select act on exactly the rides the user can see.
+
 ## Keep a ride's destination after a GPX download / upload
 - **What:** `Controller.persistDetail` now writes a freshly read ride detail's base
   name to `title_base` instead of the display `title`.

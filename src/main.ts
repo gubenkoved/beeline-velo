@@ -3222,10 +3222,18 @@ function pushError(title: string, full: string): void {
   renderError(STATE.jobs);
 }
 
+// Batch select acts only on rides that pass the active filters — the same
+// visible set the list shows and the header checkbox's checked/indeterminate
+// state is derived from. Sourcing from the full STATE.rides would silently
+// select hidden rides the user can't see.
 const keysOfMonth = (m: string): string[] =>
-  STATE.rides.filter((r) => r.month_key === m).map((r) => r.key);
+  visibleRides(filters, STATE.rides)
+    .filter((r) => r.month_key === m)
+    .map((r) => r.key);
 const keysOfYear = (y: string): string[] =>
-  STATE.rides.filter((r) => (r.month_key || "").slice(0, 4) === y).map((r) => r.key);
+  visibleRides(filters, STATE.rides)
+    .filter((r) => (r.month_key || "").slice(0, 4) === y)
+    .map((r) => r.key);
 
 function toggleGroup(keys: string[]): void {
   const allSel = keys.length > 0 && keys.every((k) => selected.has(k));
