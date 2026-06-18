@@ -17,6 +17,23 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Docs: design-language reference at the top of `style.css` (phase 7)
+- **What:** added a concise design-language header to `src/style.css` listing the
+  semantic tokens and the shared component vocabulary (`button` family, `.iconbtn`,
+  `.scrim` / `.modal-card` / `.modal-x`, `.field`) with the rule "reuse before you
+  write; extract only what truly repeats." So the next surface starts from the
+  vocabulary instead of pasting literals.
+- **Why:** the refactor built a real vocabulary; a short in-file map makes it
+  discoverable and keeps the single-source-of-truth discipline from eroding.
+- **`@layer` deliberately skipped.** The original plan's cascade-layering step does
+  not earn its keep here: the sheet interleaves element and class rules, and a
+  *partial* `@layer` adoption makes layered rules lose to every un-layered rule
+  (e.g. `button:hover` 0,2,1 would stop beating a `.chip:hover` 0,2,0), which can
+  silently flip styling. A *full* migration would be a large reorg with no
+  pixel-level test to catch regressions. The maintainability goals — one source of
+  truth (tokens), no global collisions (`.onb-empty`), reusable components — were
+  reached without it, so adding cascade complexity now is risk without reward.
+
 ## Refactor: shared `.field` text-input look (phase 6)
 - **What:** the Beeline sign-in inputs (`.srcopt-form input`) and the confirm / tag
   inputs (`.confirm-input`) repeated the same dark-inset look (bg, line border, 8px
