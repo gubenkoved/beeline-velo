@@ -17,6 +17,16 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Docs: sync the in-file design-language header
+- **What:** updated the design-language reference block at the top of `style.css` to
+  list the new tokens (elevation scale, `--track`, `--glass-strong`, `--accent-ink`)
+  and the new shared classes (`.panel`, `.map-banner`).
+- **Why:** the header is the canonical "reuse before you write" map; keeping it current
+  is what makes the next feature grab the shared class instead of copying (the exact
+  gap the wind-rose review exposed).
+
+---
+
 ## Refactor: shared `.panel` surface (5 side/stats panels)
 - **What:** the Stats panel, the Map / heatmap / Timeline / Wind-rose side lists all
   repeated the same surface core (`background: var(--panel); border: 1px solid

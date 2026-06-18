@@ -13,11 +13,13 @@
      Surfaces     --surface-hover  (row/control hover fill)
                   --border-hover   (row/control hover border)
                   --map-bg         (dark basemap container behind tiles)
-                  --glass          (translucent header/popover backdrop)
+                  --glass / --glass-strong  (translucent / more-opaque backdrop)
+                  --track          (slider / progress-bar rail fill)
      Accent fills --accent-tint / --accent-tint-strong  (subtle/strong washes)
+                  --accent-ink     (ink/text on accent-filled controls)
      Danger       --danger-border
-     Modals       --scrim          (full-screen overlay backdrop)
-                  --shadow-modal   (elevated card shadow)
+     Overlay      --scrim          (full-screen overlay backdrop)
+     Elevation    --shadow-thumb < --float < --bar < --pop < --menu < --modal
      Geometry     --radius, --font, --mono
 
    COMPONENT CLASSES — the shared building blocks:
@@ -29,6 +31,9 @@
      .scrim             centered full-screen modal backdrop (blur + --scrim)
      .modal-card        elevated dark card inside a .scrim; callers add `width`
      .modal-x           corner close button for a .modal-card
+     .panel             static surface (panel fill + border + radius); callers
+                        add only padding/overflow (vs .modal-card's elevation)
+     .map-banner        centred glass status pill over a map (timeline/wind-rose)
      .field             dark text-input look (border + accent focus ring);
                         callers add only their own sizing/padding
 
