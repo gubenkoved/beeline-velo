@@ -17,6 +17,18 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Refactor: shared `.iconbtn` floating-button class (phase 4)
+- **What:** the four floating square overlay buttons — `.map-expand`, `.map-select`,
+  `.map-locate`, `.map-help` (used across the Map, heatmap and Timeline) — carried
+  four near-identical 17-declaration blocks. Extracted the shared look (34px glass
+  square, blur, shadow, hover) into one canonical `.iconbtn` class; each specific
+  class now keeps only what differs (its `top` slot and its `.active` colour), and
+  the markup gains `iconbtn` at all ten call sites (9 in `index.html`, 1 in the
+  per-ride mini-map button in `main.ts`). Verified pixel-identical in the browser.
+- **Why:** one source of truth for the overlay-button vocabulary — a new floating
+  control now just adds `class="iconbtn"` instead of copying 17 lines, and a tweak
+  to the shared look happens once. Net CSS shrank (~86.2k → 85.1k).
+
 ## Refactor: kill the global `.empty` collision (phase 3)
 - **What:** renamed the first-run onboarding empty-state class from the bare,
   global `.empty` to a namespaced `.onb-empty` (CSS + the one `index.html` call

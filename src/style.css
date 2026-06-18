@@ -3636,10 +3636,11 @@ body.tl-expanded {
   filter: drop-shadow(0 0 1.5px rgba(255, 90, 31, 0.55));
 }
 
-/* Floating full-screen toggle over the map. */
-.map-expand {
+/* Floating square icon button shared by the map / heatmap / timeline overlays
+   (expand, area-select, locate, help). Each specific class adds only its slot
+   (`top`) and its active-state colour. */
+.iconbtn {
   position: absolute;
-  top: 10px;
   right: 10px;
   z-index: 500;
   display: inline-flex;
@@ -3656,36 +3657,20 @@ body.tl-expanded {
   backdrop-filter: blur(6px);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
 }
-.map-expand:hover {
+.iconbtn:hover {
   background: var(--surface-hover);
   border-color: var(--border-hover);
+}
+/* Floating full-screen toggle over the map. */
+.map-expand {
+  top: 10px;
 }
 
 /* Floating area-select toggle, top-right, stacked under the Expand button so it
    clears Leaflet's top-left zoom control. When armed it lights up with the accent
    colour and the map cursor becomes a crosshair. */
 .map-select {
-  position: absolute;
   top: 50px;
-  right: 10px;
-  z-index: 500;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  background: var(--glass);
-  border: 1px solid var(--line);
-  color: var(--text);
-  border-radius: 8px;
-  cursor: pointer;
-  backdrop-filter: blur(6px);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
-}
-.map-select:hover {
-  background: var(--surface-hover);
-  border-color: var(--border-hover);
 }
 .map-select.active {
   background: var(--accent);
@@ -3696,27 +3681,7 @@ body.tl-expanded {
    the same floating-square look; lights up blue (a location/GPS hue, distinct from
    the accent-orange selection state) while it's actively watching the device position. */
 .map-locate {
-  position: absolute;
   top: 90px;
-  right: 10px;
-  z-index: 500;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  background: var(--glass);
-  border: 1px solid var(--line);
-  color: var(--text);
-  border-radius: 8px;
-  cursor: pointer;
-  backdrop-filter: blur(6px);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
-}
-.map-locate:hover {
-  background: var(--surface-hover);
-  border-color: var(--border-hover);
 }
 .map-locate.active {
   background: #2b8cff;
@@ -3732,27 +3697,7 @@ body.tl-expanded {
 /* Floating "?" help button (Timeline) — same square style, third slot under the
    expand/select buttons. Lights up amber while its guide overlay is open. */
 .map-help {
-  position: absolute;
   top: 90px;
-  right: 10px;
-  z-index: 500;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  background: var(--glass);
-  border: 1px solid var(--line);
-  color: var(--text);
-  border-radius: 8px;
-  cursor: pointer;
-  backdrop-filter: blur(6px);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
-}
-.map-help:hover {
-  background: var(--surface-hover);
-  border-color: var(--border-hover);
 }
 .map-help.active {
   background: var(--accent);
