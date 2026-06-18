@@ -17,6 +17,15 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Fix: caching full GPX fetched from the ride map
+- **What:** `Controller.fetchFullTrack` (the interactive path the single-ride map
+  uses) now persists the downloaded GPX to the cache and upserts the ride's rough
+  track + `track_bytes`, mirroring the queued `download-gpx` path. `RideSource.
+  fetchFullTrack` now returns `{ track, bytes }` so the controller can cache the bytes.
+- **Why:** fetching the full GPX from the map only loaded it into the in-memory
+  session map — nothing was written to the GpxCache or the record, so on reload the
+  ride showed as un-cached (`gpx_cached` false) and kept offering to fetch again.
+
 ## Fix: Timeline view leaking into other tabs
 - **What:** Added `#timelineView.hidden` to the view `display:none` rule so the Timeline
   map + "Where you spend time" panel actually hide when switching to another tab.

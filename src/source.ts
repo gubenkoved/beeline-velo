@@ -196,8 +196,12 @@ export interface RideSource {
   ): Promise<GpxFile[]>;
 
   /** Fetch one ride's FULL recorded track (real per-point time + elevation) on
-   *  demand. Throws when the ride has no recorded points to export. */
-  fetchFullTrack(key: string, progress?: Progress): Promise<FullTrack>;
+   *  demand, alongside the raw GPX bytes so the caller can cache them for offline
+   *  reuse. Throws when the ride has no recorded points to export. */
+  fetchFullTrack(
+    key: string,
+    progress?: Progress,
+  ): Promise<{ track: FullTrack; bytes: Uint8Array }>;
 
   /** Rename a ride on the backend; resolves to the updated detail. */
   renameRide(key: string, newTitle: string, progress?: Progress): Promise<RideDetail>;

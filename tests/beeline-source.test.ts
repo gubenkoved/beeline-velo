@@ -542,6 +542,13 @@ describe("Controller + BeelineRideSource (no network)", () => {
     expect(ft.eles[0]).toBe(10);
     expect(api.exportCalls).toEqual([UPLOADED]);
 
+    // The fetched GPX is cached on disk + the ride record reflects it, so a reload
+    // shows the ride as cached instead of offering to fetch again. The cache write
+    // is fire-and-forget (gzip), so wait for it to settle like the live UI does.
+    await vi.waitFor(() =>
+      expect(c.state().rides.find((r) => r.key === key)?.gpx_cached).toBe(true),
+    );
+
     // A second call is served from the in-memory cache — no extra cloud fetch.
     await c.fetchFullTrack(key);
     expect(api.exportCalls).toEqual([UPLOADED]);

@@ -425,12 +425,15 @@ export class BeelineRideSource implements RideSource {
     return results;
   }
 
-  async fetchFullTrack(key: string, progress: Progress = () => false): Promise<FullTrack> {
+  async fetchFullTrack(
+    key: string,
+    progress: Progress = () => false,
+  ): Promise<{ track: FullTrack; bytes: Uint8Array }> {
     const name = rideShortLabel(key) || key;
     await progress(`downloading full track: ${name}…`);
     const pushId = await this.resolvePushId(key);
     const bytes = await this.withFreshSession((s) => this.api.exportRideGpx(s, pushId));
-    return extractFullTrack(new TextDecoder().decode(bytes));
+    return { track: extractFullTrack(new TextDecoder().decode(bytes)), bytes };
   }
 
   /**

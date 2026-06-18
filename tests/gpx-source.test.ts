@@ -123,7 +123,7 @@ describe("GpxRideSource", () => {
     expect(files).toHaveLength(1);
     expect(new TextDecoder().decode(files[0].bytes)).toContain("<trkpt");
 
-    const ft = await source.fetchFullTrack(key);
+    const { track: ft } = await source.fetchFullTrack(key);
     expect(ft.points.length).toBe(2);
     expect(ft.times[0]).not.toBeNull();
 

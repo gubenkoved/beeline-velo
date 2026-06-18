@@ -370,10 +370,29 @@ export class Controller {
     if (fromCache) return fromCache;
     const { source: kind, dateKey } = splitUid(uid);
     const source = this.requireSource(kind as SourceKind);
-    const ft = await source.fetchFullTrack(dateKey);
-    this.fullTracks.set(uid, ft);
+    const { track, bytes } = await source.fetchFullTrack(dateKey);
+    this.fullTracks.set(uid, track);
+    // Persist the full GPX (gzipped) + a rough display track so this interactive
+    // fetch survives a reload exactly like the queued download path — otherwise the
+    // ride keeps showing as un-cached and offers to fetch again. Best-effort cache
+    // write (quota errors surface via the cache's own onError); bytes are read-only.
+    void this.blobFor(uid).put(uid, bytes).then((ok) => {
+      if (ok) this.notify();
+    });
+    const rough = gpxToRoughTrack(bytes, this.store.settings.trackPointsPerKm);
+    if (rough.polyline) {
+      this.store.upsert(uid, {
+        ...this.deviceFieldsFor(kind as SourceKind),
+        track: rough.polyline,
+        track_src_points: rough.srcPoints,
+        track_points: rough.keptPoints,
+        track_km: rough.km,
+        track_bytes: bytes.length,
+      });
+      this.store.save();
+    }
     this.notify();
-    return ft;
+    return track;
   }
 
   /**

@@ -243,7 +243,7 @@ export class GpxRideSource implements RideSource {
   async fetchFullTrack(key: string) {
     const bytes = await this.bytesFor(key);
     if (!bytes) throw new Error("the imported GPX is no longer in the cache");
-    return extractFullTrack(decoder.decode(bytes));
+    return { track: extractFullTrack(decoder.decode(bytes)), bytes };
   }
 
   /** Rename happens locally — there's no backend; the Controller mirrors the result
