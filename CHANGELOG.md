@@ -17,6 +17,22 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Refactor: kill the global `.empty` collision (phase 3)
+- **What:** renamed the first-run onboarding empty-state class from the bare,
+  global `.empty` to a namespaced `.onb-empty` (CSS + the one `index.html` call
+  site; the element keeps `id="empty"`, so all JS `$("#empty")` wiring is
+  untouched). The two unrelated elements that use `empty` as a *local* state
+  modifier — the speed-histogram "no data" stub bar and the leading blank calendar
+  cells — now resolve only to their own scoped rules, and `.col .bar.empty` gained
+  an explicit `padding: 0` so it renders as the intended 2px stub. Removed the now
+  redundant `padding: 0` defence (and its stale comment) from `.tl-cal-cell.empty`.
+- **Why:** the bare `.empty` (0,1,0) onboarding rule bled `padding: 56px` into any
+  element carrying an `empty` modifier — the exact bug that inflated the calendar
+  cells. Namespacing the component removes the whole class of collision instead of
+  patching each victim. *Incidental visual correction:* the histogram's "no speed
+  data" stub bar previously inherited that 56px padding and rendered tall; it now
+  shows as the 2px stub its inline `height` always intended.
+
 ## Refactor: design-language tokens (phase 1)
 - **What:** promoted the most-repeated colour literals in `src/style.css` to semantic
   `:root` tokens and swapped every call site over — `--surface-hover` (#222732 ×13),

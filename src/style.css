@@ -1297,6 +1297,9 @@ span.caret.open::before {
 .col .bar.empty {
   background: var(--line);
   opacity: 0.5;
+  /* `empty` here is a local "no data" modifier; render as the intended 2px stub
+     (inline height) rather than inheriting any global empty-state padding. */
+  padding: 0;
 }
 .col .cval {
   font-size: 10.5px;
@@ -2790,12 +2793,10 @@ body.ridemap-open {
   font-weight: 600;
   cursor: default;
 }
-/* Leading blank cells carry the bare `empty` class, whose global onboarding rule
-   (`.empty { padding: 56px }`) is as specific as `.tl-cal-cell` and declared later,
-   so it would re-inflate these cells; this two-class rule beats it back to 0. */
+/* Leading blank cells are non-interactive; `empty` is a local state modifier here
+   (the onboarding empty-state is `.onb-empty`, so there is no global collision). */
 .tl-cal-cell.empty {
   cursor: default;
-  padding: 0;
 }
 /* Weekend accent — sleek: no boxy per-cell fill, just a soft warm tint on the
    Sat/Sun day numbers and header letters so the columns read as "weekend" quietly.
@@ -4077,7 +4078,7 @@ body.heat-expanded {
    <button> (correct semantics for an action) drawn to read as an inline text link. */
 .map-side .ms-empty a,
 .stats-empty a,
-.empty a,
+.onb-empty a,
 .linkbtn {
   color: var(--accent);
   font-weight: 500;
@@ -4248,7 +4249,11 @@ body.heat-expanded {
   border-color: var(--accent-dim);
 }
 
-.empty {
+/* First-run onboarding empty-state container. Namespaced (`onb-empty`, not a
+   bare `.empty`) so its generous padding can never bleed into unrelated elements
+   that use `empty` as a local state modifier (histogram stub bars, blank calendar
+   cells). */
+.onb-empty {
   color: var(--muted);
   text-align: center;
   padding: 56px 20px;
