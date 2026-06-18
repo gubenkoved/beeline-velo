@@ -62,6 +62,7 @@ import {
 import { parseLocationHistory } from "./loc-parse";
 import { LocationHistoryStore } from "./loc-store";
 import { createLocate, type Locate } from "./locate";
+import { effect, signal } from "./reactive";
 import {
   closeRideMap,
   enableRideMapWind,
@@ -843,8 +844,23 @@ let queueExpanded = true;
 // scope so it survives the job ticker's re-renders; auto-resets when work ends so
 // the next batch shows itself rather than staying hidden silently.
 let jobHidden = false;
-let statGran: Granularity | "auto" = "auto";
-let statMetric: "distance" | "speed" = "distance";
+// Stats granularity + metric toggles as signals: an effect keeps each segmented
+// control's `.active` highlight in sync (one place, replacing the active-class
+// loops that were otherwise duplicated in renderStats and the click handler).
+const statGran = signal<Granularity | "auto">("auto");
+const statMetric = signal<"distance" | "speed">("distance");
+effect(() => {
+  const g = statGran();
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#statGran button")) {
+    b.classList.toggle("active", b.dataset.gran === g);
+  }
+});
+effect(() => {
+  const m = statMetric();
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#statMetric button")) {
+    b.classList.toggle("active", b.dataset.metric === m);
+  }
+});
 // Persistent error stack. Every error — failed jobs AND standalone connection/
 // import/storage errors — is shown as its own card and only disappears when the
 // user dismisses it (or, for a job, when that job is re-run and succeeds). We track
@@ -2789,16 +2805,11 @@ function renderStats(rides: AppState["rides"]): void {
   }
   panel.classList.remove("hidden");
 
-  const gran: Granularity = statGran === "auto" ? autoGranularity(rides) : statGran;
-  document.querySelectorAll<HTMLButtonElement>("#statGran button").forEach((b) => {
-    b.classList.toggle("active", b.dataset.gran === statGran);
-  });
-  document.querySelectorAll<HTMLButtonElement>("#statMetric button").forEach((b) => {
-    b.classList.toggle("active", b.dataset.metric === statMetric);
-  });
+  const g = statGran();
+  const gran: Granularity = g === "auto" ? autoGranularity(rides) : g;
 
   // Outlier-trim sliders belong to the speed view only.
-  $("#spTrim").classList.toggle("hidden", statMetric !== "speed");
+  $("#spTrim").classList.toggle("hidden", statMetric() !== "speed");
   syncTrimControls();
 
   // Per bucket we track distance (always) and the subset that also has a moving
@@ -2840,7 +2851,7 @@ function renderStats(rides: AppState["rides"]): void {
   const fastPct = STATE.settings.speedTrimFastPct;
   const bucketSpeed = (e: StatBucket): number => trimmedSpeed(e.rides, slowPct, fastPct);
 
-  if (statMetric === "speed") {
+  if (statMetric() === "speed") {
     renderSpeed(gran, items, bucketSpeed, rides.length, slowPct, fastPct);
   } else {
     renderDistance(gran, items, rides.length);
@@ -4294,18 +4305,12 @@ document.addEventListener("click", (e) => {
     return;
   }
   if (t.dataset?.gran) {
-    statGran = t.dataset.gran as Granularity | "auto";
-    document.querySelectorAll<HTMLButtonElement>("#statGran button").forEach((b) => {
-      b.classList.toggle("active", b.dataset.gran === statGran);
-    });
+    statGran.set(t.dataset.gran as Granularity | "auto");
     render();
     return;
   }
   if (t.dataset?.metric) {
-    statMetric = t.dataset.metric as "distance" | "speed";
-    document.querySelectorAll<HTMLButtonElement>("#statMetric button").forEach((b) => {
-      b.classList.toggle("active", b.dataset.metric === statMetric);
-    });
+    statMetric.set(t.dataset.metric as "distance" | "speed");
     render();
     return;
   }

@@ -17,6 +17,26 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Feature: tiny reactive core (`src/reactive.ts`) + first adoption
+- **What:** added `src/reactive.ts` — fine-grained `signal` / `effect` / `computed` in
+  ~50 dependency-free lines (reading a signal inside an effect subscribes it; the
+  effect re-runs only when a signal it actually read changes; effects clean up stale
+  deps; `computed` caches). 10 unit tests in `tests/reactive.test.ts`. First adopter:
+  the Wind/Speed view's granularity + metric toggles — `statGran`/`statMetric` became
+  signals, and one `effect` each keeps the segmented-control `.active` highlight in
+  sync, **deleting the active-class loop that was duplicated four times** (twice in
+  the render path, twice in the click handler). Verified: the effect sets the initial
+  highlight correctly in-browser; build + 423 tests + biome green.
+- **Why:** the app re-renders via hand-rolled `lastSig`/`lastTrackSig` dirty-checking
+  across ~40 module-level `let`s — verbose, and the glue that makes `main.ts` (4.9k
+  lines) hard to split. A signal/effect core replaces that plumbing and is the
+  mechanism for decomposing `main.ts` into self-contained views (each owning its
+  state as signals). Deliberately tiny — no framework, no scheduler, no new dep; see
+  `temp/design-language-next-steps.md` and the "do we need a framework?" analysis
+  (answer: no — the view layer is ~60 `innerHTML` sites, not the 20k LOC).
+
+---
+
 ## Feature: render-layer design vocabulary (`src/ui.ts`) + `statNum`
 - **What:** introduced `src/ui.ts` — a pure, dependency-free leaf module of
   `(opts) => string` builders that own the canonical markup+classes for shared
