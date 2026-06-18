@@ -58,6 +58,7 @@ import {
   OpenMeteo,
   type PointWind,
   pickDatasets,
+  quantizeCell,
   type RideWind,
   sampleGridCells,
   summarize,
@@ -89,6 +90,29 @@ function uniqueUtcDays(times: number[]): string[] {
   for (const t of times)
     if (Number.isFinite(t)) days.add(new Date(t).toISOString().slice(0, 10));
   return [...days].sort();
+}
+
+/** ERA5 reanalysis lags real time by ~5 days; the climatology view ends a touch
+ *  earlier so the most-recent days never come back empty. */
+const POINT_WIND_LAG_DAYS = 6;
+/** Earliest year the point-wind climatology will pull (ERA5 reaches back further,
+ *  but this keeps the slider domain and any single fetch sane). */
+const POINT_WIND_MIN_YEAR = 1950;
+/** Widest year window pulled in one `getPointWind` call (bounds the request count). */
+const POINT_WIND_MAX_SPAN = 20;
+
+/** Every UTC calendar day ("YYYY-MM-DD") from `startMs` to `endMs` inclusive. */
+function utcDaysBetween(startMs: number, endMs: number): string[] {
+  const out: string[] = [];
+  const first = Date.UTC(
+    new Date(startMs).getUTCFullYear(),
+    new Date(startMs).getUTCMonth(),
+    new Date(startMs).getUTCDate(),
+  );
+  for (let t = first; t <= endMs; t += 86_400_000) {
+    out.push(new Date(t).toISOString().slice(0, 10));
+  }
+  return out;
 }
 
 /** Fill null gaps in a per-point time series by linear interpolation between known
@@ -572,6 +596,70 @@ export class Controller {
     this.rideWinds.clear();
     this.rideWindGeom.clear();
     this.notify();
+  }
+
+  /**
+   * Pull historical wind for a single point over an inclusive [startYear, endYear]
+   * window from the ERA5 reanalysis — the only model spanning decades, so the grid
+   * stays consistent across the whole period. Powers the Windalytics climatology view.
+   *
+   * One archive request per calendar year that isn't already fully cached (each
+   * returns the whole year as hourly arrays); everything lands in the shared wind
+   * cache, so re-opening a point — or sliding the year window — only fetches the new
+   * years. The window is clamped to [1950, this year] and capped at 20 years. Returns
+   * the grid cell that served the point and every cached cell-day in range, oldest
+   * first, for the view to aggregate entirely in memory.
+   */
+  async getPointWind(
+    lat: number,
+    lon: number,
+    startYear: number,
+    endYear: number,
+    onStage?: (msg: string) => void,
+  ): Promise<{ cell: { lat: number; lon: number; gridKm: number }; days: CellDayWind[] }> {
+    const dataset = datasetById("era5");
+    const cell = quantizeCell(lat, lon, dataset);
+    const nowYear = new Date().getUTCFullYear();
+    const hi = Math.min(nowYear, Math.round(endYear));
+    let lo = Math.max(POINT_WIND_MIN_YEAR, Math.round(startYear));
+    if (lo > hi) lo = hi;
+    if (hi - lo + 1 > POINT_WIND_MAX_SPAN) lo = hi - (POINT_WIND_MAX_SPAN - 1);
+    // ERA5 lags real time by several days; the current year ends a touch earlier.
+    const endMs = Math.min(
+      Date.now() - POINT_WIND_LAG_DAYS * 86_400_000,
+      Date.UTC(hi, 11, 31),
+    );
+    const startMs = Date.UTC(lo, 0, 1);
+
+    const out: CellDayWind[] = [];
+    const keyFor = (d: string): string => cellDayKey(dataset.id, cell.latIdx, cell.lonIdx, d);
+
+    for (let y = lo; y <= hi; y++) {
+      const chunkStart = Math.max(startMs, Date.UTC(y, 0, 1));
+      const chunkEnd = Math.min(endMs, Date.UTC(y, 11, 31));
+      if (chunkEnd < chunkStart) continue;
+      const chunkDays = utcDaysBetween(chunkStart, chunkEnd);
+      if (chunkDays.length === 0) continue;
+
+      const missing = chunkDays.some((d) => !this.windCache.has(keyFor(d)));
+      if (missing) {
+        onStage?.(`Fetching ${y} wind from Open-Meteo · ERA5…`);
+        const entries = await this.windClient.fetchWindMulti(
+          dataset,
+          [cell],
+          chunkDays,
+          onStage,
+        );
+        await this.windCache.putMany(entries);
+        for (const e of entries) out.push(e);
+      } else {
+        for (const d of chunkDays) {
+          const e = await this.windCache.get(keyFor(d));
+          if (e) out.push(e);
+        }
+      }
+    }
+    return { cell: { lat: cell.lat, lon: cell.lon, gridKm: dataset.gridKm }, days: out };
   }
 
   /** Recompute a ride's per-point wind from the cache for display — no network. If

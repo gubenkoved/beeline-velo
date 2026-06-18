@@ -206,4 +206,28 @@ describe("Controller historical wind", () => {
     // The unresolved ones are NOT stuck "in flight" — they can be resolved again.
     expect(c.isResolvingWind(unresolved[0])).toBe(false);
   });
+
+  it("getPointWind fetches ERA5 for a point, caches it, and re-reads from cache", async () => {
+    const store = new Store(memoryBackend());
+    const weather = fakeWeather();
+    const c = makeController(store, weather.deps);
+
+    const ny = new Date().getUTCFullYear();
+    const stages: string[] = [];
+    const a = await c.getPointWind(52.0, 13.0, ny - 2, ny - 1, (m) => stages.push(m));
+
+    // One ERA5 cell, two full years of daily entries, oldest first.
+    expect(a.cell.gridKm).toBe(25); // ERA5 25 km grid
+    expect(a.days.length).toBeGreaterThan(360 * 2);
+    expect(a.days.every((d) => d.dataset === "era5")).toBe(true);
+    expect(a.days[0].dayISO < a.days[a.days.length - 1].dayISO).toBe(true);
+    expect(stages.some((m) => /ERA5/.test(m))).toBe(true);
+    expect(weather.calls()).toBeGreaterThan(0);
+
+    // A second identical request is served entirely from the cache — no new fetch.
+    const before = weather.calls();
+    const b = await c.getPointWind(52.0, 13.0, ny - 2, ny - 1);
+    expect(weather.calls()).toBe(before);
+    expect(b.days.length).toBe(a.days.length);
+  });
 });

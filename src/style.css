@@ -3446,6 +3446,483 @@ body.tl-expanded {
   overflow: hidden;
 }
 
+/* === Windalytics (climate) view: pick a point, mine its wind climatology ===
+   Mirrors the Timeline layout (.tl-wrap/.tl-main/.tl-side) and shares the dark
+   basemap + the floating expand button. The side panel holds the wind rose, the
+   monthly small-multiples and the month×direction heatmap. */
+.cl-wrap {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 12px;
+  height: calc(100vh - 210px);
+  min-height: 460px;
+}
+.cl-wrap.hidden {
+  display: none;
+}
+.cl-main {
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  isolation: isolate;
+}
+/* The Wind-rose view has no area-select, so its "Locate me" button stacks directly
+   under Expand (no empty middle slot like the Map view's). */
+.cl-main .map-locate {
+  top: 50px;
+}
+#climateMap {
+  flex: 1;
+  min-height: 0;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  cursor: crosshair;
+  isolation: isolate;
+}
+#climateMap .leaflet-container {
+  height: 100%;
+  width: 100%;
+  background: var(--map-bg);
+}
+/* Same dark, desaturated basemap treatment as every other map. */
+#climateMap .leaflet-tile-pane {
+  filter: grayscale(85%) brightness(0.6) contrast(1.1);
+}
+/* Keep the crosshair over the pannable layers so "click to pick a point" reads. */
+#climateMap .leaflet-grab {
+  cursor: crosshair;
+}
+
+.cl-banner {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 500;
+  max-width: calc(100% - 110px);
+  padding: 6px 11px;
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.cl-banner.hidden {
+  display: none;
+}
+
+/* In-flow control bar below the map: year + hour sliders, then the month chips. */
+.cl-bar {
+  margin-top: 10px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px 18px;
+  padding: 8px 14px;
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  flex-wrap: wrap;
+}
+.cl-ctl {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.cl-ctl input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+/* Match the shared `.rf-*` range slider so both controls read as one family: a 4px
+   dark track with an accent fill (left of the thumb) under the same round accent
+   thumb (dark ring + soft shadow). The fill fraction comes from JS (`--cl-fill`). */
+.cl-ctl input[type="range"]:focus {
+  outline: none;
+}
+.cl-ctl input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 calc(var(--cl-fill, 0) * 100%),
+    #2a313c calc(var(--cl-fill, 0) * 100%) 100%
+  );
+}
+.cl-ctl input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 3px;
+  background: #2a313c;
+}
+.cl-ctl input[type="range"]::-moz-range-progress {
+  height: 4px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.cl-ctl input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 15px;
+  width: 15px;
+  margin-top: -5.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  cursor: grab;
+}
+.cl-ctl input[type="range"]::-webkit-slider-thumb:active {
+  cursor: grabbing;
+}
+.cl-ctl input[type="range"]::-moz-range-thumb {
+  height: 15px;
+  width: 15px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  cursor: grab;
+}
+.cl-ctl output {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  min-width: 48px;
+  text-align: right;
+}
+/* The year window is the most important control, so it gets its own full-width row
+   in tight layouts (the non-expanded view + mobile) — a long track means precise,
+   year-by-year dragging. The hour control sits on its own full row beneath it, its
+   slider stretched to match (symmetry). Both share a row only in fullscreen (see
+   body.climate-expanded below), where there's ample width. */
+.cl-years {
+  flex: 1 1 100%;
+  min-width: 200px;
+}
+/* Tighten the year edge labels to the short "2006"/"2025" text. Scoped under
+   `.cl-bar` so it beats the generic `.range-filter .rf-edge` (82px, sized for full
+   dates) defined later in the file — equal specificity would otherwise let it win. */
+.cl-bar .cl-years .rf-edge {
+  min-width: 40px;
+}
+
+.cl-side {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 14px;
+  overflow-y: auto;
+}
+.cl-hint {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.cl-hint b {
+  color: var(--text);
+}
+
+.cl-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 14px 16px;
+}
+/* Match the Stats view's numerals: no card chrome — a large value over a short
+   accent underline and a small tracked-out label (the underline is the only colour). */
+.cl-card {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+.cl-card b {
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+  letter-spacing: -0.02em;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--accent);
+}
+.cl-card span {
+  font-size: 9.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+}
+.cl-prov {
+  margin: 12px 0 4px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: left;
+}
+.cl-prov-2 {
+  margin-top: 0;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.cl-sec {
+  margin-top: 16px;
+}
+.cl-h {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cl-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.cl-rose {
+  display: flex;
+  justify-content: center;
+  position: relative;
+}
+.cl-rose-svg {
+  max-width: 100%;
+  height: auto;
+}
+/* Hover highlight wedge over the sector under the cursor, plus its floating readout. */
+.cl-rose-hov {
+  pointer-events: none;
+}
+.cl-rose-hi {
+  fill: rgba(255, 255, 255, 0.09);
+  stroke: rgba(255, 255, 255, 0.3);
+  stroke-width: 1;
+}
+.cl-rose-tip {
+  position: absolute;
+  z-index: 5;
+  min-width: 124px;
+  max-width: 180px;
+  padding: 7px 9px;
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  font-size: 11px;
+}
+.cl-rose-tip.hidden {
+  display: none;
+}
+.cl-tip-h {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.cl-tip-sub {
+  margin-top: 1px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.cl-tip-bars {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cl-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cl-tip-row i {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+.cl-tip-bl {
+  flex: 1 1 auto;
+  color: var(--muted);
+}
+.cl-tip-bv {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.cl-ring {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+.cl-calm {
+  fill: rgba(255, 255, 255, 0.05);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.cl-card-lbl {
+  fill: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.cl-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 8px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.cl-leg-t {
+  color: var(--text);
+  font-weight: 600;
+}
+.cl-leg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cl-leg i {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.cl-leg-calm i {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+}
+
+.cl-multi {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+/* Each mini-rose is the month selector: click to focus the main rose on it, click
+   the focused one again for all months. Reset the button chrome, then light up on
+   hover and when selected (accent border + lifted fill). */
+.cl-mini {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 4px 2px 3px;
+  text-align: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+.cl-mini:hover {
+  background: var(--bg);
+  border-color: var(--border-hover);
+}
+.cl-mini:focus-visible {
+  outline: none;
+  border-color: var(--border-hover);
+}
+/* Selected month: a soft accent wash + a gentle translucent accent edge — elegant,
+   not the full-saturation border (too harsh on a small busy tile). */
+.cl-mini-sel,
+.cl-mini-sel:hover {
+  background: var(--accent-tint);
+  border-color: rgba(252, 82, 0, 0.4);
+}
+.cl-mini svg {
+  width: 100%;
+  height: auto;
+}
+.cl-mini-cap {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+.cl-mini-sel .cl-mini-cap {
+  color: var(--text);
+}
+.cl-mini-cap small {
+  display: block;
+  font-size: 8.5px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+.cl-mini-empty {
+  opacity: 0.35;
+}
+
+.cl-heat {
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+}
+.cl-heat-svg {
+  max-width: 100%;
+  height: auto;
+}
+.cl-hm-lbl {
+  fill: var(--muted);
+  font-size: 9.5px;
+}
+
+body.climate-expanded .cl-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  height: 100svh;
+  padding: 12px;
+  gap: 12px;
+  background: var(--bg);
+  grid-template-columns: 1fr 360px;
+}
+body.climate-expanded {
+  overflow: hidden;
+}
+/* Fullscreen has plenty of width — let the year slider and the hour control share a
+   row again (both stay wide enough to be precise). */
+body.climate-expanded .cl-years {
+  flex: 1 1 360px;
+}
+body.climate-expanded .cl-ctl {
+  flex: 0 1 auto;
+}
+body.climate-expanded .cl-ctl input[type="range"] {
+  flex: 0 0 auto;
+  width: 150px;
+}
+
 .heat-thickness {
   display: inline-flex;
   align-items: center;

@@ -43,6 +43,13 @@ import "leaflet.heat";
 import { BeelineError } from "./beeline-api";
 import { DEMO_BEELINE_EMAIL, demoBeelineDeps } from "./beeline-demo";
 import { BeelineRideSource, type BeelineSourceDeps } from "./beeline-source";
+import {
+  collapseClimate,
+  initClimateView,
+  isClimateExpanded,
+  leaveClimateView,
+  mountClimateView,
+} from "./climate-view";
 import { GpxRideSource } from "./gpx-source";
 import { GpxCache } from "./gpxcache";
 import {
@@ -880,12 +887,16 @@ function escHtml(s: string): string {
 // Top-level view ("Explore" = the rides list/stats; "Map" = all-rides heatmap).
 // Remembered across reloads; defaults to Explore on first run.
 // --------------------------------------------------------------------------- //
-type ViewName = "explore" | "map" | "stats" | "analytics" | "timeline";
+type ViewName = "explore" | "map" | "stats" | "analytics" | "climate" | "timeline";
 const VIEW_KEY = "beeline_uploader.view";
 const readView = (): ViewName => {
   try {
     const v = localStorage.getItem(VIEW_KEY);
-    return v === "map" || v === "stats" || v === "analytics" || v === "timeline"
+    return v === "map" ||
+      v === "stats" ||
+      v === "analytics" ||
+      v === "climate" ||
+      v === "timeline"
       ? v
       : "explore";
   } catch {
@@ -1644,13 +1655,15 @@ function applyView(): void {
   const isMap = activeView === "map";
   const isStats = activeView === "stats";
   const isAnalytics = activeView === "analytics";
+  const isClimate = activeView === "climate";
   const isTimeline = activeView === "timeline";
   document
     .getElementById("exploreView")
-    ?.classList.toggle("hidden", isMap || isStats || isAnalytics || isTimeline);
+    ?.classList.toggle("hidden", isMap || isStats || isAnalytics || isClimate || isTimeline);
   document.getElementById("mapView")?.classList.toggle("hidden", !isMap);
   document.getElementById("statsView")?.classList.toggle("hidden", !isStats);
   document.getElementById("analyticsView")?.classList.toggle("hidden", !isAnalytics);
+  document.getElementById("climateView")?.classList.toggle("hidden", !isClimate);
   document.getElementById("timelineView")?.classList.toggle("hidden", !isTimeline);
   if (!isMap && document.body.classList.contains("map-expanded")) setMapExpanded(false);
   if (!isStats && document.body.classList.contains("heat-expanded")) setHeatExpanded(false);
@@ -1659,6 +1672,7 @@ function applyView(): void {
   // Stop watching the device position when its map leaves the screen.
   if (!isMap && mapLocate.isActive()) mapLocate.setActive(false);
   if (!isStats && heatLocate.isActive()) heatLocate.setActive(false);
+  if (!isClimate) leaveClimateView();
   if (!isTimeline) leaveTimelineView();
   document.querySelectorAll<HTMLButtonElement>("#viewTabs .vtab").forEach((b) => {
     b.classList.toggle("active", b.dataset.view === activeView);
@@ -3278,6 +3292,7 @@ function render(): void {
   // The wrapper coalesces a re-entrant call into one post-sweep refresh, so a passive
   // re-render (a background job ticking ride state) never restarts a live sweep.
   else if (activeView === "analytics") void mountAnalyticsView();
+  else if (activeView === "climate") mountClimateView();
   else if (activeView === "timeline") mountTimelineView();
   else mountMaps();
   // The consolidated actions menu lives in static markup (not rebuilt here), so
@@ -4802,6 +4817,13 @@ initTimelineView({
   onDrop: () => void dropLocationHistory(),
 });
 
+initClimateView({
+  getPointWind: (lat, lon, startYear, endYear, onStage) =>
+    controller.getPointWind(lat, lon, startYear, endYear, onStage),
+  toast,
+  osmAttribution: OSM_ATTRIBUTION,
+});
+
 // Map view side panel: hovering an entry highlights its track; clicking opens the
 // ride in the Explore view. no-track entries carry no data-key, so they're inert.
 const mapSideEl = document.getElementById("mapSide");
@@ -4862,6 +4884,7 @@ window.addEventListener("keydown", (e) => {
   }
   if (document.body.classList.contains("map-expanded")) setMapExpanded(false);
   if (document.body.classList.contains("heat-expanded")) setHeatExpanded(false);
+  if (isClimateExpanded()) collapseClimate();
   if (isTimelineHelpOpen()) closeTimelineHelp();
   else if (isTimelineExpanded()) collapseTimeline();
 });

@@ -216,9 +216,9 @@ none. The table is grouped by concern; keep new modules in the group they belong
 | File | Responsibility | Key symbols |
 |------|----------------|-------------|
 | [index.html](../index.html) | App shell, markup, styles, Sources dialog (Beeline + GPX) | — |
-| [src/main.ts](../src/main.ts) | UI entry: render + wiring, Sources dialog, re-auth gating, GPX import, Location-History import/drop, all views (Explore/Map/Stats/Wind/Timeline) | `activate()`, `getRealController()`, `openApp()`, `goBeeline()`, `goGpx()`, `pullFromBeeline()`, `importGpxFiles()`, `importLocationHistory()`, `dropLocationHistory()`, `mountTimelineView()`, `withBeelineAccess()`, `showSources()` |
+| [src/main.ts](../src/main.ts) | UI entry: render + wiring, Sources dialog, re-auth gating, GPX import, Location-History import/drop, all views (Explore/Map/Stats/Wind-Speed/Wind-rose/Timeline) | `activate()`, `getRealController()`, `openApp()`, `goBeeline()`, `goGpx()`, `pullFromBeeline()`, `importGpxFiles()`, `importLocationHistory()`, `dropLocationHistory()`, `mountTimelineView()`, `mountClimateView()`, `withBeelineAccess()`, `showSources()` |
 | [src/ridemap.ts](../src/ridemap.ts) | Full-screen single-ride route map: route colouring (height/speed/wind), elevation/speed profile, hover readout + wind dial. Depends on the app only via an injected `RideMapDeps` seam | `initRideMap()`, `openRideMap()`, `closeRideMap()`, `refreshOpenRideMapWind()` |
-| [src/controller.ts](../src/controller.ts) | Orchestration + app state; source registry; per-ride dispatch; full-track cache | `Controller`, `registerSource()`, `state()`, `runTask()`, `importGpx()`, `getFullTrack()` |
+| [src/controller.ts](../src/controller.ts) | Orchestration + app state; source registry; per-ride dispatch; full-track cache; point wind climatology | `Controller`, `registerSource()`, `state()`, `runTask()`, `importGpx()`, `getFullTrack()`, `getPointWind()` |
 | [src/source.ts](../src/source.ts) | `RideSource` seam + capabilities + shared GPX/catalog types | `RideSource`, `SourceCapabilities`, `SourceKind`, `GpxFile`, `ImportResult`, `gpxFilename()` |
 
 *Sources: Beeline account · local GPX*
@@ -265,6 +265,8 @@ none. The table is grouped by concern; keep new modules in the group they belong
 | [src/weather.ts](../src/weather.ts) | Open-Meteo wind client: dataset selection, grid quantization, per-point sampling | `pickDatasets()`, `datasetById()`, `sampleGridCells()`, `quantizeCell()`, `Dataset`, `CellDayWind`, `PointWind`, `RideWind` |
 | [src/windspeed.ts](../src/windspeed.ts) | Wind-vs-speed analytics: ride segmentation, regression, speed capping | `segmentRide()`, `linearRegression()`, `speedCapIndices()`, `WindSeg` |
 | [src/windchart.ts](../src/windchart.ts) | Wind-vs-speed scatter plot (SVG render) | `drawWindSpeedChart()`, `makeScale()`, `niceTicks()` |
+| [src/windrose.ts](../src/windrose.ts) | Wind-rose climatology compute (pure): flatten cached cell-days → 16-sector × speed-bin rose, monthly breakdown, vector-mean; local-time-from-longitude | `flattenSamples()`, `roseFromSamples()`, `monthlyRoses()`, `sectorFractions()`, `WindRose`, `WindSample` |
+| [src/climate-view.ts](../src/climate-view.ts) | Windalytics ("Wind rose" tab): isolated map view — click a point, pull a year-window of ERA5 wind via the `ClimateDeps` seam, render the rose, monthly small-multiples, month×direction heatmap + mean-wind arrow; dual-thumb year window + hour/month controls re-aggregate in memory | `initClimateView()`, `mountClimateView()`, `leaveClimateView()`, `ClimateDeps` |
 
 *Location history (Timeline import)*
 

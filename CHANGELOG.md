@@ -17,6 +17,34 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Feature: Windalytics — point wind climatology ("Wind rose" tab)
+- **What:** new top-level view. Click a point on a dark map and it pulls a window of
+  **ERA5** hourly wind for that grid cell — one archive request per calendar year,
+  cached in the shared wind cache via the new `Controller.getPointWind(lat, lon,
+  startYear, endYear)` — then mines it into a **wind rose** (16 sectors × speed bins),
+  **twelve monthly mini-roses** (each captioned with its sample count), a **month ×
+  direction heatmap**, and a **mean-wind arrow** drawn on the cell. A **dual-thumb year
+  window** slider (shared `.rf-*` look: drag a thumb to resize, drag the middle to
+  slide the span across 1950→now, capped at 20 years) sets the range; a single-hour-of-
+  day slider (with an "All day" position) and month-filter chips drive the charts. Hour
+  and month are pure in-memory re-aggregations (`windrose.ts`), so the rose morphs
+  instantly with no refetch; only moving the year window refetches (new years only).
+  Provenance is spelled out — cell coords, the actual year span covered, total
+  hours/days pulled (+ any no-data days), and the filtered sample count — for full
+  data visibility. The pure compute core lives in `windrose.ts` (tested in both the new
+  `windrose.test.ts` and a `getPointWind` controller test); the view is an isolated
+  module (`climate-view.ts`) wired through a `ClimateDeps` seam, mirroring the Timeline
+  view (dark basemap, floating expand button, `body.climate-expanded` fullscreen + Esc).
+  The existing wind-vs-speed "Wind" tab was relabelled **"Wind/Speed"** so the new
+  climatology tab can own the **"Wind rose"** name.
+- **Why:** rides only ever sampled wind along a track at one instant; there was no way
+  to ask "where does the wind actually come from here, and how does that shift across
+  the day and the seasons?" ERA5 already reaches back to 1950 globally and the cache is
+  keyed per (cell, day), so the heavy data-mining was almost free to add — lock to one
+  consistent dataset, fetch once, and let the user slide the year window / time-of-day /
+  month over cached data to find patterns. Reuses the established map/slider/chip
+  vocabulary rather than inventing a new surface.
+
 ## Chore: apply biome formatting + organize imports repo-wide
 - **What:** ran `biome format` and import-organization across the codebase so
   `biome check` (and therefore `npm run verify`) is fully green. Pure mechanical
