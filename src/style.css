@@ -23,6 +23,8 @@
   --danger-border: #5a2420;
   --accent-tint: rgba(252, 82, 0, 0.1); /* subtle accent wash */
   --accent-tint-strong: rgba(252, 82, 0, 0.12); /* stronger accent wash */
+  --scrim: rgba(5, 7, 10, 0.78); /* modal / overlay backdrop */
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.55); /* elevated card shadow */
   --radius: 12px;
   --font: "Ubuntu", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --mono: "Ubuntu Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -4823,30 +4825,60 @@ body.job-active .toast {
    Full-screen modal shown on first load (no remembered profile) and whenever the
    user clicks "Source". Reuses the app's dark panel vocabulary; each option is a
    panel row with a single primary action, the Beeline one carrying an inline form. */
-.srcpick {
+/* Centered modal vocabulary shared by the source picker, confirm dialog, tag
+   modal and settings: a full-screen scrim backdrop, an elevated dark card and a
+   corner close button. Each modal keeps only its own z-index and card width. */
+.scrim {
   position: fixed;
   inset: 0;
-  /* Above all map chrome — the floating map buttons (z-500) and rubber-band
-     (z-600) live in the root stacking context, so a full-screen modal must
-     outrank them or it'll be punched through. */
-  z-index: 1000;
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(5, 7, 10, 0.78);
+  background: var(--scrim);
   backdrop-filter: blur(3px);
   overflow: auto;
 }
-.srcpick.hidden {
+.scrim.hidden {
   display: none;
 }
-.srcpick-card {
-  width: min(560px, 100%);
+.modal-card {
+  position: relative;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 22px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-modal);
+}
+.modal-x {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.modal-x:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+.modal-x svg {
+  width: 16px;
+  height: 16px;
+}
+/* Source picker — above all map chrome (floating buttons z-500, rubber-band
+   z-600) so the full-screen modal can't be punched through. */
+.srcpick {
+  z-index: 1000;
+}
+.srcpick-card {
+  width: min(560px, 100%);
 }
 .srcpick-head .brand {
   display: flex;
@@ -5027,33 +5059,8 @@ body.job-active .toast {
 .srcopt-note a {
   color: var(--accent);
 }
-/* Close affordance (top-right of the card) so the picker is always escapable. */
-.srcpick-card {
-  position: relative;
-}
-.srcpick-close {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  cursor: pointer;
-}
-.srcpick-close:hover {
-  color: var(--text);
-  border-color: var(--muted);
-}
-.srcpick-close svg {
-  width: 16px;
-  height: 16px;
-}
+/* Close affordance (top-right of the card) so the picker is always escapable;
+   uses the shared `.modal-x` button. */
 /* Re-auth mode: the user already has a Beeline profile and only needs to re-enter
    their password (which a password manager can inject), so collapse the picker to
    just the Beeline sign-in — hide the other sources, the in-card demo shortcut, and
@@ -5086,28 +5093,12 @@ body.dragging-files::after {
    A styled replacement for the browser's native confirm() for high-stakes
    actions (e.g. "Upload all to Strava"). Reuses the source-picker's overlay +
    dark-card vocabulary so it reads as the same product, not a system popup. */
+/* Above the source picker (z-1000) and all map chrome — see .srcpick. */
 .confirm {
-  position: fixed;
-  inset: 0;
-  /* Above the source picker (z-1000) and all map chrome — see .srcpick. */
   z-index: 1010;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(5, 7, 10, 0.78);
-  backdrop-filter: blur(3px);
-  overflow: auto;
-}
-.confirm.hidden {
-  display: none;
 }
 .confirm-card {
   width: min(420px, 100%);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 22px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
 }
 .confirm-title {
   margin: 0;
@@ -5219,55 +5210,15 @@ body.dragging-files::after {
    card vocabulary so it reads as the same product, with the source-picker's
    corner close button. */
 .settings {
-  position: fixed;
-  inset: 0;
   z-index: 1010;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(5, 7, 10, 0.78);
-  backdrop-filter: blur(3px);
-  overflow: auto;
-}
-.settings.hidden {
-  display: none;
 }
 .settings-card {
-  position: relative;
   width: min(420px, 100%);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 22px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
 }
 .settings-title {
   margin: 0 0 16px;
   font-size: 16px;
   font-weight: 600;
-}
-.settings-close {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  cursor: pointer;
-}
-.settings-close:hover {
-  color: var(--text);
-  border-color: var(--muted);
-}
-.settings-close svg {
-  width: 16px;
-  height: 16px;
 }
 .settings-row {
   display: flex;

@@ -319,9 +319,9 @@
   <div class="ridemap-profile hidden" id="rideMapProfile" aria-hidden="true"></div>
 </div>
 
-<div class="srcpick hidden" id="srcPick" role="dialog" aria-modal="true" aria-label="Sources">
-  <div class="srcpick-card">
-    <button class="srcpick-close" id="btnPickClose" type="button" aria-label="Close" title="Close">
+<div class="srcpick scrim hidden" id="srcPick" role="dialog" aria-modal="true" aria-label="Sources">
+  <div class="srcpick-card modal-card">
+    <button class="modal-x" id="btnPickClose" type="button" aria-label="Close" title="Close">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
     </button>
     <div class="srcpick-head">
@@ -363,9 +363,9 @@
   </div>
 </div>
 
-<div class="settings hidden" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
-  <div class="settings-card">
-    <button class="settings-close" id="btnSettingsClose" type="button" aria-label="Close" title="Close">
+<div class="settings scrim hidden" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div class="settings-card modal-card">
+    <button class="modal-x" id="btnSettingsClose" type="button" aria-label="Close" title="Close">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
     </button>
     <h2 class="settings-title" id="settingsTitle">Settings</h2>
@@ -380,8 +380,8 @@
   </div>
 </div>
 
-<div class="confirm hidden" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
-  <div class="confirm-card">
+<div class="confirm scrim hidden" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+  <div class="confirm-card modal-card">
     <h2 class="confirm-title" id="confirmTitle">Confirm</h2>
     <p class="confirm-body" id="confirmBody"></p>
     <input class="confirm-input hidden" id="confirmInput" type="text" autocomplete="off" />
@@ -396,8 +396,8 @@
   </div>
 </div>
 
-<div class="confirm hidden" id="tagModal" role="dialog" aria-modal="true" aria-labelledby="tagModalTitle">
-  <div class="confirm-card">
+<div class="confirm scrim hidden" id="tagModal" role="dialog" aria-modal="true" aria-labelledby="tagModalTitle">
+  <div class="confirm-card modal-card">
     <h2 class="confirm-title" id="tagModalTitle">Tags</h2>
     <p class="confirm-body" id="tagModalBody"></p>
     <div class="tagmodal-chips" id="tagModalChips"></div>

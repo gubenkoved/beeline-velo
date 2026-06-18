@@ -17,6 +17,20 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Refactor: shared modal vocabulary `.scrim` / `.modal-card` / `.modal-x` (phase 5)
+- **What:** the source picker, confirm dialog, tag modal and settings each
+  re-declared the same full-screen overlay, dark elevated card and corner close
+  button (a comment even said they "reuse the source-picker's vocabulary" — by
+  copy-paste). Extracted three canonical classes — `.scrim` (fixed blur backdrop),
+  `.modal-card` (panel card + shadow) and `.modal-x` (close button) — plus two
+  tokens `--scrim` and `--shadow-modal`. Each modal now keeps only what differs
+  (its `z-index` and card `width`); the duplicated `.*-close` rules are gone. All
+  modal markup in `index.html` carries the shared classes. Verified in-browser:
+  the picker, card and close button render pixel-identical.
+- **Why:** one real source of truth for "a modal", so a new dialog is `class="scrim"`
+  + `class="modal-card"` instead of another copied overlay, and the modal look is
+  tuned in one place. Net CSS dropped again (~85.1k → 84.2k).
+
 ## Refactor: shared `.iconbtn` floating-button class (phase 4)
 - **What:** the four floating square overlay buttons — `.map-expand`, `.map-select`,
   `.map-locate`, `.map-help` (used across the Map, heatmap and Timeline) — carried
