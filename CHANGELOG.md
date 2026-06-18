@@ -17,6 +17,25 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Feature: render-layer design vocabulary (`src/ui.ts`) + `statNum`
+- **What:** introduced `src/ui.ts` — a pure, dependency-free leaf module of
+  `(opts) => string` builders that own the canonical markup+classes for shared
+  components, with HTML escaping centralised + safe-by-default. First helper:
+  `statNum({value,label,sub?,title?,small?})`, unifying the Stats lifetime/record
+  numerals (`statCard` now delegates to it) and the wind-rose summary numerals
+  (`small` variant) — previously two hand-rolled copies (`.stat-card` vs `.cl-card`,
+  the documented "copy-to-match"). CSS unified into `.stat-num` (+ `.stat-num--sm`).
+  `escHtml` moved from `main.ts` into `ui.ts` (one source). Added `tests/ui.test.ts`
+  (6 tests: exact markup, sub/title, small variant, and XSS-escaping of every field).
+  Build + 413 tests + biome green; wind-rose numerals verified pixel-identical.
+- **Why:** a CSS class you must *remember* loses to copy-paste — the wind-rose proved
+  it. Making the canonical UI a function call flips the incentive (reuse is easier
+  than copying), gives the design layer real unit tests (it had none), and means a
+  markup/class change happens in one place. This is the first step of unifying at the
+  render layer, not just in CSS; see `temp/design-language-next-steps.md`.
+
+---
+
 ## Docs: sync the in-file design-language header
 - **What:** updated the design-language reference block at the top of `style.css` to
   list the new tokens (elevation scale, `--track`, `--glass-strong`, `--accent-ink`)

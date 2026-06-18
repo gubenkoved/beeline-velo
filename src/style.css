@@ -36,6 +36,13 @@
      .map-banner        centred glass status pill over a map (timeline/wind-rose)
      .field             dark text-input look (border + accent focus ring);
                         callers add only their own sizing/padding
+     .stat-num          big-value numeral + accent underline + tracked label
+                        (+ .stat-num--sm); emitted by `ui.statNum()` (src/ui.ts)
+
+   RENDER HELPERS (src/ui.ts) — some components are emitted by a pure `(opts) =>
+   string` helper that owns the canonical markup+classes, so reuse is a function
+   call (not copy-paste) and inputs are HTML-escaped by default. Prefer the helper
+   over hand-writing the markup; add a helper when a fragment is built in ≥2 places.
 
    When a surface needs one of the above, apply the shared class and add ONLY
    what differs — don't paste the declarations again. Introduce a NEW shared
@@ -2497,10 +2504,11 @@ body.ridemap-open {
   gap: 10px;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 }
-.stat-card {
-  /* Option 5 — Minimal & expressive: no card chrome; a refined large numeral
-     above a short accent underline and a small tracked-out label. The underline
-     is the only colour, giving each stat a quiet but deliberate accent. */
+/* Stat numeral (built by ui.statNum): a large value over a short accent underline
+   and a small tracked-out label, with an optional muted sub-line. The accent
+   underline is the only colour. `.stat-num--sm` is the compact variant for narrow
+   side panels (the wind-rose summary). */
+.stat-num {
   background: none;
   border: 0;
   border-radius: 0;
@@ -2511,7 +2519,7 @@ body.ridemap-open {
   gap: 7px;
   min-width: 0;
 }
-.stat-card .sc-val {
+.stat-num-v {
   font-size: 27px;
   font-weight: 700;
   line-height: 1;
@@ -2520,13 +2528,13 @@ body.ridemap-open {
   padding-bottom: 7px;
   border-bottom: 2px solid var(--accent);
 }
-.stat-card .sc-label {
+.stat-num-l {
   font-size: 10.5px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.09em;
 }
-.stat-card .sc-sub {
+.stat-num-s {
   font-size: 12px;
   color: var(--text);
   opacity: 0.75;
@@ -2534,6 +2542,19 @@ body.ridemap-open {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 100%;
+}
+.stat-num--sm {
+  gap: 6px;
+  padding: 0;
+}
+.stat-num--sm .stat-num-v {
+  font-size: 21px;
+  padding-bottom: 6px;
+}
+.stat-num--sm .stat-num-l {
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
 }
 /* === Timeline view: map-centric experience (mirrors .map-wrap/.map-main/.map-side) === */
 .tl-wrap {
@@ -3610,33 +3631,6 @@ body.tl-expanded {
 }
 /* Match the Stats view's numerals: no card chrome — a large value over a short
    accent underline and a small tracked-out label (the underline is the only colour). */
-.cl-card {
-  background: none;
-  border: 0;
-  border-radius: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  min-width: 0;
-}
-.cl-card b {
-  font-size: 21px;
-  font-weight: 700;
-  line-height: 1;
-  color: var(--text);
-  letter-spacing: -0.02em;
-  padding-bottom: 6px;
-  border-bottom: 2px solid var(--accent);
-}
-.cl-card span {
-  font-size: 9.5px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-}
 .cl-prov {
   margin: 12px 0 4px;
   font-size: 11px;

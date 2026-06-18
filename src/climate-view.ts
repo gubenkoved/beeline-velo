@@ -17,6 +17,7 @@
 
 import L from "leaflet";
 import { createLocate, type Locate } from "./locate";
+import { statNum } from "./ui";
 import type { CellDayWind } from "./weather";
 import { cellBounds } from "./weather";
 import {
@@ -537,7 +538,7 @@ function summaryHtml(rose: WindRose): string {
       : 0;
   const monthTxt = selectedMonth ? MONTH_ABBR[selectedMonth - 1] : "all months";
   const card = (val: string, label: string, title = ""): string =>
-    `<div class="cl-card"${title ? ` title="${title}"` : ""}><b>${val}</b><span>${label}</span></div>`;
+    statNum({ value: val, label, title: title || undefined, small: true });
   const st = datasetStats();
   const coords = cellInfo ? `${cellInfo.lat.toFixed(2)}°, ${cellInfo.lon.toFixed(2)}°` : "";
   const span = st.hours > 0 ? `${st.minY}–${st.maxY}` : `${startYear}–${endYear}`;

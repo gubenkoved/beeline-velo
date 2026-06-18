@@ -89,6 +89,7 @@ import {
   resetTimelineData,
 } from "./timeline-view";
 import { decodePolyline } from "./track";
+import { escHtml, statNum } from "./ui";
 import { WindCache } from "./windcache";
 import { drawWindSpeedChart } from "./windchart";
 import {
@@ -873,14 +874,6 @@ function setChecked(el: HTMLInputElement | null, on: boolean | null): void {
 }
 function esc(s: string): string {
   return (s || "").replace(/[^a-zA-Z0-9]/g, "_");
-}
-/** Escape text/attribute values for safe interpolation into innerHTML. */
-function escHtml(s: string): string {
-  return (s || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 // --------------------------------------------------------------------------- //
@@ -1892,11 +1885,7 @@ function fmtBytes(bytes: number): string {
 
 /** One totals/record card: a big value, a label, and an optional sub-line. */
 function statCard(value: string, label: string, sub = ""): string {
-  const subHtml = sub ? `<span class="sc-sub">${escHtml(sub)}</span>` : "";
-  return (
-    `<div class="stat-card"><b class="sc-val">${escHtml(value)}</b>` +
-    `<span class="sc-label">${escHtml(label)}</span>${subHtml}</div>`
-  );
+  return statNum({ value, label, sub: sub || undefined });
 }
 
 /** Record card for a best period (muted placeholder when there's no data). */
