@@ -221,6 +221,10 @@ export interface RideRecord extends RideMetrics {
   /** Denormalized average wind speed (km/h) from the summary, for cheap filtering
    *  without re-parsing `weather_blob` per render. 0 when resolved-but-no-data. */
   weather_speed_kmh?: number;
+  /** User-assigned tags (case-insensitive; see tags.ts). Empty when untagged. The
+   *  stored strings keep their first-seen display casing; comparison is by lowercase
+   *  key. Optional so legacy records (written before tags existed) load as []. */
+  tags?: string[];
 }
 
 /**
@@ -258,6 +262,7 @@ function blankRecord(uid: string): RideRecord {
     weather_blob: "",
     weather_fetched_at: "",
     weather_speed_kmh: 0,
+    tags: [],
   };
 }
 
@@ -553,6 +558,25 @@ export class Store {
     rec.deleted = true;
     rec.deleted_at = nowIso();
     this.rides.set(toUid(key), rec);
+    return true;
+  }
+
+  /**
+   * Replace a known ride's tag list (the caller passes an already normalized +
+   * deduped list; see tags.ts). Unlike `upsert`, this touches ONLY the tags — it
+   * never clears the deleted flag or bumps `last_seen`, so tagging a ride (even a
+   * deleted one) has no side effects. No-op for unknown keys. Returns true when the
+   * list actually changed.
+   */
+  setTags(key: string, tags: string[]): boolean {
+    const uid = toUid(key);
+    const rec = this.rides.get(uid);
+    if (!rec) return false;
+    const next = [...tags];
+    const prev = rec.tags ?? [];
+    if (prev.length === next.length && prev.every((t, i) => t === next[i])) return false;
+    rec.tags = next;
+    this.rides.set(uid, rec);
     return true;
   }
 

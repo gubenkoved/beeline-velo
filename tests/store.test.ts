@@ -263,4 +263,42 @@ describe("Store", () => {
     s.clear();
     expect(s.byteSize()).toBe(empty);
   });
+
+  it("defaults tags to [] for legacy records written before tags existed", async () => {
+    map.set(STORAGE_KEY, blob({ "beeline::k": { key: "k", title: "Ride" } }));
+    expect(byKey(await Store.load(backend), "k")!.tags).toEqual([]);
+  });
+
+  it("setTags replaces and persists a ride's tag list", async () => {
+    const s = await Store.load(backend);
+    s.upsert("k", { title: "Ride" });
+    expect(s.setTags(rideUid("beeline", "k"), ["Commute", "Gravel"])).toBe(true);
+    s.save();
+    await s.flush();
+    expect(byKey(await Store.load(backend), "k")!.tags).toEqual(["Commute", "Gravel"]);
+
+    // Replacing with a new list overwrites; an empty list clears.
+    const s2 = await Store.load(backend);
+    s2.setTags(rideUid("beeline", "k"), []);
+    expect(byKey(s2, "k")!.tags).toEqual([]);
+  });
+
+  it("setTags returns false (no change) when the list is identical, and no-ops unknown keys", async () => {
+    const s = await Store.load(backend);
+    s.upsert("k", { title: "Ride" });
+    s.setTags(rideUid("beeline", "k"), ["Commute"]);
+    expect(s.setTags(rideUid("beeline", "k"), ["Commute"])).toBe(false);
+    expect(s.setTags(rideUid("beeline", "missing"), ["Commute"])).toBe(false);
+  });
+
+  it("setTags never resurrects a deleted ride (no side effects beyond tags)", async () => {
+    const s = await Store.load(backend);
+    s.upsert("k", { title: "Ride" });
+    s.markDeleted(rideUid("beeline", "k"));
+    expect(byKey(s, "k")!.deleted).toBe(true);
+    s.setTags(rideUid("beeline", "k"), ["Commute"]);
+    // Tagging must not clear the deleted flag the way upsert (seeing a ride) does.
+    expect(byKey(s, "k")!.deleted).toBe(true);
+    expect(byKey(s, "k")!.tags).toEqual(["Commute"]);
+  });
 });

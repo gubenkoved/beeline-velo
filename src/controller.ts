@@ -160,6 +160,8 @@ export interface RideView extends RideMetrics {
   /** Average wind speed (km/h) for the ride when resolved (null otherwise) — the
    *  number the Wind speed min/max filter bounds against. */
   wind_speed_kmh: number | null;
+  /** User-assigned tags (case-insensitive; see tags.ts). Empty when untagged. */
+  tags: string[];
 }
 
 export interface AppState {
@@ -393,6 +395,23 @@ export class Controller {
     }
     this.notify();
     return track;
+  }
+
+  /**
+   * Replace the tag list on one or more rides (the caller passes an already
+   * normalized + deduped list per ride; see tags.ts). Local-only metadata, so this
+   * is interactive (no JobQueue) and never touches a source. Persists + notifies
+   * once if anything changed.
+   */
+  setRideTags(uids: string[], tagsFor: (uid: string) => string[]): void {
+    let changed = false;
+    for (const uid of uids) {
+      if (this.store.setTags(uid, tagsFor(uid))) changed = true;
+    }
+    if (changed) {
+      this.store.save();
+      this.notify();
+    }
   }
 
   /**
@@ -929,6 +948,7 @@ export class Controller {
           typeof r.weather_speed_kmh === "number" && r.weather_speed_kmh > 0
             ? r.weather_speed_kmh
             : null,
+        tags: [...(r.tags ?? [])],
       };
     });
     return {

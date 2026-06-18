@@ -22,8 +22,7 @@ import {
   type TriState,
   visibleRides,
 } from "./filter";
-import { BASE_SPACING_M, buildHeatPoints, type HeatBounds, spacingForZoom } from "./heatmap";
-import {
+import { BASE_SPACING_M, buildHeatPoints, type HeatBounds, spacingForZoom } from "./heatmap";import {
   type DateRange,
   dateRange,
   filterRidesByRange,
@@ -74,6 +73,7 @@ import {
 } from "./timeline-view";
 import { createLocate, type Locate } from "./locate";
 import type { SourceFactory } from "./source";
+import { addTag, collectTags, hasTag, normalizeTag, removeTag, tagKey } from "./tags";
 import { type RideSource, STORAGE_KEY, Store } from "./store";
 import { decodePolyline } from "./track";
 import { WindCache } from "./windcache";
@@ -795,6 +795,16 @@ function loadFilters(): Filters {
     f.distMax = sanitizeBound(o.distMax);
     f.windMin = sanitizeBound(o.windMin);
     f.windMax = sanitizeBound(o.windMax);
+    if (Array.isArray(o.tags)) {
+      // Persisted as lowercase comparison keys; re-normalize + dedupe defensively.
+      const seen = new Set<string>();
+      for (const t of o.tags) {
+        if (typeof t !== "string") continue;
+        const k = tagKey(t);
+        if (k && !seen.has(k)) seen.add(k);
+      }
+      f.tags = [...seen];
+    }
   } catch {
     /* malformed JSON / storage disabled — fall back to neutral */
   }
@@ -815,6 +825,9 @@ const filters: Filters = loadFilters();
 // for the consolidated header actions menu. Kept at module scope (like openStats/
 // selected) so it survives the frequent re-renders the job ticker triggers.
 let openMenu: string | null = null;
+// Whether the Tags filter popover (multi-select dropdown) is open. Module-scope so
+// it survives re-renders; closed on outside click / Esc.
+let tagsFilterOpen = false;
 // Whether the queue panel's "Up next" list is expanded. Module-scope so it
 // survives the frequent re-renders the job ticker triggers; starts open so the
 // pending work is visible by default.
@@ -942,6 +955,13 @@ function detailsBlock(r: RideView): string {
     `<div class="stats open" id="st-${esc(r.key)}">${fmtStats(r)}</div>` +
     trackBlock(r.key, r.track, r.source)
   );
+}
+
+/** The ride's tag pills for its meta line (empty string when untagged). */
+function rideTagsHtml(r: RideView): string {
+  if (!r.tags.length) return "";
+  const pills = r.tags.map((t) => `<span class="rtag">${escHtml(t)}</span>`).join("");
+  return `<div class="rtags">${pills}</div>`;
 }
 
 /** (Re)create Leaflet maps for every visible track container after a render.
@@ -2402,6 +2422,7 @@ function rtitleHtml(r: RideView, multiSource: boolean): string {
     sourceMark(r.source, multiSource) +
     `<span class="rname"><span class="rtitle-text">${r.title || "Ride"}</span>` +
     `${r.location ? `<span class="rtitle-loc">${r.location}</span>` : ""}</span> ` +
+    `${rideTagsHtml(r)}` +
     `${r.source !== "gpx" && r.gpx_cached ? cachedBadge() : ""} ` +
     `${r.wind_resolved ? windBadge() : ""} ` +
     `${r.deleted ? deletedBadge() : ""} ${queueBadge(r.key)}`
@@ -2640,6 +2661,28 @@ function syncFilterBar(allRides: AppState["rides"]): void {
   if (max && document.activeElement !== max)
     max.value = filters.distMax === null ? "" : String(filters.distMax);
 
+  // Tags filter: a single chip opening a multi-select popover (OR). Shown only once
+  // some ride is tagged; gated on the real signal like the Source/Wind chips. Any
+  // selected tag that no longer exists in the library is pruned so a hidden/absent
+  // tag can't keep rides hidden.
+  const allTags = collectTags(allRides);
+  const tagKeys = new Set(allTags.map(tagKey));
+  if (allRides.length > 0 && filters.tags.some((t) => !tagKeys.has(t))) {
+    filters.tags = filters.tags.filter((t) => tagKeys.has(t));
+    saveFilters();
+  }
+  const tagsWrap = document.getElementById("fTagsWrap");
+  if (tagsWrap) tagsWrap.classList.toggle("hidden", allTags.length === 0);
+  if (allTags.length === 0 && tagsFilterOpen) tagsFilterOpen = false;
+  const tagsChip = document.getElementById("fTags");
+  if (tagsChip) {
+    const n = filters.tags.length;
+    tagsChip.textContent = n === 0 ? "Tags: any" : `Tags: ${n}`;
+    tagsChip.classList.toggle("on", n > 0);
+    tagsChip.setAttribute("aria-expanded", String(tagsFilterOpen));
+  }
+  renderTagsFilterPopover(allTags);
+
   // Clear button visibility.
   $("#fClear").classList.toggle("hidden", !filtersActive(filters));
 
@@ -2652,6 +2695,31 @@ function syncFilterBar(allRides: AppState["rides"]): void {
     count.toggleAttribute("hidden", n === 0);
   }
   document.getElementById("fToggle")?.classList.toggle("on", n > 0);
+}
+
+/** Render the Tags filter popover: one toggle row per existing tag (`.on` when
+ *  selected), plus a Clear row when any is active. Visibility tracks `tagsFilterOpen`. */
+function renderTagsFilterPopover(allTags: string[]): void {
+  const pop = document.getElementById("fTagsPop");
+  if (!pop) return;
+  pop.classList.toggle("hidden", !tagsFilterOpen);
+  if (!tagsFilterOpen) {
+    pop.innerHTML = "";
+    return;
+  }
+  const selected = new Set(filters.tags);
+  const rows = allTags
+    .map((t) => {
+      const on = selected.has(tagKey(t));
+      return `<button type="button" class="ftag-opt${on ? " on" : ""}" data-ftag-key="${escHtml(
+        tagKey(t),
+      )}"><span class="ftag-check"></span><span class="ftag-name">${escHtml(t)}</span></button>`;
+    })
+    .join("");
+  const clear = filters.tags.length
+    ? `<button type="button" class="ftag-clear" data-ftag-clear="1">Clear tags</button>`
+    : "";
+  pop.innerHTML = rows + clear;
 }
 
 /** Advance a tri-state chip one step on click. */
@@ -2690,6 +2758,7 @@ function clearFilters(): void {
   filters.device = "all";
   filters.distMin = null;
   filters.distMax = null;
+  filters.tags = [];
 }
 
 /** Push persisted trim percentages into the sliders/outputs (skip a slider being dragged). */
@@ -3189,6 +3258,7 @@ function render(): void {
               <button class="small ghost" data-act="gpx-save-full-one" data-key="${r.key}" title="Download the full recorded GPX (real timestamps + elevation) and save it to disk">Save full GPX</button>
               <button class="small ghost" data-act="gpx-fetch-one" data-key="${r.key}" title="${r.gpx_cached ? "Full GPX is cached — fetch again to refresh it (no file saved)" : "Fetch the full recorded GPX into the local cache without saving a file (pre-warms offline use + the map)"}">${r.gpx_cached ? "Fetch full GPX ✓" : "Fetch full GPX"}</button>
               <button class="small ghost" data-act="resolve-wind-one" data-key="${r.key}" title="${controller.hasResolvedWind(r.key) ? "Historical wind is resolved — open the map and choose Show wind, or resolve again to refresh" : "Resolve historical wind (from Open-Meteo) for this ride — colours its big map by head/tailwind"}">${controller.hasResolvedWind(r.key) ? "Resolve wind ✓" : "Resolve wind"}</button>
+              <button class="small ghost" data-act="tags-one" data-key="${r.key}" title="Add or remove tags for this ride">Tags…</button>
               ${r.deleted ? "" : `<button class="small ghost" data-act="rename-one" data-key="${r.key}" title="Rename this ride">Rename…</button>`}
               ${r.deleted || r.source !== "gpx" ? "" : `<button class="small ghost" data-act="destination-one" data-key="${r.key}" title="Set or edit this ride's destination (the place it went to)">${r.location.trim() ? "Edit destination…" : "Set destination…"}</button>`}
               ${r.deleted ? "" : `<button class="small danger" data-act="delete-one" data-key="${r.key}" title="Delete this ride">Delete…</button>`}
@@ -3582,6 +3652,114 @@ function closeConfirm(ok: boolean): void {
   } else {
     resolve(ok);
   }
+}
+
+// -- tag assignment modal --------------------------------------------------
+// A tri-state checkbox per existing tag: "on" = every targeted ride has it,
+// "off" = none does, "mixed" = some do. Clicking a chip that STARTED mixed cycles
+// mixed → on → off → mixed (so "leave as-is" stays reachable); an on/off chip just
+// toggles. On Save we apply exactly what's shown — add the on tags, remove the off
+// tags, leave the mixed ones untouched — so a bulk edit is non-destructive.
+type TagTri = "on" | "off" | "mixed";
+interface TagChip {
+  name: string;
+  key: string;
+  initial: TagTri;
+  cur: TagTri;
+}
+let tagModalState: { keys: string[]; chips: TagChip[] } | null = null;
+
+/** Open the tag-assign modal for one or more ride uids. */
+function openTagModal(keys: string[]): void {
+  const rides = keys
+    .map((k) => STATE.rides.find((r) => r.key === k))
+    .filter((r): r is RideView => !!r);
+  if (!rides.length) return;
+  const chips: TagChip[] = collectTags(STATE.rides).map((name) => {
+    const n = rides.filter((r) => hasTag(r.tags, name)).length;
+    const initial: TagTri = n === 0 ? "off" : n === rides.length ? "on" : "mixed";
+    return { name, key: tagKey(name), initial, cur: initial };
+  });
+  tagModalState = { keys: rides.map((r) => r.key), chips };
+  $("#tagModalBody").textContent =
+    rides.length === 1
+      ? `Tags for ${rideShortLabel(rides[0].key) || rides[0].key}.`
+      : `Tags for ${rides.length} selected rides.`;
+  const input = $<HTMLInputElement>("#tagModalInput");
+  input.value = "";
+  renderTagModalChips();
+  document.getElementById("tagModal")?.classList.remove("hidden");
+  input.focus();
+}
+
+/** Repaint the modal's tag chips from the working state. */
+function renderTagModalChips(): void {
+  const wrap = document.getElementById("tagModalChips");
+  if (!wrap || !tagModalState) return;
+  wrap.innerHTML = tagModalState.chips
+    .map((c, i) => {
+      const cls = c.cur === "on" ? " on" : c.cur === "mixed" ? " mixed" : "";
+      const hint =
+        c.cur === "on"
+          ? "will be on every ride"
+          : c.cur === "mixed"
+            ? "left unchanged (on some rides)"
+            : "will be removed from every ride";
+      return `<button type="button" class="tagmodal-chip${cls}" data-tagidx="${i}" title="${escHtml(
+        `${c.name} — ${hint}`,
+      )}">${escHtml(c.name)}</button>`;
+    })
+    .join("");
+}
+
+/** Advance a chip's tri-state on click (mixed chips cycle through three states). */
+function cycleTagChip(i: number): void {
+  const c = tagModalState?.chips[i];
+  if (!c) return;
+  if (c.initial === "mixed") {
+    c.cur = c.cur === "mixed" ? "on" : c.cur === "on" ? "off" : "mixed";
+  } else {
+    c.cur = c.cur === "on" ? "off" : "on";
+  }
+  renderTagModalChips();
+}
+
+/** Add a typed tag to the modal (creating its chip), or re-arm an existing one. */
+function addTagModalTag(): void {
+  if (!tagModalState) return;
+  const input = $<HTMLInputElement>("#tagModalInput");
+  const disp = normalizeTag(input.value);
+  input.value = "";
+  input.focus();
+  if (!disp) return;
+  const key = tagKey(disp);
+  const existing = tagModalState.chips.find((c) => c.key === key);
+  if (existing) existing.cur = "on";
+  else tagModalState.chips.push({ name: disp, key, initial: "off", cur: "on" });
+  renderTagModalChips();
+}
+
+/** Apply the modal's choices to every targeted ride and close it. */
+function saveTagModal(): void {
+  const st = tagModalState;
+  document.getElementById("tagModal")?.classList.add("hidden");
+  tagModalState = null;
+  if (!st) return;
+  const adds = st.chips.filter((c) => c.cur === "on");
+  const removes = st.chips.filter((c) => c.cur === "off");
+  controller.setRideTags(st.keys, (uid) => {
+    const ride = STATE.rides.find((r) => r.key === uid);
+    let next = ride ? [...ride.tags] : [];
+    for (const c of removes) next = removeTag(next, c.name);
+    for (const c of adds) next = addTag(next, c.name);
+    return next;
+  });
+}
+
+/** Dismiss the tag modal without applying anything. */
+function closeTagModal(): void {
+  document.getElementById("tagModal")?.classList.add("hidden");
+  tagModalState = null;
 }
 
 function stateSig(): string {
@@ -3993,6 +4171,13 @@ document.addEventListener("click", (e) => {
     render();
     // fall through so this same click can still trigger whatever it landed on
   }
+  // The Tags filter popover closes when a click lands outside its wrapper (the chip,
+  // the tag rows and the Clear row all live inside `#fTagsWrap`, so they don't close
+  // it here). Falls through so the same click still does its job.
+  if (tagsFilterOpen && !target.closest("#fTagsWrap")) {
+    tagsFilterOpen = false;
+    syncFilterBar(STATE.rides);
+  }
 
   if (t.dataset?.view) {
     setView(t.dataset.view as ViewName);
@@ -4037,6 +4222,30 @@ document.addEventListener("click", (e) => {
   }
   if (t.dataset?.fchip) {
     cycleChip(t.dataset.fchip);
+    saveFilters();
+    applyState();
+    return;
+  }
+  // Tags filter: the chip toggles its multi-select popover; each tag row ORs that tag
+  // in/out of the filter; the Clear row empties the selection. The popover stays open
+  // through tag toggles so several can be picked in one go.
+  if (t.id === "fTags") {
+    tagsFilterOpen = !tagsFilterOpen;
+    syncFilterBar(STATE.rides);
+    return;
+  }
+  const ftagOpt = t.closest<HTMLElement>(".ftag-opt");
+  if (ftagOpt?.dataset.ftagKey) {
+    const key = ftagOpt.dataset.ftagKey;
+    filters.tags = filters.tags.includes(key)
+      ? filters.tags.filter((k) => k !== key)
+      : [...filters.tags, key];
+    saveFilters();
+    applyState();
+    return;
+  }
+  if (t.closest(".ftag-clear")) {
+    filters.tags = [];
     saveFilters();
     applyState();
     return;
@@ -4161,6 +4370,12 @@ document.addEventListener("click", (e) => {
     if (!selected.size) return toast("Select some rides first.");
     return resolveWindFor([...selected]);
   }
+  if (t.id === "btnTagSel") {
+    openMenu = null;
+    if (!selected.size) return toast("Select some rides first.");
+    openTagModal([...selected]);
+    return;
+  }
   if (t.id === "btnUploadSel") {
     if (!selected.size) return toast("Select some rides first.");
     const keys = [...selected].filter(
@@ -4204,6 +4419,12 @@ document.addEventListener("click", (e) => {
   if (act === "resolve-wind-one") {
     openMenu = null;
     return resolveWindFor([t.dataset.key!], controller.hasResolvedWind(t.dataset.key!));
+  }
+  if (act === "tags-one") {
+    openMenu = null;
+    render();
+    openTagModal([t.dataset.key!]);
+    return;
   }
   if (act === "upload-one") {
     const ride = STATE.rides.find((r) => r.key === t.dataset.key);
@@ -4329,6 +4550,11 @@ document.addEventListener("keydown", (e) => {
     closeConfirm(false);
     return;
   }
+  const tagM = document.getElementById("tagModal");
+  if (tagM && !tagM.classList.contains("hidden")) {
+    closeTagModal();
+    return;
+  }
   const picker = document.getElementById("srcPick");
   if (picker && !picker.classList.contains("hidden")) {
     hideSources();
@@ -4386,6 +4612,22 @@ document.getElementById("confirmInput")?.addEventListener("keydown", (e) => {
     e.preventDefault();
     closeConfirm(true);
   }
+});
+
+// Tag-assign modal: Save / Cancel, backdrop-click cancels, the add form creates a
+// tag chip, and clicking a chip cycles its tri-state.
+document.getElementById("tagModalSave")?.addEventListener("click", () => saveTagModal());
+document.getElementById("tagModalCancel")?.addEventListener("click", () => closeTagModal());
+document.getElementById("tagModal")?.addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) closeTagModal();
+});
+document.getElementById("tagModalAdd")?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  addTagModalTag();
+});
+document.getElementById("tagModalChips")?.addEventListener("click", (e) => {
+  const chip = (e.target as HTMLElement).closest<HTMLElement>(".tagmodal-chip");
+  if (chip?.dataset.tagidx !== undefined) cycleTagChip(Number(chip.dataset.tagidx));
 });
 
 document.addEventListener("change", (e) => {

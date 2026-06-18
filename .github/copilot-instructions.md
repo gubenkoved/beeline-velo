@@ -234,7 +234,7 @@ none. The table is grouped by concern; keep new modules in the group they belong
 
 | File | Responsibility | Key symbols |
 |------|----------------|-------------|
-| [src/store.ts](../src/store.ts) | Unified, versioned IndexedDB blob, keyed by ride uid | `Store`, `SCHEMA_VERSION`/`migrate()`, `SETTINGS_SPEC`, `RideRecord`, `upsert()` (uid-normalized) |
+| [src/store.ts](../src/store.ts) | Unified, versioned IndexedDB blob, keyed by ride uid | `Store`, `SCHEMA_VERSION`/`migrate()`, `SETTINGS_SPEC`, `RideRecord` (incl. `tags`), `upsert()` (uid-normalized), `setTags()` |
 | [src/gpxcache.ts](../src/gpxcache.ts) | Full-GPX blob store (re-fetchable `cache` vs. primary `data` vault) | `GpxCache` |
 | [src/windcache.ts](../src/windcache.ts) | Compressed per-cell-day wind cache (IndexedDB blobs) | `WindCache`, `encodeCellDay()`, `decodeCellDay()`, `WIND_ENTRY_VERSION` |
 | [src/kv.ts](../src/kv.ts) | Key/value + blob store seams (in-memory for tests, IndexedDB in prod) | `KeyValueStore`, `BlobStore`, `memoryBackend()`, `idbBackend()`, `idbBlobBackend()` |
@@ -246,7 +246,8 @@ none. The table is grouped by concern; keep new modules in the group they belong
 |------|----------------|-------------|
 | [src/parsing.ts](../src/parsing.ts) | Normalized metrics + ride-key/date + uid helpers + canonical locale number parser | `parseLocaleNumber()`, `metricsFromStatStrings()`, `rideDatetime()`, `beelineRideKey()`, `rideUid()`/`splitUid()`, `bucketRide()` |
 | [src/stats.ts](../src/stats.ts) | Lifetime aggregation: totals, per-period records, biggest rides | `computeStats()`, `RideStats`, `PeriodRecord`, `StatsRide` |
-| [src/filter.ts](../src/filter.ts) | Explore-list filters (incl. `source` dimension) | `matchesFilters()`, `emptyFilters()`, `Filters` |
+| [src/filter.ts](../src/filter.ts) | Explore-list filters (incl. `source` + `tags` OR dimension) | `matchesFilters()`, `emptyFilters()`, `Filters` |
+| [src/tags.ts](../src/tags.ts) | Canonical ride-tag normalization + case-insensitive comparison key + catalog | `normalizeTag()`, `tagKey()`, `collectTags()`, `addTag()`/`removeTag()`, `hasTag()` |
 
 *Tracks · maps · geometry*
 

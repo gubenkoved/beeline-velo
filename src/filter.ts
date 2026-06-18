@@ -9,6 +9,7 @@
 
 import type { RideView } from "./controller";
 import { isSynthesizedRideName } from "./parsing";
+import { tagKey } from "./tags";
 
 export type TriState = "any" | "yes" | "no";
 
@@ -39,6 +40,9 @@ export interface Filters {
   /** Inclusive distance bounds in km; null means unbounded on that side. */
   distMin: number | null;
   distMax: number | null;
+  /** Selected tags, as lowercase comparison keys (see tags.ts). OR semantics: a ride
+   *  passes when it carries ANY selected tag. Empty = no-op. */
+  tags: string[];
 }
 
 /** A fresh, fully-neutral filter set (shows every ride). */
@@ -57,6 +61,7 @@ export function emptyFilters(): Filters {
     device: "all",
     distMin: null,
     distMax: null,
+    tags: [],
   };
 }
 
@@ -94,6 +99,7 @@ export function filterActiveCount(f: Filters): number {
   if (f.source !== "all") n++;
   if (f.device !== "all") n++;
   if (f.distMin !== null || f.distMax !== null) n++;
+  if (f.tags.length > 0) n++;
   return n;
 }
 
@@ -163,6 +169,13 @@ export function matchesFilters(f: Filters, r: RideView): boolean {
     const km = rideKm(r);
     if (f.distMin !== null && km < f.distMin) return false;
     if (f.distMax !== null && km > f.distMax) return false;
+  }
+
+  // Tags (OR): once any tag is selected, a ride must carry at least one of them.
+  // Compared by lowercase key so casing never matters.
+  if (f.tags.length > 0) {
+    const keys = r.tags.map(tagKey);
+    if (!f.tags.some((t) => keys.includes(t))) return false;
   }
   return true;
 }

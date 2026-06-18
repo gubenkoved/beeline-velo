@@ -51,6 +51,7 @@
             <button class="ghost small" id="btnGpxSaveSelFull" title="Download the full recorded GPX (real per-point timestamps + elevation) for the selected rides and save them to disk">Save full GPX</button>
             <button class="ghost small" id="btnGpxFetchSel" title="Fetch the full recorded GPX (real timestamps + elevation) for the selected rides into the local cache, without saving any file — pre-warms offline use and the per-ride map">Fetch full GPX</button>
             <button class="ghost small" id="btnResolveWindSel" title="Resolve historical wind (from Open-Meteo) for the selected rides into the local cache — colours each ride's big map by head/tailwind">Resolve wind</button>
+            <button class="ghost small" id="btnTagSel" title="Add or remove tags for the selected rides">Tags…</button>
             <button class="ghost small" id="btnUploadSel" title="Push the selected pending rides to Strava (via Beeline)">Push selected to Strava</button>
           </span>
           <span class="menu-section">App data</span>
@@ -120,6 +121,10 @@
         <button class="fchip" id="fDestination" data-fchip="destination" data-state="any" title="Filter by destination presence — a place the ride went to or was tagged with (click to cycle: any → has → none)">Destination: any</button>
         <button class="fchip" id="fNamed" data-fchip="named" data-state="any" title="Filter by a real user-given name vs the auto time-of-day name (click to cycle: any → named → unnamed)">Named: any</button>
         <button class="fchip" id="fDeleted" data-fchip="deleted" data-state="any" title="Filter by deletion (click to cycle: any → only deleted → hide deleted)">Deleted: any</button>
+        <span class="ftags-wrap hidden" id="fTagsWrap">
+          <button class="fchip" id="fTags" aria-haspopup="true" aria-expanded="false" title="Filter by tags — a ride matches if it has ANY of the selected tags (OR)">Tags: any</button>
+          <div class="ftags-pop hidden" id="fTagsPop" role="menu"></div>
+        </span>
       </span>
       <span class="fgroup ffields">
         <label class="custom fdist" title="Filter by distance in km (leave a side blank for no bound)">Distance
@@ -387,6 +392,22 @@
     <div class="confirm-actions">
       <button class="ghost small" id="confirmCancel" type="button">Cancel</button>
       <button class="primary small" id="confirmOk" type="button">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="confirm hidden" id="tagModal" role="dialog" aria-modal="true" aria-labelledby="tagModalTitle">
+  <div class="confirm-card">
+    <h2 class="confirm-title" id="tagModalTitle">Tags</h2>
+    <p class="confirm-body" id="tagModalBody"></p>
+    <div class="tagmodal-chips" id="tagModalChips"></div>
+    <form class="tagmodal-add" id="tagModalAdd">
+      <input class="confirm-input" id="tagModalInput" type="text" autocomplete="off" placeholder="Add a tag…" aria-label="New tag" />
+      <button class="small" id="tagModalAddBtn" type="submit">Add</button>
+    </form>
+    <div class="confirm-actions">
+      <button class="ghost small" id="tagModalCancel" type="button">Cancel</button>
+      <button class="primary small" id="tagModalSave" type="button">Save</button>
     </div>
   </div>
 </div>

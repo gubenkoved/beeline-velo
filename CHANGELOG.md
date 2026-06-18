@@ -17,6 +17,21 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Feature: ride tags + multi-tag OR filter
+- **What:** rides can now carry free-form, case-insensitive tags. Assign them per ride
+  (the … menu → Tags…) or in bulk over the current selection via a small modal that
+  lists existing tags as toggle chips and creates new ones from a text field; tags
+  render as inline pills on each ride's title row, before the GPX/wind badges. A single
+  "Tags" filter chip (shown only once any ride is tagged) opens a multi-select popover
+  that filters with OR semantics. New canonical `src/tags.ts` owns normalization +
+  the lowercase comparison key; persisted on the ride record (no schema bump — legacy
+  records default to `[]`) and mutated via a side-effect-free `Store.setTags` so tagging
+  never resurrects a deleted ride. The selected tag keys persist in the filter blob.
+- **Why:** lets a rider organize a large library by their own categories and quickly
+  narrow to one or several of them — a user-owned dimension alongside the derived ones
+  (source/Strava/wind/distance), reusing the existing chip/popover/modal vocabulary so
+  it reads as one product.
+
 ## Fix: analytics no longer resets mid-sweep; calmer, steadier progress
 - **What:** The wind-vs-speed analysis now runs ONE sweep at a time over the WHOLE
   resolved library (range-independent) and never restarts it: a re-entrant call while a

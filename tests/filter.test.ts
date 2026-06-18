@@ -46,6 +46,7 @@ function ride(over: Partial<RideView> = {}): RideView {
     gpx_cached: false,
     wind_resolved: false,
     wind_speed_kmh: null,
+    tags: [],
     ...over,
   };
 }
@@ -82,6 +83,7 @@ describe("filtersActive", () => {
     expect(filtersActive(f({ device: "Pixel 10 Pro" }))).toBe(true);
     expect(filtersActive(f({ distMin: 5 }))).toBe(true);
     expect(filtersActive(f({ distMax: 50 }))).toBe(true);
+    expect(filtersActive(f({ tags: ["commute"] }))).toBe(true);
   });
 });
 
@@ -102,6 +104,12 @@ describe("filterActiveCount", () => {
     expect(filterActiveCount(f({ distMin: 5 }))).toBe(1);
     expect(filterActiveCount(f({ distMax: 50 }))).toBe(1);
     expect(filterActiveCount(f({ distMin: 5, distMax: 50 }))).toBe(1);
+  });
+
+  it("counts the tags dimension once when any tag is selected", () => {
+    expect(filterActiveCount(f({ tags: [] }))).toBe(0);
+    expect(filterActiveCount(f({ tags: ["commute"] }))).toBe(1);
+    expect(filterActiveCount(f({ tags: ["commute", "gravel"] }))).toBe(1);
   });
 });
 
@@ -272,6 +280,35 @@ describe("matchesFilters — distance band", () => {
     const unknown = ride({ distance_km: null });
     expect(matchesFilters(f({ distMin: 1 }), unknown)).toBe(false);
     expect(matchesFilters(f({ distMax: 50 }), unknown)).toBe(true);
+  });
+});
+
+describe("matchesFilters — tags (OR)", () => {
+  it("keeps a ride that carries ANY selected tag", () => {
+    const r = ride({ tags: ["Commute", "Gravel"] });
+    expect(matchesFilters(f({ tags: ["commute"] }), r)).toBe(true);
+    expect(matchesFilters(f({ tags: ["gravel"] }), r)).toBe(true);
+    // OR: matches as long as one selected tag is present, even if another isn't.
+    expect(matchesFilters(f({ tags: ["gravel", "road trip"] }), r)).toBe(true);
+  });
+
+  it("drops a ride with none of the selected tags", () => {
+    const r = ride({ tags: ["Commute"] });
+    expect(matchesFilters(f({ tags: ["gravel"] }), r)).toBe(false);
+    expect(matchesFilters(f({ tags: ["gravel", "road trip"] }), r)).toBe(false);
+    expect(matchesFilters(f({ tags: ["commute"] }), ride({ tags: [] }))).toBe(false);
+  });
+
+  it("matches case-insensitively (ride casing vs selected key)", () => {
+    expect(matchesFilters(f({ tags: ["commute"] }), ride({ tags: ["COMMUTE"] }))).toBe(true);
+    expect(matchesFilters(f({ tags: ["road trip"] }), ride({ tags: ["Road Trip"] }))).toBe(
+      true,
+    );
+  });
+
+  it("is a no-op when no tag is selected", () => {
+    expect(matchesFilters(f({ tags: [] }), ride({ tags: [] }))).toBe(true);
+    expect(matchesFilters(f({ tags: [] }), ride({ tags: ["Commute"] }))).toBe(true);
   });
 });
 

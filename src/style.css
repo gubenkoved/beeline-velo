@@ -476,6 +476,100 @@ button.small {
   display: none;
 }
 
+/* Tags filter: a single chip that opens a popover of every existing tag to
+   multi-select (OR). The wrapper is the positioning context for the popover and is
+   JS-gated out (`.hidden`) when no ride is tagged. */
+.ftags-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.ftags-wrap.hidden {
+  display: none;
+}
+.ftags-pop {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 40;
+  min-width: 190px;
+  max-width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.ftags-pop.hidden {
+  display: none;
+}
+/* One selectable tag row inside the popover (a toggle); `.on` marks a selected tag. */
+.ftag-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.ftag-opt:hover {
+  background: #222732;
+}
+.ftag-opt .ftag-check {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1.5px solid var(--line);
+  display: inline-grid;
+  place-items: center;
+}
+.ftag-opt.on .ftag-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.ftag-opt.on .ftag-check::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: translateY(-1px) rotate(-45deg);
+}
+.ftag-opt .ftag-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* "Clear tags" row, separated from the tag list by a hairline. */
+.ftag-clear {
+  margin-top: 4px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11.5px;
+  background: none;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.ftag-clear:hover {
+  color: var(--accent);
+}
+
 main {
   padding: 18px 20px 60px;
   max-width: 940px;
@@ -1400,6 +1494,27 @@ span.caret.open::before {
 }
 .rmeta a:hover {
   text-decoration: underline;
+}
+/* Per-ride tag pills, inline on the title row right after the name (before the
+   predefined GPX/wind badges): compact, quiet, accent-tinted pills reusing the chip
+   vocabulary so a ride's own tags read at a glance and stand apart from the
+   auto badges. */
+.rtags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  vertical-align: middle;
+}
+.rtag {
+  font-family: var(--font);
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 1px 8px;
+  border-radius: 20px;
+  border: 1px solid var(--accent-dim);
+  background: rgba(252, 82, 0, 0.1);
+  color: var(--text);
+  white-space: nowrap;
 }
 .stats {
   display: none;
@@ -5065,6 +5180,55 @@ body.dragging-files::after {
 .confirm-input:focus {
   outline: none;
   border-color: var(--accent-dim);
+}
+/* Tag-assign modal: a row of toggleable existing-tag chips above a free-text add
+   field. Chips reuse the .fchip vocabulary (muted → accent when selected). */
+.tagmodal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 0 14px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+.tagmodal-chips:empty {
+  display: none;
+}
+.tagmodal-chip {
+  padding: 4px 11px;
+  font-size: 12.5px;
+  border-radius: 20px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  cursor: pointer;
+  transition: 0.12s ease;
+  white-space: nowrap;
+}
+.tagmodal-chip:hover {
+  border-color: #333b48;
+}
+.tagmodal-chip.on {
+  border-color: var(--accent);
+  background: rgba(252, 82, 0, 0.12);
+  color: var(--text);
+  font-weight: 600;
+}
+/* A chip checked for SOME but not all of a multi-ride selection (indeterminate). */
+.tagmodal-chip.mixed {
+  border-color: var(--accent-dim);
+  background: rgba(252, 82, 0, 0.06);
+  color: var(--text);
+  font-style: italic;
+}
+.tagmodal-add {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 20px;
+}
+.tagmodal-add .confirm-input {
+  margin: 0;
+  flex: 1 1 auto;
 }
 .confirm-check {
   display: flex;
