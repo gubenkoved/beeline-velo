@@ -17,6 +17,13 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Fix: Timeline view leaking into other tabs
+- **What:** Added `#timelineView.hidden` to the view `display:none` rule so the Timeline
+  map + "Where you spend time" panel actually hide when switching to another tab.
+- **Why:** The hide rule enumerated every view container except `#timelineView`, so adding
+  the `.hidden` class in `applyView()` had no effect — the Timeline panel rendered below
+  every other view (Explore/Map/Stats/Wind). Keeping the selector list complete fixes it.
+
 ## Timeline: explore your Google Location History on a map
 - **What:** A new **Timeline** tab brings a Google **on-device Timeline** export into the
   app, entirely on-device in its own droppable storage. Import parses the export into one

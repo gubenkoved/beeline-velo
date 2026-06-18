@@ -2261,7 +2261,8 @@ body.ridemap-open {
 #mapView.hidden,
 #exploreView.hidden,
 #statsView.hidden,
-#analyticsView.hidden {
+#analyticsView.hidden,
+#timelineView.hidden {
   display: none;
 }
 
