@@ -14,6 +14,15 @@
   --green: #3fb950;
   --amber: #d6a015;
   --blue: #4c8dff;
+  /* --- semantic surface/border tokens (repeated literals promoted) --- */
+  --surface-hover: #222732; /* row/control hover fill */
+  --border-hover: #333b48; /* row/control hover border */
+  --map-bg: #05070a; /* dark basemap container behind tiles */
+  --glass: rgba(20, 23, 29, 0.92); /* translucent header/popover backdrop */
+  /* --- danger / accent fills --- */
+  --danger-border: #5a2420;
+  --accent-tint: rgba(252, 82, 0, 0.1); /* subtle accent wash */
+  --accent-tint-strong: rgba(252, 82, 0, 0.12); /* stronger accent wash */
   --radius: 12px;
   --font: "Ubuntu", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --mono: "Ubuntu Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -167,7 +176,7 @@ header {
   padding: 1px 9px;
   border-radius: 20px;
   border: 1px solid var(--accent);
-  background: rgba(252, 82, 0, 0.12);
+  background: var(--accent-tint-strong);
   color: var(--accent);
   cursor: pointer;
   white-space: nowrap;
@@ -200,8 +209,8 @@ button {
   white-space: nowrap;
 }
 button:hover:not(:disabled) {
-  background: #222732;
-  border-color: #333b48;
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
 }
 button:disabled {
   opacity: 0.45;
@@ -234,7 +243,7 @@ button.ghost {
 }
 button.danger {
   color: #f8736a;
-  border-color: #5a2420;
+  border-color: var(--danger-border);
 }
 button.danger:hover:not(:disabled) {
   background: #2a1413;
@@ -329,7 +338,7 @@ button.small {
   transition: 0.12s ease;
 }
 .custom:hover {
-  border-color: #333b48;
+  border-color: var(--border-hover);
 }
 .custom:focus-within {
   border-color: var(--accent);
@@ -337,7 +346,7 @@ button.small {
 }
 .custom.set {
   border-color: var(--accent);
-  background: rgba(252, 82, 0, 0.1);
+  background: var(--accent-tint);
   color: var(--text);
 }
 .custom input {
@@ -407,11 +416,11 @@ button.small {
   white-space: nowrap;
 }
 .fchip:hover {
-  border-color: #333b48;
+  border-color: var(--border-hover);
 }
 .fchip.on {
   border-color: var(--accent);
-  background: rgba(252, 82, 0, 0.1);
+  background: var(--accent-tint);
   color: var(--text);
   font-weight: 600;
 }
@@ -523,7 +532,7 @@ button.small {
   cursor: pointer;
 }
 .ftag-opt:hover {
-  background: #222732;
+  background: var(--surface-hover);
 }
 .ftag-opt .ftag-check {
   flex: 0 0 auto;
@@ -959,7 +968,7 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
   padding: 10px 13px;
   border-radius: var(--radius);
   background: #2a1513;
-  border: 1px solid #5a2420;
+  border: 1px solid var(--danger-border);
   color: #ffd9d2;
 }
 .errbar.show {
@@ -1006,7 +1015,7 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
   font-family: var(--mono);
 }
 .errbar button {
-  border-color: #5a2420;
+  border-color: var(--danger-border);
   color: #ffd9d2;
   background: transparent;
 }
@@ -1021,7 +1030,7 @@ body:has(#mapFilter:not(.hidden)) .job-handle {
   max-height: 180px;
   overflow: auto;
   background: #1a0e0d;
-  border: 1px solid #5a2420;
+  border: 1px solid var(--danger-border);
   border-radius: 9px;
   color: #e7b8b0;
   font-family: var(--mono);
@@ -1319,7 +1328,7 @@ span.caret.open::before {
 }
 .badge.deleted {
   color: #ff8f84;
-  border-color: #5a2420;
+  border-color: var(--danger-border);
   background: #2a1513;
 }
 /* Per-ride source marker — a tiny icon at the start of the ride title (cloud =
@@ -1426,7 +1435,7 @@ span.caret.open::before {
   box-shadow: inset 3px 0 0 var(--accent);
 }
 .rrow.sel:hover {
-  background: rgba(252, 82, 0, 0.12);
+  background: var(--accent-tint-strong);
 }
 /* Transient pulse when a ride is opened from a map's "Selected" list, so the eye
    lands on the row we scrolled to. Reuses the accent stripe + tint of .rrow.sel,
@@ -1447,12 +1456,12 @@ span.caret.open::before {
 .rrow.deleted .rtitle-text {
   color: var(--muted);
   text-decoration: line-through;
-  text-decoration-color: #5a2420;
+  text-decoration-color: var(--danger-border);
 }
 .rrow.deleted .rtitle-loc {
   color: var(--muted);
   text-decoration: line-through;
-  text-decoration-color: #5a2420;
+  text-decoration-color: var(--danger-border);
 }
 .rrow.deleted .rmeta {
   opacity: 0.6;
@@ -1512,7 +1521,7 @@ span.caret.open::before {
   padding: 1px 8px;
   border-radius: 20px;
   border: 1px solid var(--accent-dim);
-  background: rgba(252, 82, 0, 0.1);
+  background: var(--accent-tint);
   color: var(--text);
   white-space: nowrap;
 }
@@ -1655,8 +1664,8 @@ span.caret.open::before {
 }
 .split.open > button.menubtn {
   color: var(--text);
-  background: #222732;
-  border-color: #333b48;
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
 }
 /* Icon-only overflow trigger in the header (the rare app-data actions: import /
    export / clear GPX cache / reset). A square kebab button with NO text label and
@@ -1707,8 +1716,8 @@ span.caret.open::before {
 .split.open > button.caret {
   z-index: 1;
   color: var(--text);
-  background: #222732;
-  border-color: #333b48;
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
 }
 .splitmenu {
   display: none;
@@ -1742,7 +1751,7 @@ span.caret.open::before {
   margin-bottom: 1px;
 }
 .splitmenu button:hover:not(:disabled) {
-  background: #222732;
+  background: var(--surface-hover);
   border-color: transparent;
 }
 .splitmenu button.danger {
@@ -1882,7 +1891,7 @@ span.caret.open::before {
 .rmap .leaflet-container {
   height: 100%;
   width: 100%;
-  background: #05070a;
+  background: var(--map-bg);
 }
 /* Darken + desaturate the basemap so the colored track stands out, sharing the
    exact treatment of the all-rides Map view for one unified look. Filter the
@@ -2001,7 +2010,7 @@ span.caret.open::before {
   z-index: 75;
   display: flex;
   flex-direction: column;
-  background: #05070a;
+  background: var(--map-bg);
 }
 .ridemap.hidden {
   display: none;
@@ -2107,7 +2116,7 @@ body.ridemap-open {
 .ridemap-canvas .leaflet-container {
   height: 100%;
   width: 100%;
-  background: #05070a;
+  background: var(--map-bg);
 }
 /* Same dark, desaturated basemap treatment as the other maps so the orange track pops. */
 .ridemap-canvas .leaflet-tile-pane {
@@ -2525,7 +2534,7 @@ body.ridemap-open {
 #timelineMap .leaflet-container {
   height: 100%;
   width: 100%;
-  background: #05070a;
+  background: var(--map-bg);
 }
 /* Same dark, desaturated basemap treatment as every other map. */
 #timelineMap .leaflet-tile-pane {
@@ -2549,7 +2558,7 @@ body.ridemap-open {
   z-index: 500;
   max-width: calc(100% - 110px);
   padding: 6px 11px;
-  background: rgba(20, 23, 29, 0.92);
+  background: var(--glass);
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
@@ -2596,7 +2605,7 @@ body.ridemap-open {
   align-items: center;
   gap: 10px 18px;
   padding: 8px 14px;
-  background: rgba(20, 23, 29, 0.92);
+  background: var(--glass);
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
@@ -2648,8 +2657,8 @@ body.ridemap-open {
   cursor: pointer;
 }
 .tl-calbtn:hover {
-  border-color: #333b48;
-  background: #222732;
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
 }
 .tl-calbtn .bi {
   width: 14px;
@@ -2743,8 +2752,8 @@ body.ridemap-open {
   height: 15px;
 }
 .tl-cal-arrow:hover:not(:disabled) {
-  border-color: #333b48;
-  background: #222732;
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
 }
 .tl-cal-arrow:disabled {
   opacity: 0.35;
@@ -2848,8 +2857,8 @@ button.tl-cal-cell:hover {
   height: 17px;
 }
 .tl-step:hover:not(:disabled) {
-  border-color: #333b48;
-  background: #222732;
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
 }
 .tl-step:disabled {
   opacity: 0.4;
@@ -2885,7 +2894,7 @@ button.tl-cal-cell:hover {
 }
 .tl-tz:hover {
   color: var(--text);
-  border-color: #333b48;
+  border-color: var(--border-hover);
 }
 .tl-tz.on {
   color: var(--accent);
@@ -3446,7 +3455,7 @@ body.tl-expanded {
 #freqHeatMap .leaflet-container {
   height: 100%;
   width: 100%;
-  background: #05070a;
+  background: var(--map-bg);
 }
 /* Keep the dark, desaturated basemap treatment in sync with the Map view. */
 #freqHeatMap .leaflet-tile-pane {
@@ -3608,7 +3617,7 @@ body.tl-expanded {
 #allRidesMap .leaflet-container {
   height: 100%;
   width: 100%;
-  background: #05070a;
+  background: var(--map-bg);
 }
 /* Darken + desaturate the basemap heavily so the bright tracks pop against it.
    Filter the whole tile pane (not per-tile) so it applies regardless of when
@@ -3638,7 +3647,7 @@ body.tl-expanded {
   width: 34px;
   height: 34px;
   padding: 0;
-  background: rgba(20, 23, 29, 0.92);
+  background: var(--glass);
   border: 1px solid var(--line);
   color: var(--text);
   border-radius: 8px;
@@ -3647,8 +3656,8 @@ body.tl-expanded {
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
 }
 .map-expand:hover {
-  background: #222732;
-  border-color: #333b48;
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
 }
 
 /* Floating area-select toggle, top-right, stacked under the Expand button so it
@@ -3665,7 +3674,7 @@ body.tl-expanded {
   width: 34px;
   height: 34px;
   padding: 0;
-  background: rgba(20, 23, 29, 0.92);
+  background: var(--glass);
   border: 1px solid var(--line);
   color: var(--text);
   border-radius: 8px;
@@ -3674,8 +3683,8 @@ body.tl-expanded {
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
 }
 .map-select:hover {
-  background: #222732;
-  border-color: #333b48;
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
 }
 .map-select.active {
   background: var(--accent);
@@ -3696,7 +3705,7 @@ body.tl-expanded {
   width: 34px;
   height: 34px;
   padding: 0;
-  background: rgba(20, 23, 29, 0.92);
+  background: var(--glass);
   border: 1px solid var(--line);
   color: var(--text);
   border-radius: 8px;
@@ -3705,8 +3714,8 @@ body.tl-expanded {
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
 }
 .map-locate:hover {
-  background: #222732;
-  border-color: #333b48;
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
 }
 .map-locate.active {
   background: #2b8cff;
@@ -3732,7 +3741,7 @@ body.tl-expanded {
   width: 34px;
   height: 34px;
   padding: 0;
-  background: rgba(20, 23, 29, 0.92);
+  background: var(--glass);
   border: 1px solid var(--line);
   color: var(--text);
   border-radius: 8px;
@@ -3741,8 +3750,8 @@ body.tl-expanded {
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
 }
 .map-help:hover {
-  background: #222732;
-  border-color: #333b48;
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
 }
 .map-help.active {
   background: var(--accent);
@@ -3809,14 +3818,14 @@ body.tl-expanded {
   background-clip: padding-box;
 }
 .leaflet-container .leaflet-bar a {
-  background: rgba(20, 23, 29, 0.92);
+  background: var(--glass);
   color: var(--text);
   border-bottom: 1px solid var(--line);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
 }
 .leaflet-container .leaflet-bar a:hover {
-  background: #222732;
+  background: var(--surface-hover);
   color: var(--text);
   border-bottom-color: var(--line);
 }
@@ -3877,7 +3886,7 @@ body.tl-expanded {
 }
 .range-filter .rf-reset:hover {
   color: var(--text);
-  border-color: #333b48;
+  border-color: var(--border-hover);
   background: var(--panel2);
 }
 /* Two range inputs stacked so their thumbs ride a single shared track. The inputs
@@ -3997,7 +4006,7 @@ body.tl-expanded {
   margin-top: 10px;
   flex: 0 0 auto;
   padding: 8px 16px;
-  background: rgba(20, 23, 29, 0.92);
+  background: var(--glass);
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
@@ -4102,7 +4111,7 @@ body.heat-expanded {
 .ms-item:hover,
 .ms-item.hot {
   background: var(--panel2);
-  border-color: #333b48;
+  border-color: var(--border-hover);
 }
 .ms-item.hot {
   background: #2a1a10;
@@ -4184,7 +4193,7 @@ body.heat-expanded {
 }
 .ms-clear:hover {
   color: var(--text);
-  border-color: #333b48;
+  border-color: var(--border-hover);
 }
 .ms-item.matched {
   flex-direction: column;
@@ -4192,7 +4201,7 @@ body.heat-expanded {
   gap: 2px;
   padding: 5px 9px;
   background: var(--panel2);
-  border-color: #333b48;
+  border-color: var(--border-hover);
 }
 .ms-item.matched:hover,
 .ms-item.matched.hot {
@@ -4295,7 +4304,7 @@ body.heat-expanded {
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
 }
 .toast.err {
-  border-color: #5a2420;
+  border-color: var(--danger-border);
   background: #2a1513;
 }
 /* lift transient toasts above the floating progress pill when a job is active */
@@ -5206,11 +5215,11 @@ body.dragging-files::after {
   white-space: nowrap;
 }
 .tagmodal-chip:hover {
-  border-color: #333b48;
+  border-color: var(--border-hover);
 }
 .tagmodal-chip.on {
   border-color: var(--accent);
-  background: rgba(252, 82, 0, 0.12);
+  background: var(--accent-tint-strong);
   color: var(--text);
   font-weight: 600;
 }

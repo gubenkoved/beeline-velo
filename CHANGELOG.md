@@ -17,6 +17,18 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Refactor: design-language tokens (phase 1)
+- **What:** promoted the most-repeated colour literals in `src/style.css` to semantic
+  `:root` tokens and swapped every call site over — `--surface-hover` (#222732 ×13),
+  `--border-hover` (#333b48 ×18), `--map-bg` (#05070a ×6), `--glass` (the translucent
+  header/popover backdrop ×8), `--danger-border` (#5a2420 ×8), and `--accent-tint` /
+  `--accent-tint-strong` (the accent washes). Pure substitution: every token holds the
+  exact prior value, so the rendered pixels are unchanged.
+- **Why:** first step of turning the 5k-line one-off sheet into a reusable design
+  language. These hand-typed hexes were de-facto tokens with no single source of truth;
+  centralising them kills the "two copies, two behaviours" drift and makes the hover/
+  danger/accent palette tunable in one place.
+
 ## Feature: ride tags + multi-tag OR filter
 - **What:** rides can now carry free-form, case-insensitive tags. Assign them per ride
   (the … menu → Tags…) or in bulk over the current selection via a small modal that
