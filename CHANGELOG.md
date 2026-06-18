@@ -17,6 +17,18 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Refactor: shared `.panel` surface (5 side/stats panels)
+- **What:** the Stats panel, the Map / heatmap / Timeline / Wind-rose side lists all
+  repeated the same surface core (`background: var(--panel); border: 1px solid
+  var(--line); border-radius: var(--radius)`). Extracted a canonical `.panel` class;
+  the five elements now carry it and each rule keeps only its own padding/overflow.
+  Also removed the dead `.notice*` rules (the class isn't rendered anywhere).
+- **Why:** one source of truth for "a static panel surface" — distinct from `.modal-card`
+  (which adds elevation). The wind-rose `.cl-side` was another copy of the same thing;
+  it now shares the base. A new panel is `class="panel"` instead of three more lines.
+
+---
+
 ## Refactor: shared `.map-banner` (timeline + wind-rose)
 - **What:** `.cl-banner` (Wind-rose) was a **byte-for-byte copy** of `.tl-banner`
   (Timeline) — the centred glass status pill at the top of each map. Merged both into

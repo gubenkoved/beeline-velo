@@ -632,28 +632,6 @@ main {
   margin: 0 auto;
 }
 
-.notice {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 11px 14px;
-  margin-bottom: 16px;
-  color: var(--muted);
-  font-size: 12.5px;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-.notice b {
-  color: var(--text);
-  font-weight: 600;
-}
-.notice.hidden {
-  display: none;
-}
-.notice > span:first-child {
-  line-height: 1.5;
-}
 details.help {
   margin-top: 8px;
 }
@@ -1213,11 +1191,16 @@ span.caret.open::before {
   opacity: 0.85;
 }
 
-/* stats panel */
-.stats-panel {
+/* Shared static panel surface: dark panel fill, hairline border, large radius.
+   Callers add only their own padding / overflow. Distinct from .modal-card, which
+   adds an elevation shadow for floating dialogs. */
+.panel {
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--panel);
+}
+/* stats panel */
+.stats-panel {
   padding: 14px 16px;
   margin-bottom: 16px;
 }
@@ -2951,9 +2934,6 @@ button.tl-cal-cell:hover {
 
 /* Side panel (reuses .map-side look). */
 .tl-side {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel);
   padding: 12px 13px;
   overflow-y: auto;
 }
@@ -3606,9 +3586,6 @@ body.tl-expanded {
 }
 
 .cl-side {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel);
   padding: 14px;
   overflow-y: auto;
 }
@@ -4489,9 +4466,6 @@ body.heat-expanded {
 }
 
 .map-side {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel);
   padding: 12px 13px;
   overflow-y: auto;
 }
