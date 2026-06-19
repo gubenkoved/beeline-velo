@@ -109,14 +109,11 @@ import {
 import { decodePolyline } from "./track";
 import { escHtml, statNum } from "./ui";
 import { WindCache } from "./windcache";
-import { drawWindSpeedChart } from "./windchart";
 import {
-  linearRegression,
-  type SegmentOpts,
-  segmentRide,
-  speedCapIndices,
-  type WindSeg,
-} from "./windspeed";
+  initWindSpeedView,
+  mountWindSpeedView,
+  windSpeedVisibleRides,
+} from "./windspeed-view";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string): T =>
   document.querySelector(sel) as T;
@@ -1217,7 +1214,7 @@ function assignRange(which: RangeView, next: DateRange): void {
 function remountRange(which: RangeView, fit: boolean): void {
   if (which === "map") mountAllRidesMap({ fit });
   else if (which === "stats") mountStatsView({ fit });
-  else void mountAnalyticsView({ fit });
+  else void mountWindSpeedView({ fit });
 }
 
 /** Compact local day label for a slider edge, e.g. "Jun 1, 2026". */
@@ -1946,350 +1943,6 @@ function mountStatsView(opts: { fit?: boolean } = {}): void {
   syncHeatControl();
   mountFreqHeatmap(visible, hidden, opts.fit);
 }
-
-// --------------------------------------------------------------------------- //
-// Analytics view — wind vs speed. Each resolved ride is chopped into roughly-
-// straight, moving segments (one heading, no stops); each segment is one scatter
-// point of along-track wind (X: ← headwind / tailwind →) against average speed
-// (Y). A distance-weighted regression turns the cloud into three numbers: your
-// still-air speed (intercept), how much a km/h of tailwind buys you (slope), and
-// how much of your speed the wind explains (R²).
-//
-// Segments are memoized per ride (filter-free) so the date slider and the
-// Flat-only toggle re-filter synchronously — no IndexedDB re-reads on every drag
-// frame, which matters at a power user's thousands of rides. The cache key folds in
-// the ride's wind-resolved timestamp AND whether its full GPX is cached, so either
-// re-resolving the wind or fetching the full track transparently invalidates the
-// memoized segments.
-//
-// Speed is only trustworthy from a ride's FULL recorded GPX (real per-point
-// timestamps). Rides without it fall back to evenly-spaced synthetic times, which
-// would make per-segment speed a fiction — so the chart uses ONLY full-GPX rides and
-// tells the user how many are waiting on a download.
-// --------------------------------------------------------------------------- //
-/** A ride's memoized segments plus why it may contribute none. */
-type RideSegEntry = {
-  segs: WindSeg[];
-  /** ok = full timed GPX, segments usable; needgpx = resolved but no full timed
-   *  track (speed would be synthetic); skip = no usable wind (noData / unaligned). */
-  status: "ok" | "needgpx" | "skip";
-};
-const segCacheByUid = new Map<string, RideSegEntry>();
-let analyticsSeq = 0;
-/** True while an analytics sweep is in flight. Lets a passive re-render coalesce into
- *  a single post-run rerun instead of aborting + restarting the live sweep. */
-let analyticsRunning = false;
-/** A state change asked the analytics view to refresh while a sweep was running; the
- *  running sweep fires exactly one rerun when it finishes (if still on the tab). */
-let analyticsRerunQueued = false;
-/** |net grade| above this (percent) means a segment isn't "flat". */
-const FLAT_GRADE_PCT = 1.5;
-
-/** Memo key for a ride's segments: uid + wind version + full-GPX presence, so a
- *  re-resolve or a full-GPX fetch busts it. */
-function segKey(r: RideView): string {
-  return `${r.key}::${controller.weatherFetchedAt(r.key)}::${r.gpx_cached ? "g" : "_"}`;
-}
-
-/** The non-deleted rides within the current analytics date selection. */
-function analyticsVisibleRides(): RideView[] {
-  const visible = analyticsRange ? ridesInRange(STATE.rides, analyticsRange) : STATE.rides;
-  return visible.filter((r) => !r.deleted);
-}
-
-/** Current max-speed cap (km/h) from the slider (20..80), defaulting to 50. Segments
- *  whose average speed exceeds this are dropped as GPS glitches. */
-function analyticsMaxSpeed(): number {
-  const el = document.getElementById("maxSpeed") as HTMLInputElement | null;
-  const v = el ? parseInt(el.value, 10) : 50;
-  return Number.isFinite(v) ? Math.max(20, Math.min(80, v)) : 50;
-}
-
-/** Render the analytics empty/blocked state, adapting message + CTA to whether the
- *  blocker is unresolved wind or missing full GPX. */
-function renderAnalyticsEmpty(kind: "wind" | "gpx", n: number): void {
-  const el = document.getElementById("analyticsEmpty");
-  if (!el) return;
-  if (kind === "wind") {
-    el.innerHTML =
-      "See how much the wind speeds you up or slows you down. This needs rides with " +
-      "<b>resolved wind</b> — once some are resolved, each roughly-straight stretch of a " +
-      "ride becomes a point: headwind on the left, tailwind on the right, your speed up the " +
-      'side. <button type="button" class="linkbtn" id="analyticsResolveEmpty">' +
-      "Resolve wind for these rides</button>";
-  } else {
-    el.innerHTML =
-      `Wind is resolved, but charting speed needs each ride's <b>full GPX</b> (real ` +
-      `timestamps). Without it, a segment's speed would be guessed from evenly-spaced ` +
-      `points rather than your real pace, so ${n === 1 ? "this ride is" : `these ${n} rides are`} ` +
-      `left out. <button type="button" class="linkbtn" id="analyticsFetchGpxEmpty">` +
-      `Fetch full GPX for these rides</button>`;
-  }
-}
-
-/** Show each analytics action button only when it can act on rides in range, with
- *  the affected count in its label. Resolve wind appears only while some in-range
- *  ride is unresolved AND resolvable (a ride with no route track can't have wind
- *  sampled, so counting it would promise an action that does nothing). Fetch full
- *  GPX only while some Beeline ride lacks its full track (gpx-source rides already
- *  carry theirs, so they never count). */
-function syncAnalyticsActions(inRange: RideView[]): void {
-  const unresolved = inRange.filter((r) => !r.wind_resolved && !!r.track).length;
-  const needGpx = inRange.filter((r) => r.source !== "gpx" && !r.gpx_cached).length;
-  const resolveBtn = document.getElementById("analyticsResolve");
-  if (resolveBtn) {
-    resolveBtn.style.display = unresolved === 0 ? "none" : "";
-    resolveBtn.textContent =
-      unresolved === 1 ? "Resolve wind for 1 ride" : `Resolve wind for ${unresolved} rides`;
-  }
-  const gpxBtn = document.getElementById("analyticsFetchGpx");
-  if (gpxBtn) {
-    gpxBtn.style.display = needGpx === 0 ? "none" : "";
-    gpxBtn.textContent =
-      needGpx === 1 ? "Fetch full GPX for 1 ride" : `Fetch full GPX for ${needGpx} rides`;
-  }
-}
-
-/** Show (or clear) a calm centred message over the chart area without changing the
- *  page layout — used while analysing and when a date range has nothing to plot, so
- *  dragging the slider never collapses the cards/controls/slider out of view. Pass a
- *  0..1 `progress` to add a determinate bar (for the analysing sweep). */
-function showChartMessage(text: string | null, progress?: number, detail?: string): void {
-  const el = document.getElementById("analyticsChartMsg");
-  if (!el) return;
-  if (text) {
-    if (progress !== undefined) {
-      // Determinate (analysing) state: a FIXED-WIDTH card so it never resizes as the
-      // ride label / count change. A stable header line holds the width; the changing
-      // ride + count sit on an ellipsized detail line beneath, then the bar.
-      const pct = Math.round(Math.max(0, Math.min(1, progress)) * 100);
-      el.innerHTML =
-        `<span class="cm-card"><b class="cm-head">${text}</b>` +
-        (detail ? `<span class="cm-detail">${detail}</span>` : "") +
-        `<div class="chart-msg-bar"><i style="width:${pct}%"></i></div></span>`;
-    } else {
-      el.innerHTML = `<span>${text}</span>`;
-    }
-    el.style.display = "flex";
-  } else {
-    el.style.display = "none";
-    el.textContent = "";
-  }
-}
-
-/** Yield to the browser so a just-set overlay actually paints before more blocking
- *  work. Two rAFs guarantees a committed frame across engines. */
-function nextPaint(): Promise<void> {
-  return new Promise((resolve) =>
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-  );
-}
-
-/** Blank the scatter canvas (used when a range has no points to draw). */
-function clearChart(): void {
-  const canvas = document.getElementById("windSpeedChart") as HTMLCanvasElement | null;
-  const ctx = canvas?.getContext("2d");
-  if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-}
-
-async function mountAnalyticsView(opts: { fit?: boolean } = {}): Promise<void> {
-  // The heavy work — segmenting each ride — is cached per ride and INDEPENDENT of the
-  // date range, so only one sweep ever runs and it's never restarted midway. A
-  // re-entrant call while a sweep is running (a date-slider drag, a settings change, a
-  // background job ticking ride state) just asks for ONE refresh afterwards instead of
-  // superseding the sweep — so the progress counter never resets to 0 or drops its
-  // total. Once the sweep has cached everything, later calls find nothing pending and
-  // re-aggregate instantly, so the slider updates the plot live.
-  if (analyticsRunning) {
-    analyticsRerunQueued = true;
-    return;
-  }
-  const my = ++analyticsSeq;
-  analyticsRunning = true;
-  try {
-    await runAnalyticsView(my, opts);
-  } finally {
-    analyticsRunning = false;
-    // Apply the latest range/settings once the sweep is done (only if still on tab).
-    if (analyticsRerunQueued && activeView() === "analytics") {
-      analyticsRerunQueued = false;
-      void mountAnalyticsView();
-    }
-  }
-}
-
-async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Promise<void> {
-  refreshRange("analytics");
-  const inRange = analyticsVisibleRides();
-  const resolved = inRange.filter((r) => r.wind_resolved);
-
-  const empty = document.getElementById("analyticsEmpty");
-  const body = document.getElementById("analyticsBody");
-  syncRangeControl("analytics");
-
-  // Cold first run — nothing resolved anywhere yet → the full onboarding guide. No
-  // slider interaction happens in this state, so a full swap is fine here.
-  const anyResolvedEver = STATE.rides.some((r) => !r.deleted && r.wind_resolved);
-  if (!anyResolvedEver) {
-    renderAnalyticsEmpty("wind", 0);
-    empty?.classList.remove("hidden");
-    body?.classList.add("hidden");
-    return;
-  }
-
-  // Working mode: keep the whole body (cards, controls, date slider, chart) mounted so
-  // dragging the slider never collapses the layout. Every "nothing to plot here" state
-  // is shown as a calm overlay on the chart instead of swapping the page out.
-  empty?.classList.add("hidden");
-  body?.classList.remove("hidden");
-  syncAnalyticsActions(inRange);
-
-  const opts: SegmentOpts = { stopKmh: STATE.settings.movingThresholdKmh };
-  // Segmenting a ride is independent of the date range, so analyse the WHOLE resolved
-  // library (not just the in-range slice) and cache it. That keeps the progress total
-  // stable while the date slider moves — the slider only re-filters which cached rides
-  // are plotted, it never restarts the sweep or drops the count. Only rides not already
-  // memoized cost anything; re-renders after the first sweep are instant.
-  const allResolved = STATE.rides.filter((r) => !r.deleted && r.wind_resolved);
-  // Sweep newest-first (the list's canonical order) so progress reads as a sensible
-  // march through time rather than the store's arbitrary order.
-  const pending = allResolved
-    .filter((r) => !segCacheByUid.has(segKey(r)))
-    .sort((a, b) => compareRideKeysDesc(a.key, b.key));
-  // Compute (and memoize) segments for each pending ride. Bail if a newer mount
-  // (e.g. a date-slider drag) superseded this one while we awaited. One ride that
-  // fails to load (corrupt cache, decode error) is skipped, never fatal — otherwise
-  // a single bad ride in a large library would blank the whole chart.
-  let done = 0;
-  let lastPaint = 0;
-  const sweepStart = performance.now();
-  for (const r of pending) {
-    const key = segKey(r);
-    let entry: RideSegEntry;
-    try {
-      const s = await controller.windSamples(r.key);
-      if (my !== analyticsSeq) return;
-      if (!s) entry = { segs: [], status: "skip" };
-      else if (!s.realTimes) entry = { segs: [], status: "needgpx" };
-      else
-        entry = {
-          segs: segmentRide(s.points, s.times, s.eles, s.along, opts, r.key),
-          status: "ok",
-        };
-    } catch (err) {
-      console.error(`analytics: skipping ${r.key} —`, err);
-      entry = { segs: [], status: "skip" };
-    }
-    if (my !== analyticsSeq) return;
-    segCacheByUid.set(key, entry);
-    done++;
-    // Reveal the progress overlay only once a sweep has clearly run past a short delay,
-    // then refresh it on a ~100ms budget so it ticks smoothly and names the ride in
-    // flight. A download resolves rides one at a time, each firing a 1-ride top-up sweep
-    // that finishes well under the delay — so it never flashes the overlay over the
-    // existing chart. Big initial / re-segmentation sweeps cross the delay and show
-    // smooth progress as before.
-    const now = performance.now();
-    if (now - sweepStart >= 200 && (now - lastPaint >= 100 || done === pending.length)) {
-      lastPaint = now;
-      const label = rideShortLabel(r.key);
-      showChartMessage(
-        "Analysing rides…",
-        done / pending.length,
-        `${label ? `${label} · ` : ""}${done} / ${pending.length}`,
-      );
-      await nextPaint();
-      if (my !== analyticsSeq) return;
-    }
-  }
-  if (my !== analyticsSeq) return;
-
-  const flatOnly =
-    (document.getElementById("flatOnly") as HTMLInputElement | null)?.checked ?? false;
-  let usableRides = 0;
-  let needGpxRides = 0;
-  let skippedRides = 0;
-  const segs: WindSeg[] = [];
-  for (const r of resolved) {
-    const entry = segCacheByUid.get(segKey(r));
-    if (!entry) continue;
-    if (entry.status === "needgpx") needGpxRides++;
-    if (entry.status === "skip") skippedRides++;
-    if (entry.status !== "ok") continue; // skip / needgpx contribute no segments
-    usableRides++;
-    for (const seg of entry.segs) {
-      if (flatOnly) {
-        if (!Number.isFinite(seg.netGradePct)) continue; // unknown grade → exclude
-        if (Math.abs(seg.netGradePct) > FLAT_GRADE_PCT) continue; // hilly → exclude
-      }
-      segs.push(seg);
-    }
-  }
-
-  // Drop physically-impossible segments: a bike can't average 100+ km/h, so anything
-  // above the Max-speed cap is a GPS glitch. Unlike trimming the fast/slow tails by
-  // speed, this leaves every believable headwind AND tailwind point in place, so the
-  // wind slope isn't flattened — only bad data is removed. Dropped points are hidden
-  // so the axes auto-scale to the real cloud.
-  const maxSpeed = analyticsMaxSpeed();
-  const out = document.getElementById("maxSpeedOut") as HTMLOutputElement | null;
-  if (out) out.value = `${maxSpeed} km/h`;
-  const keep = speedCapIndices(
-    segs.map((s) => s.avgSpeedKmh),
-    maxSpeed,
-  );
-  const shown = keep.map((i) => segs[i]);
-  const trimmed = segs.length - shown.length;
-
-  const xs = shown.map((s) => s.avgAlongKmh);
-  const ys = shown.map((s) => s.avgSpeedKmh);
-  const w = shown.map((s) => s.distanceKm);
-  const reg = linearRegression(xs, ys, w);
-
-  const cards = document.getElementById("analyticsCards");
-  if (cards) {
-    const has = shown.length > 0;
-    cards.innerHTML = [
-      statCard(has ? `${reg.intercept.toFixed(1)} km/h` : "—", "still-air speed"),
-      statCard(
-        has ? `${reg.slope >= 0 ? "+" : ""}${reg.slope.toFixed(2)}` : "—",
-        "km/h per km/h of tailwind",
-      ),
-      statCard(has ? reg.r2.toFixed(2) : "—", "R² (wind explains)"),
-      statCard(String(shown.length), shown.length === 1 ? "segment" : "segments"),
-    ].join("");
-  }
-  const note = document.getElementById("analyticsNote");
-  if (note) {
-    // Only count rides that could actually be resolved (a trackless ride has no
-    // route to sample wind along, so it's never "not yet resolved" — it's
-    // unresolvable, and listing it would contradict the hidden Resolve button).
-    const unresolved = inRange.filter((r) => !r.wind_resolved && !!r.track).length;
-    note.textContent =
-      ` ${usableRides} ride${usableRides === 1 ? "" : "s"} analysed` +
-      (needGpxRides ? ` · ${needGpxRides} need full GPX` : "") +
-      (unresolved ? ` · ${unresolved} not yet wind-resolved` : "") +
-      (skippedRides ? ` · ${skippedRides} skipped` : "") +
-      (flatOnly ? " · flat segments only" : "") +
-      (trimmed ? ` · ${trimmed} over ${maxSpeed} km/h dropped` : "");
-  }
-  const canvas = document.getElementById("windSpeedChart") as HTMLCanvasElement | null;
-  if (shown.length === 0) {
-    // Stay in the working layout; explain the gap with a calm overlay instead.
-    clearChart();
-    showChartMessage(
-      resolved.length === 0
-        ? "No wind-resolved rides in this date range."
-        : needGpxRides > 0
-          ? `${needGpxRides} ride${needGpxRides === 1 ? "" : "s"} in this range need full GPX for speed.`
-          : "No segments match the current filters.",
-    );
-  } else {
-    showChartMessage(null);
-    if (canvas) drawWindSpeedChart(canvas, shown, reg);
-  }
-}
-
 // --------------------------------------------------------------------------- //
 // Timeline (Google Location History) view lives in ./timeline-view.ts — an isolated
 // map-centric experience (dwell heatmap, area-select "when was I here", day replay
@@ -3243,7 +2896,7 @@ function render(): void {
   else if (activeView() === "stats") mountStatsView();
   // The wrapper coalesces a re-entrant call into one post-sweep refresh, so a passive
   // re-render (a background job ticking ride state) never restarts a live sweep.
-  else if (activeView() === "analytics") void mountAnalyticsView();
+  else if (activeView() === "analytics") void mountWindSpeedView();
   else if (activeView() === "climate") mountClimateView();
   else if (activeView() === "timeline") mountTimelineView();
   else mountMaps();
@@ -3972,13 +3625,13 @@ document.addEventListener("click", (e) => {
   // Analytics view: resolve historical wind for every ride in the current date
   // range, so the wind-vs-speed scatter has points to plot.
   if (t.id === "analyticsResolve" || t.id === "analyticsResolveEmpty") {
-    const keys = analyticsVisibleRides().map((r) => r.key);
+    const keys = windSpeedVisibleRides().map((r) => r.key);
     return resolveWindFor(keys);
   }
   // Analytics view: fetch the full recorded GPX (real timestamps) for the rides in
   // range — speed is only trustworthy from a full timed track.
   if (t.id === "analyticsFetchGpx" || t.id === "analyticsFetchGpxEmpty") {
-    const keys = analyticsVisibleRides().map((r) => r.key);
+    const keys = windSpeedVisibleRides().map((r) => r.key);
     return fetchFullGpx(keys);
   }
 
@@ -4449,7 +4102,7 @@ window.addEventListener("resize", () => {
   if (analyticsResizeRaf) cancelAnimationFrame(analyticsResizeRaf);
   analyticsResizeRaf = requestAnimationFrame(() => {
     analyticsResizeRaf = 0;
-    void mountAnalyticsView({ fit: false });
+    void mountWindSpeedView({ fit: false });
   });
 });
 
@@ -4500,7 +4153,7 @@ document.addEventListener("change", (e) => {
     cb.value = "";
   }
   if (cb.id === "flatOnly") {
-    void mountAnalyticsView();
+    void mountWindSpeedView();
   }
 });
 
@@ -4577,7 +4230,7 @@ document.addEventListener("input", (e) => {
   }
   if (el.id === "maxSpeed") {
     ($("#maxSpeedOut") as HTMLOutputElement).value = `${parseInt(el.value, 10) || 0} km/h`;
-    void mountAnalyticsView();
+    void mountWindSpeedView();
     return;
   }
   if (el.id === "setMovingThresh") {
@@ -4639,6 +4292,17 @@ initClimateView({
     controller.getPointWind(lat, lon, startYear, endYear, onStage),
   toast,
   osmAttribution: OSM_ATTRIBUTION,
+});
+
+initWindSpeedView({
+  getRides: () => STATE.rides,
+  ridesInRange,
+  analyticsRange: () => analyticsRange,
+  movingThresholdKmh: () => STATE.settings.movingThresholdKmh,
+  weatherFetchedAt: (key) => controller.weatherFetchedAt(key),
+  windSamples: (key) => controller.windSamples(key),
+  refreshRange: () => refreshRange("analytics"),
+  syncRangeControl: () => syncRangeControl("analytics"),
 });
 
 // Map view side panel: hovering an entry highlights its track; clicking opens the

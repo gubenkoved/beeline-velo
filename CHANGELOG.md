@@ -17,7 +17,20 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
-## Refactor: shared state module `src/app-state.ts` (the seam for splitting main)
+## Refactor: extract the Wind/Speed view into `src/windspeed-view.ts`
+- **What:** lifted the whole wind-vs-speed scatter (~340 lines: the per-ride segment
+  sweep + cache, the distance-weighted regression, KPI cards, empty/blocked states and
+  the analysing-progress overlay) out of `main.ts` into a self-contained module behind a
+  `WindSpeedDeps` seam — the same injected-lazy-closure pattern as `climate-view`/
+  `timeline-view`. `main.ts` keeps the shared range control, ride list and controller and
+  passes them in; it no longer imports `windchart`/`windspeed` directly. Renamed the two
+  public entry points (`mountAnalyticsView`→`mountWindSpeedView`, `analyticsVisibleRides`→
+  `windSpeedVisibleRides`) and rewired all 7 call sites. `main.ts` 4765 → ~4420.
+- **Why:** continue carving the monolith into per-view modules. Wind/Speed is the first
+  full *data* view to come out cleanly because it's self-contained (its own DOM subtree,
+  no shared render glue) — proving the deps seam carries a real view, not just chrome.
+
+
 - **What:** created `src/app-state.ts` — the home for state that several views share,
   built on the reactive core. First state moved in: the active top-level view
   (`activeView` signal + `setActiveView` persistence + the `ViewName` type), out of
