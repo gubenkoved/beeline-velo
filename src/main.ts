@@ -23,6 +23,15 @@ import {
   type TriState,
   visibleRides,
 } from "./filter";
+import {
+  fmtBytes,
+  fmtDuration,
+  fmtDurationExact,
+  fmtElevation,
+  fmtKm,
+  fmtKmDetail,
+  fmtSpeed,
+} from "./format";
 import { BASE_SPACING_M, buildHeatPoints, type HeatBounds, spacingForZoom } from "./heatmap";
 import {
   type DateRange,
@@ -1853,38 +1862,6 @@ function redrawFreqHeatmap(): void {
   buildFreqHeatLayer();
 }
 
-/** Whole hours-and-minutes label for a duration, e.g. "12h 30m" or "45m". */
-function fmtDuration(totalSec: number): string {
-  const mins = Math.round(totalSec / 60);
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
-}
-
-/** Exact "H:MM:SS" / "M:SS" for the per-ride detail grid (preserves seconds). */
-function fmtDurationExact(totalSec: number): string {
-  const s = Math.max(0, Math.round(totalSec));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
-  return `${h > 0 ? `${h}:` : ""}${mm}:${String(sec).padStart(2, "0")}`;
-}
-
-/** Compact metres/kilometres label for an elevation total. */
-function fmtElevation(m: number): string {
-  return m >= 1000 ? `${(m / 1000).toFixed(1)}k m` : `${Math.round(m)} m`;
-}
-
-/** Human-readable size for the locally stored state (MB, with a KB step for tiny payloads). */
-function fmtBytes(bytes: number): string {
-  const kb = bytes / 1024;
-  if (kb < 1) return `${bytes} B`;
-  const mb = kb / 1024;
-  if (mb < 0.1) return `${Math.round(kb)} KB`;
-  return `${mb.toFixed(mb < 10 ? 2 : 1)} MB`;
-}
-
 /** One totals/record card: a big value, a label, and an optional sub-line. */
 function statCard(value: string, label: string, sub = ""): string {
   return statNum({ value, label, sub: sub || undefined });
@@ -2518,16 +2495,6 @@ function volumeBar(km: number, maxKm: number): string {
   const pct = maxKm > 0 && km > 0 ? Math.max(3, Math.round((km / maxKm) * 100)) : 0;
   const fill = pct > 0 ? `<i class="vol" style="width:${pct}%"></i>` : "";
   return `<span class="bars" title="${fmtKm(km)} ridden">${fill}</span>`;
-}
-function fmtKm(v: number): string {
-  return v >= 1000 ? `${(v / 1000).toFixed(1)}k km` : `${Math.round(v)} km`;
-}
-/** Distance with one decimal (detail grid / row meta), e.g. "13.5 km". */
-function fmtKmDetail(v: number): string {
-  return `${v.toFixed(1)} km`;
-}
-function fmtSpeed(v: number): string {
-  return `${v.toFixed(1)} km/h`;
 }
 
 // -- filter bar (predicates live in ./filter) -----------------------------
