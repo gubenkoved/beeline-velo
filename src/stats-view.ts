@@ -25,6 +25,7 @@ import { createLocate, type Locate } from "./locate";
 import { CLICK_PX, createInteractiveMap, HOT_TRACK, makeExpandToggle } from "./map-core";
 import { type DateRange, type RideTrack, ridesWithTracks } from "./mapview";
 import { rideShortLabel } from "./parsing";
+import { setSliderFill } from "./slider";
 import { computeStats, type PeriodRecord } from "./stats";
 import { statNum } from "./ui";
 
@@ -286,6 +287,7 @@ function syncHeatControl(): void {
   if (slider && document.activeElement !== slider) {
     slider.value = String(radius);
   }
+  if (slider) setSliderFill(slider);
   if (out) out.value = String(radius);
 }
 

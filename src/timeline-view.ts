@@ -25,6 +25,7 @@ import { type AreaSelect, createAreaSelect } from "./areaselect";
 import type { LocRecord, VisitType } from "./loc-model";
 import { type LocationHistoryStore, monthKey } from "./loc-store";
 import type { RideTrack } from "./mapview";
+import { initSliderFills, setSliderFill } from "./slider";
 import {
   buildDaySamples,
   type DayPeriod,
@@ -711,6 +712,7 @@ function renderOverviewBar(): void {
   // The day-picker rides inside the range row, beside "All"; with only a single day
   // of history there's no slider, so fall back to the standalone button.
   bar.innerHTML = heatControlsHtml() + (range || jumpDateHtml());
+  initSliderFills(bar);
   wireRangeWindow();
   updateRangeUI();
 }
@@ -720,9 +722,9 @@ function heatControlsHtml(): string {
   return (
     `<div class="tl-tweaks">` +
     `<label class="tl-tweak" title="How tightly the glow hugs each place \u2014 smaller is more precise/pinpoint, larger blends nearby places into smooth blobs">` +
-    `Spread <input type="range" id="tlHeatRadius" min="8" max="44" step="2" value="${heatPrefs.radius}" /></label>` +
+    `Spread <input type="range" class="uslider" id="tlHeatRadius" min="8" max="44" step="2" value="${heatPrefs.radius}" /></label>` +
     `<label class="tl-tweak" title="A place reaches full brightness once you've spent at least this long there \u2014 lower shows short stops too, higher highlights only your long stays">` +
-    `Full glow at <input type="range" id="tlHeatDwell" min="1" max="24" step="1" value="${heatPrefs.dwellH}" />` +
+    `Full glow at <input type="range" class="uslider" id="tlHeatDwell" min="1" max="24" step="1" value="${heatPrefs.dwellH}" />` +
     `<output id="tlHeatDwellOut">${heatPrefs.dwellH}h</output></label>` +
     `</div>`
   );
@@ -1439,10 +1441,11 @@ function renderDayBar(): void {
     `<button class="tl-step" data-tl="prev-day" ${hasPrev ? "" : "disabled"} title="Previous day with data" aria-label="Previous day">${ICONS.chevLeft}</button>` +
     `<button class="tl-calbtn tl-date" data-tl="open-cal" data-cal="date" title="Jump to a day">${ICONS.calendar}<span>${deps.esc(calBtnLabel(dayKey!))}</span></button>` +
     `<button class="tl-step" data-tl="next-day" ${hasNext ? "" : "disabled"} title="Next day with data" aria-label="Next day">${ICONS.chevRight}</button>` +
-    `<input type="range" class="tl-scrub" id="tlScrub" min="${lo}" max="${hi}" step="60000" value="${scrubT}" ` +
+    `<input type="range" class="tl-scrub uslider" id="tlScrub" min="${lo}" max="${hi}" step="60000" value="${scrubT}" ` +
     `title="Drag to replay the day" />` +
     `<span class="tl-clock">${timeLabel(scrubT)}${dayDeltaMarker(scrubT)}</span>` +
     tzToggleHtml();
+  initSliderFills(bar);
 }
 
 /** A compact UTC↔area-local time toggle for the day bar. */
@@ -1695,6 +1698,7 @@ function stepDay(dir: -1 | 1): void {
 function syncScrubInput(): void {
   const slider = document.getElementById("tlScrub") as HTMLInputElement | null;
   if (slider) slider.value = String(scrubT);
+  if (slider) setSliderFill(slider);
 }
 
 // --------------------------------------------------------------------------- //

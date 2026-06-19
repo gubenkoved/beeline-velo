@@ -17,6 +17,20 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## Unify every single-thumb slider onto one styled component
+- **What:** introduced a canonical `.uslider` class (style.css) + a shared `setSliderFill()`
+  helper (new `src/slider.ts`) and routed every single-thumb `<input type="range">` through
+  them — Stats thickness, Wind/Speed max-speed + trims, Timeline heat-spread/dwell + day
+  scrubber, Settings moving-threshold, and the Windalytics hour. They now match the dual-thumb
+  `.rf-*` date-range slider: a 4px dark track with an orange fill up to a round accent thumb.
+  Folded the bespoke `.cl-ctl` styling onto the shared class (renamed its `--cl-fill` →
+  generic `--fill`) and dropped the native `accent-color`-only chrome from the rest. One
+  document-level `input` listener keeps every slider's fill live on drag.
+- **Why:** the sliders were inconsistent — most rendered as the unstyled native gray control
+  while only the date-range and climate-hour sliders looked finished. One canonical
+  implementation per concern (per the repo's reuse/one-design-language values) means they all
+  read as one product and a future restyle touches a single place.
+
 ## Refactor: extract the Stats view into `src/stats-view.ts`
 - **What:** lifted the Stats view (`#statsView`) out of `main.ts` into its own module behind
   a `StatsViewDeps` seam (~290 lines): lifetime totals + records (`computeStats`, `statCard`,

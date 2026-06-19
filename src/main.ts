@@ -13,6 +13,7 @@ import "./style.css";
 import L from "leaflet";
 
 import { activeView, setActiveView, type ViewName } from "./app-state";
+import { setSliderFill } from "./slider";
 import { type AppState, Controller, type RideView } from "./controller";
 import {
   emptyFilters,
@@ -289,6 +290,7 @@ function showSettings(): void {
   const thresh = STATE.settings.movingThresholdKmh;
   const slider = document.getElementById("setMovingThresh") as HTMLInputElement | null;
   if (slider) slider.value = String(thresh);
+  if (slider) setSliderFill(slider);
   const out = document.getElementById("setMovingThreshOut") as HTMLOutputElement | null;
   if (out) out.value = `${thresh} km/h`;
   modal.classList.remove("hidden");
@@ -1873,6 +1875,8 @@ function syncTrimControls(): void {
   if (fast && document.activeElement !== fast) {
     fast.value = String(STATE.settings.speedTrimFastPct);
   }
+  if (slow) setSliderFill(slow);
+  if (fast) setSliderFill(fast);
   ($("#trimSlowOut") as HTMLOutputElement).value = `${STATE.settings.speedTrimSlowPct}%`;
   ($("#trimFastOut") as HTMLOutputElement).value = `${STATE.settings.speedTrimFastPct}%`;
 }
@@ -3670,6 +3674,9 @@ document.addEventListener("drop", (e) => {
 // Live outlier-trim sliders: update labels and recompute the speed view as they move.
 document.addEventListener("input", (e) => {
   const el = e.target as HTMLInputElement;
+  // Keep every unified single-thumb slider's accent fill in sync as it's dragged
+  // (one place for all of them — Stats / Wind-Speed / Timeline / Settings / Climate).
+  if (el.classList?.contains("uslider")) setSliderFill(el);
   if (el.id === "fDistMin" || el.id === "fDistMax") {
     const v = el.value.trim() === "" ? null : Number(el.value);
     const km = v !== null && Number.isFinite(v) && v >= 0 ? v : null;

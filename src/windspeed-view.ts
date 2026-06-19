@@ -18,6 +18,7 @@ import { activeView } from "./app-state";
 import type { RideView } from "./controller";
 import type { DateRange } from "./mapview";
 import { compareRideKeysDesc, rideShortLabel } from "./parsing";
+import { setSliderFill } from "./slider";
 import type { LatLon } from "./track";
 import { statNum } from "./ui";
 import { drawWindSpeedChart } from "./windchart";
@@ -291,6 +292,8 @@ async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Prom
   const maxSpeed = analyticsMaxSpeed();
   const out = document.getElementById("maxSpeedOut") as HTMLOutputElement | null;
   if (out) out.value = `${maxSpeed} km/h`;
+  const maxEl = document.getElementById("maxSpeed") as HTMLInputElement | null;
+  if (maxEl) setSliderFill(maxEl);
   const keep = speedCapIndices(
     segs.map((s) => s.avgSpeedKmh),
     maxSpeed,

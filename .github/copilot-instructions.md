@@ -292,6 +292,7 @@ none. The table is grouped by concern; keep new modules in the group they belong
 | [src/app-state.ts](../src/app-state.ts) | Shared app state as signals (the seam for decomposing `main.ts` into per-view modules); a view imports the shared state it needs | `activeView`, `setActiveView()`, `ViewName` |
 | [src/confirm.ts](../src/confirm.ts) | Self-contained styled confirm / prompt / consent dialogs (promise-based, own DOM listeners via `initConfirm`); reuses the `.scrim`/`.modal-card` vocabulary | `confirmDialog()`, `promptDialog()`, `consentDialog()`, `initConfirm()` |
 | [src/ui.ts](../src/ui.ts) | Render-layer design vocabulary: pure `(opts) => string` builders for shared components (one canonical markup + classes each); centralised HTML escaping | `escHtml()`, `statNum()` |
+| [src/slider.ts](../src/slider.ts) | Unified single-thumb range slider behaviour: drive the `.uslider` accent left-fill (`--fill`) from each input's value, so every single-thumb slider matches the dual-thumb `.rf-*` look | `setSliderFill()`, `initSliderFills()` |
 | [src/zip.ts](../src/zip.ts) | Dependency-free ZIP build + read | `buildZip()`, `unzip()` |
 | [src/gzip.ts](../src/gzip.ts) | Gzip compress/decompress (CompressionStream) | `gzip()`, `gunzip()` |
 | [src/varint.ts](../src/varint.ts) | Variable-length int encode/decode (for compact caches) | `ByteWriter`, `ByteReader`, `zigzag()`, `unzigzag()` |

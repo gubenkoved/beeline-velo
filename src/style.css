@@ -1274,7 +1274,6 @@ span.caret.open::before {
 }
 .sp-trim .trim input[type="range"] {
   width: 120px;
-  accent-color: var(--accent);
 }
 .sp-trim .trim output {
   font-family: var(--mono);
@@ -2687,8 +2686,6 @@ body.ridemap-open {
 }
 .tl-tweak input[type="range"] {
   width: 78px;
-  accent-color: var(--accent);
-  cursor: pointer;
 }
 .tl-tweak output {
   font-family: var(--mono);
@@ -2924,8 +2921,6 @@ button.tl-cal-cell:hover {
 .tl-scrub {
   flex: 1 1 160px;
   min-width: 120px;
-  accent-color: var(--accent);
-  cursor: pointer;
 }
 .tl-clock {
   flex: 0 0 auto;
@@ -3533,61 +3528,6 @@ body.tl-expanded {
 .cl-ctl input[type="range"] {
   flex: 1 1 auto;
   min-width: 0;
-  height: 18px;
-  margin: 0;
-  background: transparent;
-  cursor: pointer;
-  -webkit-appearance: none;
-  appearance: none;
-}
-/* Match the shared `.rf-*` range slider so both controls read as one family: a 4px
-   dark track with an accent fill (left of the thumb) under the same round accent
-   thumb (dark ring + soft shadow). The fill fraction comes from JS (`--cl-fill`). */
-.cl-ctl input[type="range"]:focus {
-  outline: none;
-}
-.cl-ctl input[type="range"]::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 3px;
-  background: linear-gradient(
-    to right,
-    var(--accent) 0 calc(var(--cl-fill, 0) * 100%),
-    var(--track) calc(var(--cl-fill, 0) * 100%) 100%
-  );
-}
-.cl-ctl input[type="range"]::-moz-range-track {
-  height: 4px;
-  border-radius: 3px;
-  background: var(--track);
-}
-.cl-ctl input[type="range"]::-moz-range-progress {
-  height: 4px;
-  border-radius: 3px;
-  background: var(--accent);
-}
-.cl-ctl input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 15px;
-  width: 15px;
-  margin-top: -5.5px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 2px solid var(--bg);
-  box-shadow: var(--shadow-thumb);
-  cursor: grab;
-}
-.cl-ctl input[type="range"]::-webkit-slider-thumb:active {
-  cursor: grabbing;
-}
-.cl-ctl input[type="range"]::-moz-range-thumb {
-  height: 15px;
-  width: 15px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 2px solid var(--bg);
-  box-shadow: var(--shadow-thumb);
-  cursor: grab;
 }
 .cl-ctl output {
   color: var(--text);
@@ -3889,7 +3829,6 @@ body.climate-expanded .cl-ctl input[type="range"] {
 }
 .heat-thickness input[type="range"] {
   width: 120px;
-  accent-color: var(--accent);
 }
 .heat-thickness output {
   font-family: var(--mono);
@@ -3967,7 +3906,6 @@ body.climate-expanded .cl-ctl input[type="range"] {
 }
 .chart-controls input[type="range"] {
   width: 110px;
-  accent-color: var(--accent);
 }
 .chart-controls output {
   font-family: var(--mono);
@@ -4273,6 +4211,76 @@ body.climate-expanded .cl-ctl input[type="range"] {
 }
 .leaflet-container .leaflet-control-attribution a {
   color: var(--accent);
+}
+
+/* -- unified single-thumb range slider ------------------------------------
+   One canonical look for EVERY single-thumb `<input type="range">` so they all
+   read as one family with the dual-thumb `.rf-*` slider below: a 4px dark track
+   with an accent fill left of the thumb (fraction via the `--fill` custom
+   property, set by `setSliderFill()` in ui.ts — Firefox fills for free via
+   `::-moz-range-progress`), under a 15px round accent thumb with a dark ring +
+   soft shadow. Per-container rules only set width/flex; the chrome lives here. */
+input[type="range"].uslider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"].uslider:focus {
+  outline: none;
+}
+input[type="range"].uslider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 calc(var(--fill, 0) * 100%),
+    var(--track) calc(var(--fill, 0) * 100%) 100%
+  );
+}
+input[type="range"].uslider::-moz-range-track {
+  height: 4px;
+  border-radius: 3px;
+  background: var(--track);
+}
+input[type="range"].uslider::-moz-range-progress {
+  height: 4px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+input[type="range"].uslider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 15px;
+  width: 15px;
+  margin-top: -5.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  box-shadow: var(--shadow-thumb);
+  cursor: grab;
+}
+input[type="range"].uslider::-webkit-slider-thumb:active {
+  cursor: grabbing;
+}
+input[type="range"].uslider::-moz-range-thumb {
+  height: 15px;
+  width: 15px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  box-shadow: var(--shadow-thumb);
+  cursor: grab;
+}
+input[type="range"].uslider:disabled::-webkit-slider-thumb {
+  background: var(--muted);
+  cursor: default;
+}
+input[type="range"].uslider:disabled::-moz-range-thumb {
+  background: var(--muted);
+  cursor: default;
 }
 
 /* -- date range filter (shared by Map + Stats views) ---------------------- */
@@ -5715,8 +5723,6 @@ body.dragging-files::after {
 }
 .settings-control input[type="range"] {
   flex: 1;
-  accent-color: var(--accent);
-  cursor: pointer;
 }
 .settings-control output {
   min-width: 64px;

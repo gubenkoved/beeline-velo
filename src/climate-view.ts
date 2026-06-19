@@ -17,6 +17,7 @@
 
 import L from "leaflet";
 import { createLocate, type Locate } from "./locate";
+import { setSliderFill } from "./slider";
 import { statNum } from "./ui";
 import type { CellDayWind } from "./weather";
 import { cellBounds } from "./weather";
@@ -316,7 +317,7 @@ function onInput(e: Event): void {
   if (el.id === "clHour") {
     const v = Number(el.value);
     hour = v >= 24 ? "all" : v;
-    el.style.setProperty("--cl-fill", String(v / 24));
+    setSliderFill(el);
     updateHourLabel();
     renderPanels();
     drawMapMarker();
@@ -432,7 +433,7 @@ function updateHourLabel(): void {
 /** Drive the hour slider's left accent fill (0..1), so its track matches the rf one. */
 function updateHourFill(): void {
   const el = document.getElementById("clHour") as HTMLInputElement | null;
-  if (el) el.style.setProperty("--cl-fill", String(Number(el.value) / 24));
+  if (el) setSliderFill(el);
 }
 
 function hourLabel(): string {
@@ -458,7 +459,7 @@ function renderControls(): void {
   bar.innerHTML =
     yearSliderHtml() +
     `<label class="cl-ctl" title="Sample only this local hour each day (drag past the end for the whole day)">` +
-    `Hour<input type="range" id="clHour" min="0" max="24" step="1" value="${hv}">` +
+    `Hour<input type="range" class="uslider" id="clHour" min="0" max="24" step="1" value="${hv}">` +
     `<output id="clHourOut">${hourLabel()}</output></label>`;
   wireYearWindow();
   updateYearUI();
