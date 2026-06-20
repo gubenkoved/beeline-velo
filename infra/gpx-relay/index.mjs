@@ -17,9 +17,9 @@
 //   * The caller supplies only a `rideId`; the relay never takes a URL from the
 //     client, so it cannot be turned into an open proxy (no SSRF).
 //   * Requests are gated BEFORE any upstream call / data egress: kill-switch,
-//     Origin allow-list, strict rideId validation, and a best-effort in-memory
-//     per-account + per-IP rate limit. Pair this with a low Lambda *reserved
-//     concurrency* (the real ceiling) and an AWS Budgets alert.
+//     Origin allow-list, strict rideId validation, and a per-account + per-IP rate
+//     limit (durable in DynamoDB when DDB_TABLE is set, else best-effort in-memory).
+//     Pair this with a low Lambda *reserved concurrency* and an AWS Budgets alert.
 //   * Tokens are NEVER logged.
 //
 // Everything tunable is an env var (no redeploy to change a limit). See README.
@@ -57,6 +57,18 @@ const RL_GLOBAL_PER_MONTH = intEnv("RL_GLOBAL_PER_MONTH", 10000);
 // Reject absurdly large upstream bodies defensively (a ride GPX gz is tens of KB).
 const MAX_BYTES = intEnv("MAX_BYTES", 12 * 1024 * 1024);
 
+// Optional DURABLE persistence (AWS DynamoDB). When DDB_TABLE is set, the rate-limit
+// counters, the global monthly cap and the lifetime stats live in a shared DynamoDB
+// table instead of warm-container memory — so they survive cold starts AND are exact
+// across concurrent containers (which is what lets reserved concurrency safely exceed
+// 1). The AWS SDK v3 is provided by the Lambda Node 20 runtime, so the deploy zip stays
+// dependency-free. When DDB_TABLE is empty the relay keeps its in-memory behaviour and
+// needs no AWS permissions. Persistence errors FAIL CLOSED (no upstream egress) so the
+// cost ceiling holds even during a DynamoDB outage; the app then falls back to its
+// route-only GPX.
+const DDB_TABLE = process.env.DDB_TABLE || "";
+const DDB_ENABLED = DDB_TABLE.length > 0;
+
 function intEnv(name, dflt) {
   const n = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(n) && n > 0 ? n : dflt;
@@ -72,6 +84,7 @@ const INSTANCE_ID = randomId();
 let downloadsServed = 0; // successful downloads this container has handed back (lifetime)
 let globalMonth = monthKey(STARTED_AT); // UTC "YYYY-MM" the monthly counter belongs to
 let globalMonthCount = 0; // successful downloads counted in the current month window
+let lastCounterError = null; // name of the last post-download DynamoDB counter write that failed
 
 function randomId() {
   try {
@@ -134,6 +147,108 @@ function rateLimit(id, now) {
   const m = hit(minuteHits, id, 60_000, RL_PER_MIN, now);
   if (!m.ok) return m;
   return hit(dayHits, id, 86_400_000, RL_PER_DAY, now);
+}
+
+// -- durable store (DynamoDB) ------------------------------------------------
+// A single table keyed by `pk` (string), each counter a `n` (number) attribute, with
+// an optional `ttl` (epoch-seconds) so DynamoDB auto-expires the rate-limit windows for
+// free. Atomic `ADD` increments are race-free across containers, so the returned count
+// is authoritative. The SDK is imported ONCE (lazily, only when DDB_TABLE is set; it's
+// provided by the Lambda runtime so the zip stays dependency-free) and the client is
+// reused. Every helper throws on infrastructure failure so callers can FAIL CLOSED.
+let ddbModulePromise = null;
+let ddbClientInstance = null;
+async function ddbSend(commandName, input) {
+  if (!ddbModulePromise) ddbModulePromise = import("@aws-sdk/client-dynamodb");
+  const mod = await ddbModulePromise;
+  if (!ddbClientInstance) ddbClientInstance = new mod.DynamoDBClient({});
+  const Command = mod[commandName];
+  return ddbClientInstance.send(new Command(input));
+}
+
+/** Atomically increment `pk`'s counter by 1 and return the NEW value. When `ttlSec` is
+ *  given it's written as the item's TTL (epoch seconds) so DynamoDB reaps it later. */
+async function ddbAddCount(pk, ttlSec) {
+  const out = await ddbSend("UpdateItemCommand", {
+    TableName: DDB_TABLE,
+    Key: { pk: { S: pk } },
+    UpdateExpression: ttlSec ? "ADD #n :one SET #t = :ttl" : "ADD #n :one",
+    ExpressionAttributeNames: ttlSec ? { "#n": "n", "#t": "ttl" } : { "#n": "n" },
+    ExpressionAttributeValues: ttlSec
+      ? { ":one": { N: "1" }, ":ttl": { N: String(ttlSec) } }
+      : { ":one": { N: "1" } },
+    ReturnValues: "UPDATED_NEW",
+  });
+  return Number.parseInt(out.Attributes?.n?.N ?? "0", 10);
+}
+
+/** Strongly-consistent read of `pk`'s counter (0 when the item doesn't exist). */
+async function ddbGetCount(pk) {
+  const out = await ddbSend("GetItemCommand", {
+    TableName: DDB_TABLE,
+    Key: { pk: { S: pk } },
+    ConsistentRead: true,
+    ProjectionExpression: "#n",
+    ExpressionAttributeNames: { "#n": "n" },
+  });
+  // GetItem returns the row under `Item` (UpdateItem uses `Attributes`).
+  return Number.parseInt(out.Item?.n?.N ?? "0", 10);
+}
+
+/** Fixed-window keys + TTLs for the per-bucket limiter (DynamoDB path). */
+function minuteWindow(now) {
+  const slot = Math.floor(now / 60_000);
+  return { end: (slot + 1) * 60_000, ttl: Math.floor(((slot + 1) * 60_000) / 1000) + 60 };
+}
+function dayWindow(now) {
+  const slot = Math.floor(now / 86_400_000);
+  return {
+    end: (slot + 1) * 86_400_000,
+    ttl: Math.floor(((slot + 1) * 86_400_000) / 1000) + 86_400,
+  };
+}
+
+/** Apply all pre-egress gates (per-bucket minute+day limit, then the global monthly
+ *  cap). Returns `{ ok }` or `{ ok:false, status, error, retryAfter }`. The DynamoDB
+ *  path THROWS on store failure so the handler can fail closed. */
+async function checkGates(bucket, now) {
+  if (!DDB_ENABLED) {
+    const rl = rateLimit(bucket, now);
+    if (!rl.ok)
+      return { ok: false, status: 429, error: "rate limit exceeded", retryAfter: rl.retryAfter };
+    if (rollGlobalMonth(now) >= RL_GLOBAL_PER_MONTH)
+      return {
+        ok: false,
+        status: 429,
+        error: "monthly download limit reached",
+        retryAfter: secondsToNextMonth(now),
+      };
+    return { ok: true };
+  }
+  const min = minuteWindow(now);
+  if ((await ddbAddCount(`min#${bucket}#${Math.floor(now / 60_000)}`, min.ttl)) > RL_PER_MIN)
+    return {
+      ok: false,
+      status: 429,
+      error: "rate limit exceeded",
+      retryAfter: Math.max(1, Math.ceil((min.end - now) / 1000)),
+    };
+  const day = dayWindow(now);
+  if ((await ddbAddCount(`day#${bucket}#${Math.floor(now / 86_400_000)}`, day.ttl)) > RL_PER_DAY)
+    return {
+      ok: false,
+      status: 429,
+      error: "rate limit exceeded",
+      retryAfter: Math.max(1, Math.ceil((day.end - now) / 1000)),
+    };
+  if ((await ddbGetCount(`month#${monthKey(now)}`)) >= RL_GLOBAL_PER_MONTH)
+    return {
+      ok: false,
+      status: 429,
+      error: "monthly download limit reached",
+      retryAfter: secondsToNextMonth(now),
+    };
+  return { ok: true };
 }
 
 // -- helpers ----------------------------------------------------------------
@@ -202,11 +317,39 @@ export const handler = async (event) => {
   // token / uid / ride data — just timings and counts.
   if (method === "GET") {
     const now = Date.now();
+    if (DDB_ENABLED) {
+      // Durable counts from the shared table (best-effort: a diagnostic, not egress,
+      // so a store blip reports `storeError` rather than failing).
+      let downloads = null;
+      let monthlyDownloads = null;
+      let storeError = false;
+      try {
+        monthlyDownloads = await ddbGetCount(`month#${monthKey(now)}`);
+        downloads = await ddbGetCount("stats");
+      } catch {
+        storeError = true;
+      }
+      return json(200, origin, {
+        startedAt: new Date(STARTED_AT).toISOString(),
+        uptimeSeconds: Math.floor((now - STARTED_AT) / 1000),
+        instanceId: INSTANCE_ID,
+        persistence: "dynamodb",
+        downloads,
+        containerDownloads: downloadsServed,
+        month: monthKey(now),
+        monthlyDownloads,
+        monthlyLimit: RL_GLOBAL_PER_MONTH,
+        storeError,
+        lastCounterError,
+        enabled: ENABLED,
+      });
+    }
     rollGlobalMonth(now);
     return json(200, origin, {
       startedAt: new Date(STARTED_AT).toISOString(),
       uptimeSeconds: Math.floor((now - STARTED_AT) / 1000),
       instanceId: INSTANCE_ID,
+      persistence: "memory",
       downloads: downloadsServed,
       month: globalMonth,
       monthlyDownloads: globalMonthCount,
@@ -250,22 +393,26 @@ export const handler = async (event) => {
     return json(400, origin, { error: "invalid rideId" });
   }
 
-  // Rate limit (per account, falling back to IP) BEFORE any upstream egress.
+  // Rate limit (per account, falling back to IP) + the single GLOBAL monthly ceiling,
+  // ALL gated BEFORE any upstream egress. Durable in DynamoDB when DDB_TABLE is set
+  // (exact across containers), else best-effort in warm-container memory. The monthly
+  // cap counts only successful downloads, so a request blocked here never consumed
+  // quota. A persistence failure FAILS CLOSED (503, no egress) so the cost ceiling
+  // holds even during a DynamoDB outage — the app then falls back to route-only GPX.
   const bucket = uidFromToken(idToken) || `ip:${ip}`;
-  const rl = rateLimit(bucket, Date.now());
-  if (!rl.ok) {
-    return json(429, origin, { error: "rate limit exceeded" }, {
-      "Retry-After": String(rl.retryAfter),
+  const now = Date.now();
+  let gate;
+  try {
+    gate = await checkGates(bucket, now);
+  } catch (err) {
+    console.warn(`rate-limit store unavailable (failing closed): ${err?.name || err}`);
+    return json(503, origin, { error: "rate-limit store unavailable" }, {
+      "Retry-After": "30",
     });
   }
-
-  // Single GLOBAL monthly ceiling (no per-account/IP key) — a coarse cost stop-loss,
-  // also gated BEFORE any upstream egress. Counts only successful downloads, so a
-  // request blocked here never consumed quota.
-  const now = Date.now();
-  if (rollGlobalMonth(now) >= RL_GLOBAL_PER_MONTH) {
-    return json(429, origin, { error: "monthly download limit reached" }, {
-      "Retry-After": String(secondsToNextMonth(now)),
+  if (!gate.ok) {
+    return json(gate.status, origin, { error: gate.error }, {
+      "Retry-After": String(gate.retryAfter),
     });
   }
 
@@ -323,11 +470,25 @@ export const handler = async (event) => {
     return json(502, origin, { error: "exported GPX exceeds size limit" });
   }
 
-  // Count the successful download against both the lifetime stat and the global
-  // monthly window (re-rolling in case the month ticked over during the hops).
-  downloadsServed++;
-  rollGlobalMonth(Date.now());
-  globalMonthCount++;
+  // Count the successful download against the lifetime stat and the global monthly
+  // window. Durable in DynamoDB when enabled (best-effort here: the bytes are already
+  // fetched, so a post-egress counting blip is logged, not surfaced — the NEXT request's
+  // pre-egress gate would fail closed if the store were truly down). In-memory otherwise.
+  if (DDB_ENABLED) {
+    try {
+      await ddbAddCount(`month#${monthKey(Date.now())}`);
+      await ddbAddCount("stats");
+      lastCounterError = null;
+    } catch (err) {
+      lastCounterError = err?.name || String(err);
+      console.warn(`download counter update failed: ${err?.name || err}`);
+    }
+    downloadsServed++;
+  } else {
+    downloadsServed++;
+    rollGlobalMonth(Date.now());
+    globalMonthCount++;
+  }
 
   // Return the gzipped bytes verbatim (base64); the browser gunzips them. Returning
   // the gz (not the decompressed GPX) keeps egress ~10x smaller.

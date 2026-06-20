@@ -5,10 +5,64 @@
 // (Vitest's `resetModules` re-evaluates it). The relay is plain JS outside the app
 // build; a `@ts-expect-error` keeps `tsc` from type-checking it as part of `src`.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // biome-ignore lint/suspicious/noExplicitAny: the relay is plain JS; events/results are untyped here.
 type Handler = (event: any) => Promise<any>;
+
+// In-memory fake for the DynamoDB persistence path. `store` deliberately PERSISTS across
+// `loadHandler` (fresh module) calls so a test can prove a counter survives a simulated
+// cold start; `reset()` clears it between tests. `setFail` makes every send() throw, to
+// exercise the relay's fail-closed behaviour.
+const ddbFake = vi.hoisted(() => {
+  let failing = false;
+  const store = new Map<string, number>();
+  return {
+    store,
+    reset() {
+      store.clear();
+      failing = false;
+    },
+    setFail(v: boolean) {
+      failing = v;
+    },
+    get failing() {
+      return failing;
+    },
+  };
+});
+
+vi.mock("@aws-sdk/client-dynamodb", () => {
+  // biome-ignore lint/suspicious/noExplicitAny: minimal stand-ins for the SDK command/client.
+  class UpdateItemCommand {
+    __kind = "update";
+    constructor(public input: any) {}
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: minimal stand-ins for the SDK command/client.
+  class GetItemCommand {
+    __kind = "get";
+    constructor(public input: any) {}
+  }
+  class DynamoDBClient {
+    // biome-ignore lint/suspicious/noExplicitAny: unused client config in the fake.
+    constructor(_config: any) {}
+    // biome-ignore lint/suspicious/noExplicitAny: command/result are untyped in the fake.
+    async send(cmd: any) {
+      if (ddbFake.failing) throw new Error("ddb unavailable");
+      const pk = cmd.input.Key.pk.S as string;
+      if (cmd.__kind === "update") {
+        // UpdateItem with ADD ... ReturnValues=UPDATED_NEW echoes the new value in `Attributes`.
+        const next = (ddbFake.store.get(pk) ?? 0) + 1;
+        ddbFake.store.set(pk, next);
+        return { Attributes: { n: { N: String(next) } } };
+      }
+      // GetItem returns the row under `Item` (absent => no `Item`).
+      const v = ddbFake.store.get(pk);
+      return v === undefined ? {} : { Item: { n: { N: String(v) } } };
+    }
+  }
+  return { DynamoDBClient, UpdateItemCommand, GetItemCommand };
+});
 
 const RELAY_ENV_KEYS = [
   "ENABLED",
@@ -17,6 +71,7 @@ const RELAY_ENV_KEYS = [
   "RL_PER_DAY",
   "RL_GLOBAL_PER_MONTH",
   "MAX_BYTES",
+  "DDB_TABLE",
 ];
 
 async function loadHandler(env: Record<string, string> = {}): Promise<Handler> {
@@ -246,5 +301,79 @@ describe("gpx-relay Lambda handler", () => {
     // Stats reflect the cap.
     const stats = await handler({ requestContext: { http: { method: "GET" } }, headers: {} });
     expect(JSON.parse(stats.body).monthlyDownloads).toBe(1);
+  });
+});
+
+describe("gpx-relay Lambda handler (DynamoDB persistence)", () => {
+  const DDB = { DDB_TABLE: "relay-state" };
+  // Pin time so the minute/day/month window keys are stable within (and across) loads.
+  const FIXED = Date.UTC(2026, 5, 15, 12, 0, 0);
+
+  beforeEach(() => {
+    ddbFake.reset();
+    vi.spyOn(Date, "now").mockReturnValue(FIXED);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("durable rate limit survives a container restart (fresh module load)", async () => {
+    // RL_PER_MIN=2: two ok on the first container...
+    const h1 = await loadHandler({ ...DDB, RL_PER_MIN: "2", RL_PER_DAY: "1000" });
+    mockHappyFetch();
+    expect((await h1(postEvent({ rideId: "-Ride1" }))).statusCode).toBe(200);
+    expect((await h1(postEvent({ rideId: "-Ride1" }))).statusCode).toBe(200);
+    // ...then a NEW container (its in-memory maps are empty) still sees the shared
+    // DynamoDB count and blocks the 3rd request. This is the whole point of persistence.
+    const h2 = await loadHandler({ ...DDB, RL_PER_MIN: "2", RL_PER_DAY: "1000" });
+    const limited = await h2(postEvent({ rideId: "-Ride1" }));
+    expect(limited.statusCode).toBe(429);
+    expect(Number(limited.headers["Retry-After"])).toBeGreaterThan(0);
+  });
+
+  it("durable monthly cap blocks past the limit before any egress", async () => {
+    const h = await loadHandler({ ...DDB, RL_GLOBAL_PER_MONTH: "1", RL_PER_MIN: "1000" });
+    const fetchFn = mockHappyFetch();
+    expect((await h(postEvent({ rideId: "-Ride1" }))).statusCode).toBe(200);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    // Even a different account is blocked globally, before any upstream hop.
+    const blocked = await h(postEvent({ rideId: "-Ride1" }, { uid: "u2" }));
+    expect(blocked.statusCode).toBe(429);
+    expect(JSON.parse(blocked.body).error).toMatch(/monthly download limit/);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed (503) when the store is unavailable — no upstream egress", async () => {
+    const h = await loadHandler({ ...DDB });
+    const fetchFn = mockHappyFetch();
+    ddbFake.setFail(true);
+    const res = await h(postEvent({ rideId: "-Ride1" }));
+    expect(res.statusCode).toBe(503);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(Number(res.headers["Retry-After"])).toBeGreaterThan(0);
+  });
+
+  it("GET reports durable counts from the store (persistence: dynamodb)", async () => {
+    const h = await loadHandler({ ...DDB });
+    mockHappyFetch();
+    expect((await h(postEvent({ rideId: "-Ride1" }))).statusCode).toBe(200);
+    const res = await h({ requestContext: { http: { method: "GET" } }, headers: {} });
+    const body = JSON.parse(res.body);
+    expect(body.persistence).toBe("dynamodb");
+    expect(body.downloads).toBe(1); // durable lifetime, from the table
+    expect(body.monthlyDownloads).toBe(1);
+    expect(body.containerDownloads).toBe(1);
+    expect(body.storeError).toBe(false);
+  });
+
+  it("GET flags storeError when the store read fails (still 200, diagnostic)", async () => {
+    const h = await loadHandler({ ...DDB });
+    ddbFake.setFail(true);
+    const res = await h({ requestContext: { http: { method: "GET" } }, headers: {} });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.persistence).toBe("dynamodb");
+    expect(body.storeError).toBe(true);
+    expect(body.downloads).toBeNull();
   });
 });

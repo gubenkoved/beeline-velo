@@ -17,6 +17,23 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## gpx-relay: optional free durable persistence (DynamoDB) for stats + rate limits
+- **What:** The relay can now persist its rate-limit counters, the global monthly cap and
+  the lifetime download stats in a shared **DynamoDB** table (new `DDB_TABLE` env var;
+  unset = the existing in-memory behaviour, so nothing changes by default). Counters use
+  atomic `ADD`, ephemeral rate-limit windows auto-expire via TTL, and any store error
+  **fails closed** (503, no upstream egress) so the cost ceiling holds during an outage.
+  `deploy.sh` provisions everything idempotently (table at provisioned 5/5, TTL,
+  least-privilege `GetItem`/`UpdateItem` IAM policy, `DDB_TABLE` wiring) and now defaults
+  reserved concurrency to **2**. GET liveness reports durable counts + a `persistence`
+  field. Added `@aws-sdk/client-dynamodb` as a **dev-only** dependency for test mocking
+  (the SDK is runtime-provided in Lambda, so the deploy zip stays dependency-free). Relay
+  package bumped 1.1.0 → 1.2.0.
+- **Why:** The in-memory counters reset on every cold start and were only exact at
+  reserved concurrency = 1. DynamoDB's *always-free* tier (25 GB + 25 WCU/RCU, no expiry)
+  makes the stats and limits durable across cold starts AND exact across containers at
+  $0 — which is what lets concurrency safely rise to 2 for faster parallel backfills.
+
 ## refactor: collapse the Wind/Speed controls into one grouped Settings accordion
 - **What:** Replaced the three accordion cards (Settings / Crosswind / Segments) with a
   SINGLE "Settings" accordion (`#accSettings`, open by default) whose body splits the

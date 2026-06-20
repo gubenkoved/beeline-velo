@@ -20,8 +20,8 @@ FUNCTION_NAME_DEFAULT="beeline-gpx-relay"
 REGION_DEFAULT="$(aws configure get region 2>/dev/null || echo "us-east-1")"
 MEMORY_DEFAULT="256"
 TIMEOUT_DEFAULT="15"
-CONCURRENCY_DEFAULT="1"
 ARCH_DEFAULT="arm64"
+DDB_TABLE_DEFAULT="beeline-gpx-relay-state"
 
 bold() { printf '\033[1m%s\033[0m\n' "$1"; }
 info() { printf '  %s\n' "$1"; }
@@ -93,6 +93,27 @@ ALLOWED_ORIGINS="${ALLOWED_ORIGINS%,}"
 echo
 ask MEMORY      "Memory (MB)"                       "$MEMORY_DEFAULT"
 ask TIMEOUT     "Timeout (seconds)"                 "$TIMEOUT_DEFAULT"
+
+# Durable persistence (optional) keeps the rate-limit counters + download stats in a
+# DynamoDB table so they survive cold starts AND stay exact across concurrent
+# containers (which makes reserved concurrency > 1 safe). It uses the AWS always-free
+# tier (provisioned 5/5). Declined -> the relay keeps best-effort in-memory counters,
+# which are only exact at reserved concurrency = 1.
+echo
+info "Durable persistence stores rate-limit counters + stats in DynamoDB (always-free"
+info "5/5) so they survive cold starts and stay exact across containers. Without it the"
+info "relay uses in-memory counters (exact only at reserved concurrency = 1)."
+ask PERSIST "Enable durable persistence (DynamoDB)? (Y/n)" "Y"
+if [[ "$PERSIST" =~ ^[Nn]$ ]]; then
+  PERSIST=0
+  DDB_TABLE=""
+  CONCURRENCY_DEFAULT="1"
+else
+  PERSIST=1
+  ask DDB_TABLE "DynamoDB table name" "$DDB_TABLE_DEFAULT"
+  CONCURRENCY_DEFAULT="2"
+fi
+echo
 ask CONCURRENCY "Reserved concurrency (cost ceiling)" "$CONCURRENCY_DEFAULT"
 ask ARCH        "Architecture (arm64/x86_64)"       "$ARCH_DEFAULT"
 
@@ -110,6 +131,11 @@ info "allowed origins $ALLOWED_ORIGINS"
 info "memory/timeout  ${MEMORY}MB / ${TIMEOUT}s"
 info "concurrency     $CONCURRENCY"
 info "architecture    $ARCH"
+if [[ "$PERSIST" == "1" ]]; then
+  info "persistence     DynamoDB table '$DDB_TABLE' (always-free 5/5)"
+else
+  info "persistence     in-memory (no DynamoDB)"
+fi
 echo
 ask CONFIRM "Proceed? (y/N)" "N"
 [[ "$CONFIRM" =~ ^[Yy]$ ]] || { info "Aborted."; exit 0; }
@@ -135,6 +161,58 @@ if [[ -z "$ROLE_ARN" ]]; then
   ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
 fi
 
+# -- durable persistence: DynamoDB table + TTL + runtime IAM (if enabled) -----
+# All idempotent / safe to re-run: the table is created only if absent, TTL is enabled
+# only when not already on, and the inline role policy is overwritten in place.
+
+if [[ "$PERSIST" == "1" ]]; then
+  bold "Provisioning DynamoDB table ${DDB_TABLE}..."
+  if aws dynamodb describe-table --table-name "$DDB_TABLE" >/dev/null 2>&1; then
+    info "Table already exists -- reusing"
+  else
+    # Provisioned 5/5 sits inside the account-wide always-free 25/25 pool; this
+    # workload uses a tiny fraction of it, so it stays $0 with no throttle risk.
+    aws dynamodb create-table \
+      --table-name "$DDB_TABLE" \
+      --attribute-definitions AttributeName=pk,AttributeType=S \
+      --key-schema AttributeName=pk,KeyType=HASH \
+      --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 >/dev/null
+    info "Waiting for table to become active..."
+    aws dynamodb wait table-exists --table-name "$DDB_TABLE"
+  fi
+
+  # Enable TTL on `ttl` so DynamoDB reaps expired rate-limit windows for free. Guard
+  # on status: enabling when already enabled errors out.
+  TTL_STATUS="$(aws dynamodb describe-time-to-live --table-name "$DDB_TABLE" \
+    --query 'TimeToLiveDescription.TimeToLiveStatus' --output text 2>/dev/null || echo UNKNOWN)"
+  if [[ "$TTL_STATUS" == "ENABLED" || "$TTL_STATUS" == "ENABLING" ]]; then
+    info "TTL already enabled"
+  else
+    aws dynamodb update-time-to-live \
+      --table-name "$DDB_TABLE" \
+      --time-to-live-specification "Enabled=true,AttributeName=ttl" >/dev/null
+    info "Enabled TTL on attribute 'ttl'"
+  fi
+
+  # Least-privilege runtime access: the role only needs GetItem + UpdateItem on this
+  # one table. Derive the role NAME from the (possibly user-supplied) role ARN.
+  DDB_ARN="arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${DDB_TABLE}"
+  POLICY_DOC="{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:UpdateItem\"],\"Resource\":\"${DDB_ARN}\"}]}"
+  POLICY_ROLE="${ROLE_ARN##*/}"
+  bold "Attaching DynamoDB access policy to role ${POLICY_ROLE}..."
+  if aws iam put-role-policy \
+      --role-name "$POLICY_ROLE" \
+      --policy-name gpx-relay-ddb \
+      --policy-document "$POLICY_DOC" >/dev/null 2>&1; then
+    info "done"
+  else
+    err "Could not attach the DynamoDB policy to role '$POLICY_ROLE' automatically."
+    err "Add this inline policy to the function's execution role manually:"
+    err "$POLICY_DOC"
+    info "Continuing -- the relay fails closed (503) until the role can read/write the table."
+  fi
+fi
+
 # -- package -----------------------------------------------------------------
 
 bold "Packaging function.zip..."
@@ -149,7 +227,11 @@ info "done"
 # CORS is intentionally NOT set on the Function URL: the relay code emits its own
 # CORS headers (reflecting the matching allowed origin). Setting it in both places
 # duplicates `Access-Control-Allow-Origin`, which browsers reject. The relay owns it.
-ENV_JSON="{\"Variables\":{\"ALLOWED_ORIGINS\":\"${ALLOWED_ORIGINS}\"}}"
+if [[ "$PERSIST" == "1" ]]; then
+  ENV_JSON="{\"Variables\":{\"ALLOWED_ORIGINS\":\"${ALLOWED_ORIGINS}\",\"DDB_TABLE\":\"${DDB_TABLE}\"}}"
+else
+  ENV_JSON="{\"Variables\":{\"ALLOWED_ORIGINS\":\"${ALLOWED_ORIGINS}\"}}"
+fi
 
 # -- create or update --------------------------------------------------------
 
@@ -249,6 +331,11 @@ info "   ...then re-run the Deploy to GitHub Pages workflow."
 info "2. Add a low AWS Budgets alert (e.g. \$1/month) as a cost tripwire."
 info "3. Quick check (should print 204):"
 info "     curl -i -X OPTIONS \"$FUNCTION_URL\" -H \"Origin: ${ALLOWED_ORIGINS%%,*}\""
+if [[ "$PERSIST" == "1" ]]; then
+  echo
+  info "Persistence is ON (DynamoDB '$DDB_TABLE'). A plain GET reports durable counts:"
+  info "     curl -s \"$FUNCTION_URL\" | jq '{persistence,downloads,monthlyDownloads}'"
+fi
 echo
 info "To disable later without deleting: set ENABLED=0 in the function's env vars"
 info "(the app then falls back to route-only GPX)."
