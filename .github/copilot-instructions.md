@@ -163,6 +163,12 @@ Hard rules:
 - `npm run dev` — Vite dev server (boots straight into the library; a first-launch welcome explains sources, and the Beeline source has a demo).
 - `npm run build` — `tsc --noEmit` type-check **then** `vite build`. Always type-check before considering a change done.
 - `npm test` / `npm run test:watch` — Vitest.
+- **Never hand-edit `package-lock.json`.** It's a generated artifact (name, version, dependency
+  tree and integrity hashes must stay mutually consistent). Whenever it needs to change — after a
+  `package.json` `name`/`version` bump or any dependency change — regenerate it with npm:
+  `npm install` (or `npm install --package-lock-only` to refresh the lockfile without touching
+  `node_modules`), then review the diff. A manual edit risks a partial/inconsistent lockfile that
+  `npm ci` will reject.
 
 ## Changelog
 

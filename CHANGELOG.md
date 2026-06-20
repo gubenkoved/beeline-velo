@@ -17,6 +17,16 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## rename npm package to gpx-toolkit
+- **What:** renamed the npm package `name` from `beeline-uploader-web` to `gpx-toolkit`
+  in package.json (and the matching entries in package-lock.json).
+- **Why:** the product was long ago reframed as "GPX Toolkit" everywhere user-facing
+  (title, manifest, README, UI) but the build-time package id was left at its historical
+  `beeline-uploader-web` value; since the package is private/unpublished it had no
+  functional impact, so it had simply slipped through. This is the package `name` only —
+  not one of the `beeline-*` module names or storage keys we deliberately keep stable as
+  persistence ids — so nothing in `src/` or persistence depends on it.
+
 ## suggest tagging after a GPX import
 - **What:** after a successful GPX import the app now offers (via the shared consent
   dialog) to tag the just-imported rides, opening the existing multi-ride tag modal
