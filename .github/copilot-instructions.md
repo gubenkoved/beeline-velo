@@ -223,7 +223,7 @@ none. The table is grouped by concern; keep new modules in the group they belong
 | [index.html](../index.html) | App shell, markup, styles, Sources dialog (Beeline + GPX) | — |
 | [src/main.ts](../src/main.ts) | UI entry: render + wiring, Sources dialog, re-auth gating, GPX import, Location-History import/drop, all views (Explore/Map/Stats/Wind-Speed/Wind-rose/Timeline) | `activate()`, `getRealController()`, `openApp()`, `goBeeline()`, `goGpx()`, `pullFromBeeline()`, `importGpxFiles()`, `importLocationHistory()`, `dropLocationHistory()`, `mountTimelineView()`, `mountClimateView()`, `withBeelineAccess()`, `showSources()` |
 | [src/ridemap.ts](../src/ridemap.ts) | Full-screen single-ride route map: route colouring (height/speed/wind), elevation/speed profile, hover readout + wind dial. Depends on the app only via an injected `RideMapDeps` seam | `initRideMap()`, `openRideMap()`, `closeRideMap()`, `refreshOpenRideMapWind()` |
-| [src/controller.ts](../src/controller.ts) | Orchestration + app state; source registry; per-ride dispatch; full-track cache; point wind climatology | `Controller`, `registerSource()`, `state()`, `runTask()`, `importGpx()`, `getFullTrack()`, `getPointWind()` |
+| [src/controller.ts](../src/controller.ts) | Orchestration + app state; source registry; per-ride dispatch; full-track cache; point wind climatology | `Controller`, `registerSource()`, `state()`, `runTask()`, `importGpx()`, `onImported()`, `getFullTrack()`, `getPointWind()` |
 | [src/source.ts](../src/source.ts) | `RideSource` seam + capabilities + shared GPX/catalog types | `RideSource`, `SourceCapabilities`, `SourceKind`, `GpxFile`, `ImportResult`, `gpxFilename()` |
 
 *Sources: Beeline account · local GPX*

@@ -150,6 +150,7 @@ let controller!: Controller;
 let isDemo = false;
 let unsubscribe: (() => void) | null = null;
 let unsubscribeGpx: (() => void) | null = null;
+let unsubscribeImported: (() => void) | null = null;
 
 const FILTERS_KEY = "beeline_uploader.filters";
 // Wind/Speed tab preferences persist across reloads (unlike the Map/Stats date
@@ -233,10 +234,12 @@ const rememberRelayConsent = (): void => {
 function activate(next: Controller, demo: boolean): void {
   if (unsubscribe) unsubscribe();
   if (unsubscribeGpx) unsubscribeGpx();
+  if (unsubscribeImported) unsubscribeImported();
   controller = next;
   isDemo = demo;
   unsubscribe = controller.onChange(applyState);
   unsubscribeGpx = controller.onGpx(saveGpxFile);
+  unsubscribeImported = controller.onImported(suggestTagsForImport);
   applyState();
 }
 
@@ -298,6 +301,8 @@ function showSettings(): void {
   if (slider) setSliderFill(slider);
   const out = document.getElementById("setMovingThreshOut") as HTMLOutputElement | null;
   if (out) out.value = `${thresh} km/h`;
+  const suggestTags = document.getElementById("setSuggestTags") as HTMLInputElement | null;
+  if (suggestTags) suggestTags.checked = STATE.settings.suggestTagsAfterImport;
   modal.classList.remove("hidden");
 }
 
@@ -654,6 +659,31 @@ function importGpxFiles(files: File[]): void {
   });
 }
 
+/**
+ * After a GPX import lands, offer to tag the just-imported rides (opening the
+ * existing tag modal pre-targeted at them). Gated on the persisted
+ * `suggestTagsAfterImport` setting; the dialog's "Don't ask again" simply flips that
+ * same setting off (kept in lockstep with the Settings toggle). Fired from the
+ * controller's `onImported` signal with the new rides' uids.
+ */
+function suggestTagsForImport(uids: string[]): void {
+  if (!uids.length || !STATE.settings.suggestTagsAfterImport) return;
+  const n = uids.length;
+  void consentDialog({
+    title: `Tag your imported ride${n === 1 ? "" : "s"}?`,
+    body:
+      `Imported ${n} ride${n === 1 ? "" : "s"}. Want to add tags now so they're easy to ` +
+      "find and filter later? You can always tag rides afterwards from the list — and " +
+      "turn this prompt off in Settings.",
+    confirmLabel: `Tag ${n === 1 ? "ride" : "rides"}`,
+    checkLabel: "Don't ask again after importing",
+    checked: false,
+  }).then(({ ok, dontAsk }) => {
+    if (dontAsk) run(() => controller.setSuggestTagsAfterImport(false));
+    if (ok) openTagModal(uids);
+  });
+}
+
 /** Open the hidden GPX file picker (multi-select .gpx / .zip). */
 function openGpxFilePicker(): void {
   const input = document.getElementById("gpxFile") as HTMLInputElement | null;
@@ -772,6 +802,7 @@ let STATE: AppState = {
     heatRadius: 12,
     beelineUploadConcurrency: 4,
     movingThresholdKmh: 1,
+    suggestTagsAfterImport: true,
   },
   connected: false,
   device: "",
@@ -3900,6 +3931,10 @@ document.addEventListener("input", (e) => {
 // whole-blob save + re-render for the whole drag.
 document.addEventListener("change", (e) => {
   const el = e.target as HTMLInputElement;
+  if (el.id === "setSuggestTags") {
+    run(() => controller.setSuggestTagsAfterImport(el.checked));
+    return;
+  }
   if (el.id !== "setMovingThresh") return;
   const v = Number(el.value);
   const thresh = Number.isFinite(v) ? v : 1;

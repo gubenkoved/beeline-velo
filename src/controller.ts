@@ -204,6 +204,9 @@ export type Transport = SourceFactory;
 /** A pulled GPX file handed to the UI for download. */
 export type GpxListener = (file: GpxFile) => void;
 
+/** The uids of rides just brought in by a successful GPX import. */
+export type ImportedListener = (uids: string[]) => void;
+
 export class Controller {
   readonly store: Store;
   readonly jobs: JobQueue;
@@ -221,6 +224,7 @@ export class Controller {
   private deviceLabel = "";
   private readonly listeners = new Set<() => void>();
   private readonly gpxListeners = new Set<GpxListener>();
+  private readonly importedListeners = new Set<ImportedListener>();
   /**
    * Full recorded tracks (real per-point time + elevation), fetched on demand and
    * kept in memory for THIS SESSION ONLY — never persisted. They are ~500 KB each,
@@ -307,6 +311,16 @@ export class Controller {
 
   private emitGpx(file: GpxFile): void {
     for (const fn of this.gpxListeners) fn(file);
+  }
+
+  /** Subscribe to the uids of rides just imported from GPX (for suggesting tags). */
+  onImported(fn: ImportedListener): () => void {
+    this.importedListeners.add(fn);
+    return () => this.importedListeners.delete(fn);
+  }
+
+  private emitImported(uids: string[]): void {
+    for (const fn of this.importedListeners) fn(uids);
   }
 
   /**
@@ -1159,6 +1173,7 @@ export class Controller {
     const files = (task.payload.files as File[]) ?? [];
     task.progress = { done: 0, total: files.length };
     let added = 0;
+    const importedUids: string[] = [];
     const result = await source.importFiles(
       files,
       (card) => {
@@ -1172,6 +1187,7 @@ export class Controller {
         });
         this.store.save();
         this.notify();
+        importedUids.push(uid);
         added++;
         if (task.progress) task.progress.done++;
       },
@@ -1180,6 +1196,9 @@ export class Controller {
     const skipped = result.skipped ?? [];
     const suffix = skipped.length ? `, ${skipped.length} skipped` : "";
     report(`imported ${added} ride${added === 1 ? "" : "s"}${suffix}`);
+    // Tell the UI which rides came in so it can offer to tag them — emit BEFORE the
+    // skipped-files throw so a partial import still surfaces the suggestion.
+    if (importedUids.length) this.emitImported(importedUids);
     if (skipped.length) {
       const header = `${skipped.length} file${skipped.length === 1 ? "" : "s"} skipped:`;
       throw new Error([header, ...skipped.map((s) => `  • ${s}`)].join("\n"));
@@ -1691,6 +1710,13 @@ export class Controller {
   /** Update the moving/stopped speed threshold (km/h, persisted). Returns the clamped value. */
   setMovingThreshold(n: number): number {
     const v = this.store.setMovingThreshold(n);
+    this.notify();
+    return v;
+  }
+
+  /** Toggle whether a successful GPX import offers to tag the new rides (persisted). */
+  setSuggestTagsAfterImport(on: boolean): boolean {
+    const v = this.store.setSuggestTagsAfterImport(on);
     this.notify();
     return v;
   }

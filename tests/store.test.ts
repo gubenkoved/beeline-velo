@@ -221,6 +221,14 @@ describe("Store", () => {
     expect((await Store.load(backend)).settings.movingThresholdKmh).toBe(2.5);
   });
 
+  it("defaults on and round-trips the suggest-tags-after-import toggle", async () => {
+    const s = await Store.load(backend);
+    expect(s.settings.suggestTagsAfterImport).toBe(true);
+    expect(s.setSuggestTagsAfterImport(false)).toBe(false);
+    await s.flush();
+    expect((await Store.load(backend)).settings.suggestTagsAfterImport).toBe(false);
+  });
+
   it("persists a per-ride rough track", async () => {
     const s = await Store.load(backend);
     s.upsert("k", { track: "abc123" });

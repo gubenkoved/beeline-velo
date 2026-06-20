@@ -144,6 +144,8 @@ const SETTINGS_SPEC = {
     default: DEFAULT_MOVING_THRESHOLD_KMH,
     clamp: (v: unknown) => clampMovingThreshold(Number(v)),
   },
+  /** Offer to tag the just-imported rides after a successful GPX import. */
+  suggestTagsAfterImport: { default: true, clamp: (v: unknown) => v === true },
 } satisfies Record<string, SettingSpec<unknown>>;
 
 /** The user-settings shape, derived from `SETTINGS_SPEC` (each field's type is its
@@ -632,6 +634,13 @@ export class Store {
     this.settings.movingThresholdKmh = clampMovingThreshold(n);
     this.save();
     return this.settings.movingThresholdKmh;
+  }
+
+  /** Toggle the "offer to tag after GPX import" suggestion and persist. Returns the new value. */
+  setSuggestTagsAfterImport(on: boolean): boolean {
+    this.settings.suggestTagsAfterImport = on === true;
+    this.save();
+    return this.settings.suggestTagsAfterImport;
   }
 
   /**

@@ -174,6 +174,32 @@ describe("Controller + GpxRideSource (multi-source coexistence)", () => {
     expect(rides[0].key).toBe(rideUid("gpx", rides[0].date_key));
   });
 
+  it("emits onImported with the new ride uids after a successful import", async () => {
+    const { c } = makeController();
+    const seen: string[][] = [];
+    c.onImported((uids) => seen.push(uids));
+    c.importGpx([
+      gpxFile(gpx({ name: "Ride one" }), "one.gpx"),
+      gpxFile(gpx({ name: "Ride two" }), "two.gpx", Date.parse("2026-07-01T09:00:00Z")),
+    ]);
+    await vi.waitFor(() => expect(c.state().jobs.busy).toBe(false), { timeout: 5000 });
+
+    expect(seen).toHaveLength(1);
+    const uids = seen[0];
+    expect(uids).toHaveLength(2);
+    // The emitted uids match the rides now in the store.
+    const stored = new Set(c.state().rides.map((r) => r.key));
+    for (const uid of uids) expect(stored.has(uid)).toBe(true);
+  });
+
+  it("suggestTagsAfterImport defaults on and toggles + persists", () => {
+    const { c, store } = makeController();
+    expect(c.state().settings.suggestTagsAfterImport).toBe(true);
+    expect(c.setSuggestTagsAfterImport(false)).toBe(false);
+    expect(c.state().settings.suggestTagsAfterImport).toBe(false);
+    expect(store.settings.suggestTagsAfterImport).toBe(false);
+  });
+
   it("upload over a GPX-only selection uploads nothing and reports it as skipped", async () => {
     const { c } = makeController();
     c.importGpx([gpxFile(gpx({ name: "Imported ride" }), "ride.gpx")]);

@@ -17,6 +17,19 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## suggest tagging after a GPX import
+- **What:** after a successful GPX import the app now offers (via the shared consent
+  dialog) to tag the just-imported rides, opening the existing multi-ride tag modal
+  pre-targeted at them. The controller emits the new rides' uids on an `onImported`
+  signal (mirroring `onGpx`); a new persisted `suggestTagsAfterImport` setting (default
+  on) gates the prompt, exposed as an "Ask to assign tags after GPX upload" checkbox in
+  Settings — and the dialog's "Don't ask again" flips that same setting, so the two stay
+  one source of truth.
+- **Why:** tags are the main way to find and filter rides, but freshly imported rides
+  arrive untagged and the tagging UI is easy to overlook; a gentle, opt-out prompt at the
+  moment of import nudges the habit without nagging (it's one quiet dialog, dismissable
+  and switchable off).
+
 ## tunable wind-vs-speed segmentation (look-ahead bearing + knobs)
 - **What:** the Wind/Speed chopper now derives each hop's heading over a configurable
   **look-ahead distance** (default 15 m) instead of the immediately-next point, and
