@@ -17,6 +17,32 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## gpx-relay deploy: normalize origins to scheme://host, default concurrency 1
+- **What:** `deploy.sh` now reduces every `ALLOWED_ORIGINS` entry to a bare origin
+  (`scheme://host[:port]`), stripping any path/query/fragment as well as the existing
+  spaces + trailing slash. Reserved-concurrency default dropped 2 → 1 (one container
+  at a time also makes the in-memory `RL_GLOBAL_PER_MONTH` cap an exact ceiling).
+- **Why:** A redeploy that pasted the page URL `https://gubenkoved.github.io/gpx-toolkit`
+  (a path, not an origin) into `ALLOWED_ORIGINS` made the relay's allow-list never
+  match the browser's path-less `Origin`, so it 403'd every preflight — a live CORS
+  outage. The browser only ever sends `scheme://host[:port]`, so normalizing to that
+  removes the whole class of "pasted the wrong URL" CORS misconfigurations.
+
+## gpx-relay: GET runtime stats + a global monthly download cap
+- **What:** The relay Lambda now answers a plain **GET** to its Function URL with
+  basic in-memory liveness JSON (`startedAt`, `uptimeSeconds`, `instanceId`,
+  lifetime `downloads`, and the global monthly counter/limit) — no auth, and it
+  answers even when `ENABLED=0` since it's a diagnostic. Added a single **global**
+  successful-download ceiling per calendar month (UTC), `RL_GLOBAL_PER_MONTH`
+  (default 10000), with no per-account/IP bucketing, gated before any upstream
+  egress and counted only on success. CORS now advertises `GET`. Relay package
+  bumped 1.0.0 → 1.1.0.
+- **Why:** The operator wanted to pin down restart behaviour / how long a warm
+  container lives — a changed `instanceId` or reset counters reveal a cold start —
+  and a coarse, account-agnostic monthly stop-loss as a cheap cost ceiling on top of
+  the existing per-account/IP limits. Both are intentionally in-container memory
+  (they don't survive a cold start), which is exactly the signal being observed.
+
 ## Render Wind rose and Timeline in the wide layout
 - **What:** Wind rose and Timeline now break out of main's 940px column to the same
   ~1200px width as Map, Stats and Wind/Speed at viewports ≥1000px. The breakout is

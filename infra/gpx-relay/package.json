@@ -1,6 +1,6 @@
 {
   "name": "beeline-gpx-relay",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Stateless AWS Lambda that relays Beeline full-track GPX downloads past the browser CORS block.",

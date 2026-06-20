@@ -10,7 +10,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // biome-ignore lint/suspicious/noExplicitAny: the relay is plain JS; events/results are untyped here.
 type Handler = (event: any) => Promise<any>;
 
-const RELAY_ENV_KEYS = ["ENABLED", "ALLOWED_ORIGINS", "RL_PER_MIN", "RL_PER_DAY", "MAX_BYTES"];
+const RELAY_ENV_KEYS = [
+  "ENABLED",
+  "ALLOWED_ORIGINS",
+  "RL_PER_MIN",
+  "RL_PER_DAY",
+  "RL_GLOBAL_PER_MONTH",
+  "MAX_BYTES",
+];
 
 async function loadHandler(env: Record<string, string> = {}): Promise<Handler> {
   vi.resetModules();
@@ -106,10 +113,10 @@ describe("gpx-relay Lambda handler", () => {
     });
   });
 
-  it("rejects a non-POST method", async () => {
+  it("rejects an unsupported method", async () => {
     const handler = await loadHandler();
     const res = await handler({
-      requestContext: { http: { method: "GET" } },
+      requestContext: { http: { method: "PUT" } },
       headers: { origin: ORIGIN },
     });
     expect(res.statusCode).toBe(405);
@@ -186,5 +193,58 @@ describe("gpx-relay Lambda handler", () => {
     expect((await handler(postEvent({ rideId: "-Ride1" }, { uid: "u2" }))).statusCode).toBe(
       200,
     );
+  });
+
+  it("GET returns runtime stats (no auth) with CORS advertising GET", async () => {
+    const handler = await loadHandler();
+    const res = await handler({
+      requestContext: { http: { method: "GET" } },
+      headers: { origin: ORIGIN },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["Access-Control-Allow-Origin"]).toBe(ORIGIN);
+    expect(res.headers["Access-Control-Allow-Methods"]).toContain("GET");
+    const body = JSON.parse(res.body);
+    expect(typeof body.startedAt).toBe("string");
+    expect(body.uptimeSeconds).toBeGreaterThanOrEqual(0);
+    expect(typeof body.instanceId).toBe("string");
+    expect(body.downloads).toBe(0);
+    expect(body.monthlyDownloads).toBe(0);
+    expect(body.monthlyLimit).toBe(10000);
+    expect(body.month).toMatch(/^\d{4}-\d{2}$/);
+  });
+
+  it("stats: a successful download increments downloads + monthlyDownloads", async () => {
+    const handler = await loadHandler();
+    mockHappyFetch();
+    expect((await handler(postEvent({ rideId: "-Ride1" }))).statusCode).toBe(200);
+    const res = await handler({ requestContext: { http: { method: "GET" } }, headers: {} });
+    const body = JSON.parse(res.body);
+    expect(body.downloads).toBe(1);
+    expect(body.monthlyDownloads).toBe(1);
+  });
+
+  it("GET stats answer even when ENABLED=0 (diagnostic, not gated)", async () => {
+    const handler = await loadHandler({ ENABLED: "0" });
+    const res = await handler({ requestContext: { http: { method: "GET" } }, headers: {} });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).enabled).toBe(false);
+  });
+
+  it("global monthly cap: blocks past the limit with 429 + Retry-After, no egress", async () => {
+    const handler = await loadHandler({ RL_GLOBAL_PER_MONTH: "1", RL_PER_MIN: "1000" });
+    const fetchFn = mockHappyFetch();
+    // First successful download consumes the only slot.
+    expect((await handler(postEvent({ rideId: "-Ride1" }))).statusCode).toBe(200);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    // Second is blocked globally — even from a different account/IP — before any hop.
+    const blocked = await handler(postEvent({ rideId: "-Ride1" }, { uid: "u2", ip: "9.9.9.9" }));
+    expect(blocked.statusCode).toBe(429);
+    expect(blocked.error ?? JSON.parse(blocked.body).error).toMatch(/monthly download limit/);
+    expect(Number(blocked.headers["Retry-After"])).toBeGreaterThan(0);
+    expect(fetchFn).toHaveBeenCalledTimes(2); // no new upstream calls
+    // Stats reflect the cap.
+    const stats = await handler({ requestContext: { http: { method: "GET" } }, headers: {} });
+    expect(JSON.parse(stats.body).monthlyDownloads).toBe(1);
   });
 });

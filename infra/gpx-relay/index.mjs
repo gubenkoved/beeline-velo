@@ -46,12 +46,62 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
 const RL_PER_MIN = intEnv("RL_PER_MIN", 60);
 const RL_PER_DAY = intEnv("RL_PER_DAY", 3000);
 
+// Single GLOBAL ceiling on successful downloads per calendar month (UTC), with NO
+// per-account / per-IP bucketing — a coarse cost stop-loss on top of the per-bucket
+// limits above. In warm-container memory only (it resets on cold start and is
+// enforced per container). With reserved concurrency = 1 (one container at a time,
+// the deploy default) this is an EXACT monthly ceiling; at higher concurrency it
+// degrades to a best-effort per-container cap.
+const RL_GLOBAL_PER_MONTH = intEnv("RL_GLOBAL_PER_MONTH", 10000);
+
 // Reject absurdly large upstream bodies defensively (a ride GPX gz is tens of KB).
 const MAX_BYTES = intEnv("MAX_BYTES", 12 * 1024 * 1024);
 
 function intEnv(name, dflt) {
   const n = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(n) && n > 0 ? n : dflt;
+}
+
+// -- runtime stats + global monthly cap (in warm-container memory) ------------
+// Captured once at module load == container cold start. These let a plain GET to
+// the Function URL report basic liveness (when this container started, how many
+// downloads it has served) so you can observe restart behaviour / container
+// lifetime. None of this survives a cold start — that's the whole point.
+const STARTED_AT = Date.now();
+const INSTANCE_ID = randomId();
+let downloadsServed = 0; // successful downloads this container has handed back (lifetime)
+let globalMonth = monthKey(STARTED_AT); // UTC "YYYY-MM" the monthly counter belongs to
+let globalMonthCount = 0; // successful downloads counted in the current month window
+
+function randomId() {
+  try {
+    return globalThis.crypto.randomUUID().slice(0, 8);
+  } catch {
+    return Math.random().toString(16).slice(2, 10);
+  }
+}
+
+/** UTC "YYYY-MM" key for a given epoch-ms instant (the global cap's window). */
+function monthKey(ms) {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Seconds from `now` until the start of next UTC month (a Retry-After hint). */
+function secondsToNextMonth(now) {
+  const d = new Date(now);
+  const next = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1, 0, 0, 0, 0);
+  return Math.max(1, Math.ceil((next - now) / 1000));
+}
+
+/** Roll the monthly window if the calendar month changed; returns the live count. */
+function rollGlobalMonth(now) {
+  const key = monthKey(now);
+  if (key !== globalMonth) {
+    globalMonth = key;
+    globalMonthCount = 0;
+  }
+  return globalMonthCount;
 }
 
 // -- best-effort rate limiter (in warm-container memory) ---------------------
@@ -110,7 +160,7 @@ function corsHeaders(origin) {
   if (ALLOWED_ORIGINS.length === 0) allow = origin || "*";
   else if (origin && ALLOWED_ORIGINS.includes(origin)) allow = origin;
   const h = {
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "authorization, content-type",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
@@ -145,6 +195,26 @@ export const handler = async (event) => {
   if (method === "OPTIONS") {
     return { statusCode: 204, headers: corsHeaders(origin), body: "" };
   }
+
+  // Runtime stats — a plain GET returns this container's basic liveness counters.
+  // No auth, no rate limit, and deliberately NOT gated by ENABLED: it's a
+  // diagnostic, so it must answer even when downloads are disabled. Exposes no
+  // token / uid / ride data — just timings and counts.
+  if (method === "GET") {
+    const now = Date.now();
+    rollGlobalMonth(now);
+    return json(200, origin, {
+      startedAt: new Date(STARTED_AT).toISOString(),
+      uptimeSeconds: Math.floor((now - STARTED_AT) / 1000),
+      instanceId: INSTANCE_ID,
+      downloads: downloadsServed,
+      month: globalMonth,
+      monthlyDownloads: globalMonthCount,
+      monthlyLimit: RL_GLOBAL_PER_MONTH,
+      enabled: ENABLED,
+    });
+  }
+
   if (method !== "POST") {
     return json(405, origin, { error: "method not allowed" });
   }
@@ -186,6 +256,16 @@ export const handler = async (event) => {
   if (!rl.ok) {
     return json(429, origin, { error: "rate limit exceeded" }, {
       "Retry-After": String(rl.retryAfter),
+    });
+  }
+
+  // Single GLOBAL monthly ceiling (no per-account/IP key) — a coarse cost stop-loss,
+  // also gated BEFORE any upstream egress. Counts only successful downloads, so a
+  // request blocked here never consumed quota.
+  const now = Date.now();
+  if (rollGlobalMonth(now) >= RL_GLOBAL_PER_MONTH) {
+    return json(429, origin, { error: "monthly download limit reached" }, {
+      "Retry-After": String(secondsToNextMonth(now)),
     });
   }
 
@@ -242,6 +322,12 @@ export const handler = async (event) => {
   if (buf.byteLength > MAX_BYTES) {
     return json(502, origin, { error: "exported GPX exceeds size limit" });
   }
+
+  // Count the successful download against both the lifetime stat and the global
+  // monthly window (re-rolling in case the month ticked over during the hops).
+  downloadsServed++;
+  rollGlobalMonth(Date.now());
+  globalMonthCount++;
 
   // Return the gzipped bytes verbatim (base64); the browser gunzips them. Returning
   // the gz (not the decompressed GPX) keeps egress ~10x smaller.

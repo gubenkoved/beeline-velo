@@ -20,7 +20,7 @@ FUNCTION_NAME_DEFAULT="beeline-gpx-relay"
 REGION_DEFAULT="$(aws configure get region 2>/dev/null || echo "us-east-1")"
 MEMORY_DEFAULT="256"
 TIMEOUT_DEFAULT="15"
-CONCURRENCY_DEFAULT="2"
+CONCURRENCY_DEFAULT="1"
 ARCH_DEFAULT="arm64"
 
 bold() { printf '\033[1m%s\033[0m\n' "$1"; }
@@ -68,13 +68,24 @@ if [[ -z "$ALLOWED_ORIGINS" ]]; then
   err "Pass at least your app's origin."
   exit 1
 fi
-# Normalize: drop spaces and any trailing slash on each origin. A browser's
-# `Origin` header never has a trailing slash, so "https://site/" would never match
-# and CORS would silently fail. Rebuild the comma-separated list cleaned up.
+# Normalize each entry to a bare ORIGIN (scheme://host[:port]) — that's all a
+# browser ever sends in its `Origin` header. We drop spaces, then strip any path/
+# query/fragment and trailing slash, because e.g. "https://site/gpx-toolkit" or
+# "https://site/" would never equal the browser's "https://site" and CORS would
+# silently fail (the #1 misconfiguration here — pasting the page URL, not the origin).
 ALLOWED_ORIGINS="$(
   printf '%s\n' "$ALLOWED_ORIGINS" | tr ',' '\n' | while IFS= read -r o; do
     o="${o// /}"
-    o="${o%/}"
+    if [[ "$o" == *"://"* ]]; then
+      proto="${o%%://*}"          # scheme
+      rest="${o#*://}"            # host[:port]/path?query#frag
+      rest="${rest%%/*}"          # cut at first '/'  -> host[:port][?query]
+      rest="${rest%%\?*}"         # cut any leftover '?query'
+      rest="${rest%%#*}"          # cut any leftover '#fragment'
+      o="${proto}://${rest}"
+    else
+      o="${o%/}"
+    fi
     [[ -n "$o" ]] && printf '%s,' "$o"
   done
 )"
