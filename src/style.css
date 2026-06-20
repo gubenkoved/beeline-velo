@@ -21,6 +21,11 @@
      Overlay      --scrim          (full-screen overlay backdrop)
      Elevation    --shadow-thumb < --float < --bar < --pop < --menu < --modal
      Geometry     --radius, --font, --mono
+     Controls     --ctrl-font[/-sm] --ctrl-pad-y/x[/-sm] --ctrl-radius[/-sm]
+                  --ctrl-border --ctrl-gap --tap-min  — the ONE source of truth
+                  for the button/chip/segmented/field family's height·padding·
+                  radius·font (md = default 13px row control, sm = compact 12.5px).
+                  A new control inherits these; never hard-code a one-off size.
 
    COMPONENT CLASSES — the shared building blocks:
      button             base control; modifiers .primary .ghost .danger
@@ -83,6 +88,23 @@
   --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.45); /* dropdown menus */
   --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.55); /* elevated modal card */
   --radius: 12px;
+  /* --- control geometry: the ONE source of truth for the button / chip / field /
+     segmented family, so a NEW control inherits the right size instead of eyeballing
+     px (which is how button-height drift creeps in). Two sizes: md = the default
+     13px row control (base button, .fchip, .seg, .custom, tag chips); sm = the
+     compact 12.5px variant (button.small + dense rows). Converge new controls onto
+     these tokens — never hard-code a one-off height/padding/radius. */
+  --ctrl-font: 13px;
+  --ctrl-font-sm: 12.5px;
+  --ctrl-pad-y: 6px;
+  --ctrl-pad-x: 12px;
+  --ctrl-pad-y-sm: 4px;
+  --ctrl-pad-x-sm: 10px;
+  --ctrl-radius: 9px;
+  --ctrl-radius-sm: 7px;
+  --ctrl-border: 1px;
+  --ctrl-gap: 7px; /* icon ↔ label gap inside a control */
+  --tap-min: 32px; /* minimum touch target (header icon squares, etc.) */
   --font: "Ubuntu", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --mono: "Ubuntu Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   /* Render native controls (checkboxes, range sliders, scrollbars) dark so the
@@ -260,8 +282,8 @@ button {
   font: inherit;
   color: var(--text);
   background: var(--panel2);
-  border: 1px solid var(--line);
-  border-radius: 9px;
+  border: var(--ctrl-border) solid var(--line);
+  border-radius: var(--ctrl-radius);
   padding: 7px 13px;
   cursor: pointer;
   transition: 0.12s ease;
@@ -322,9 +344,9 @@ button.accent:hover:not(:disabled) {
   color: #fff;
 }
 button.small {
-  padding: 4px 10px;
-  font-size: 12.5px;
-  border-radius: 7px;
+  padding: var(--ctrl-pad-y-sm) var(--ctrl-pad-x-sm);
+  font-size: var(--ctrl-font-sm);
+  border-radius: var(--ctrl-radius-sm);
 }
 
 .conn {
@@ -363,17 +385,17 @@ button.small {
 .seg {
   display: inline-flex;
   background: var(--panel2);
-  border: 1px solid var(--line);
-  border-radius: 9px;
+  border: var(--ctrl-border) solid var(--line);
+  border-radius: var(--ctrl-radius);
   overflow: hidden;
 }
 .seg button {
   border: 0;
   border-radius: 0;
   background: transparent;
-  padding: 6px 13px;
+  padding: var(--ctrl-pad-y) var(--ctrl-pad-x);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--ctrl-font);
 }
 .seg button.active {
   background: var(--accent);
@@ -387,12 +409,12 @@ button.small {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 13px;
+  padding: var(--ctrl-pad-y) var(--ctrl-pad-x);
   background: var(--panel2);
-  border: 1px solid var(--line);
-  border-radius: 9px;
+  border: var(--ctrl-border) solid var(--line);
+  border-radius: var(--ctrl-radius);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--ctrl-font);
   cursor: text;
   transition: 0.12s ease;
 }
@@ -441,13 +463,81 @@ button.small {
   font-weight: 400;
 }
 
-/* Explore-list filter bar: a compact, always-visible row of AND-combined filters. */
-.filterbar {
-  margin: 4px 0 14px;
-  gap: 8px;
+/* Global ride filter: one funnel button in the header opens a panel of AND-combined
+   filter chips. The panel is moved to <body> at runtime (see initFilterPanel) so its
+   `position: fixed` is viewport-relative — NOT trapped by the header's backdrop-filter.
+   Desktop: a dropdown JS-anchored under the button. Mobile: a bottom sheet (below). */
+.filterwrap {
+  position: relative;
+  display: inline-flex;
 }
-.filterbar.hidden {
+.filterwrap.hidden {
   display: none;
+}
+.filter-panel {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  z-index: 201;
+  width: min(440px, 92vw);
+  max-height: calc(100vh - 72px);
+  overflow-y: auto;
+  padding: 12px 14px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+}
+.filter-panel.hidden {
+  display: none;
+}
+/* Tap-to-close backdrop behind the mobile bottom sheet (desktop uses a plain
+   dropdown with click-outside, so the scrim only ever shows on mobile — below). */
+.filter-scrim {
+  display: none;
+}
+.fp-head {
+  position: sticky;
+  top: -12px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -12px -14px 10px;
+  padding: 12px 14px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.fp-title {
+  margin-right: auto;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+/* Panel close (×): a compact icon button. On desktop it's a quiet secondary to
+   click-outside; on mobile it's a clear, thumb-sized dismiss next to Clear. */
+.fp-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+.fp-close .mi {
+  width: 16px;
+  height: 16px;
+}
+.fp-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 /* The filter controls are grouped in the markup (chips vs. fields), but on desktop
    the groups are FLATTENED with `display: contents` so every chip, the Distance and
@@ -465,11 +555,11 @@ button.small {
   min-width: 0;
 }
 .fchip {
-  padding: 6px 12px;
-  font-size: 13px;
-  border-radius: 9px;
+  padding: var(--ctrl-pad-y) var(--ctrl-pad-x);
+  font-size: var(--ctrl-font);
+  border-radius: var(--ctrl-radius);
   background: var(--panel2);
-  border: 1px solid var(--line);
+  border: var(--ctrl-border) solid var(--line);
   color: var(--muted);
   transition: 0.12s ease;
   white-space: nowrap;
@@ -489,13 +579,19 @@ button.small {
 .fchip.hidden {
   display: none;
 }
-/* The "Filters" disclosure toggle collapses the whole filter bar on narrow
-   screens (revealed by the ≤560px block); on desktop the bar is always open with
-   room to spare, so the toggle stays hidden. */
+/* The "Filters" disclosure button lives in the header and is always available; it
+   opens/closes the global filter panel. Like #btnScan it pairs an inline icon with
+   its label (icon + "Filters"); `position: relative` anchors the corner count badge. */
 .ffilters-toggle {
-  display: none;
+  position: relative;
+  display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--ctrl-gap);
+}
+/* The funnel icon stays visible on desktop too (the header rule hides collapsible
+   `.mi` icons by default) so the button reads as icon + label, matching Re-sync. */
+.hdr-actions .ffilters-toggle .mi {
+  display: block;
 }
 .ffilters-toggle .mi {
   width: 15px;
@@ -508,17 +604,24 @@ button.small {
 #fClear.hidden {
   display: none;
 }
-/* Count of active filter dimensions, shown on the toggle so a collapsed bar
-   still signals that filtering is on. Reuses the accent pill vocabulary. */
+/* Count of active filter dimensions. A small badge pinned to the button's top-right
+   corner (absolute, so it never changes the button's height/width) — the button keeps
+   the same footprint as its header neighbours whether or not a count shows. */
 .fcount {
-  min-width: 18px;
-  padding: 0 5px;
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
   border-radius: 20px;
+  border: 1px solid var(--bg);
   background: var(--accent);
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  line-height: 18px;
+  line-height: 14px;
   text-align: center;
 }
 .fcount[hidden] {
@@ -544,54 +647,94 @@ button.small {
   display: none;
 }
 
-/* Tags filter: a single chip that opens a popover of every existing tag to
-   multi-select (OR). The wrapper is the positioning context for the popover and is
-   JS-gated out (`.hidden`) when no ride is tagged. */
+/* Tags filter: a chip that toggles an IN-FLOW multi-select section. When open, the
+   chip + cloud become ONE bordered accordion card (chip = header, cloud = body) so the
+   expanded tags read as belonging to the Tags button, not a detached panel. The wrapper
+   is JS-gated out (`.hidden`) when no ride is tagged. */
 .ftags-wrap {
-  position: relative;
   display: inline-flex;
 }
 .ftags-wrap.hidden {
   display: none;
 }
+/* A caret marks the Tags chip as a disclosure that expands its cloud. */
+#fTags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+#fTags::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-1px) rotate(45deg);
+  opacity: 0.6;
+  transition: transform 0.15s ease;
+}
+/* Open: one accent-bordered card spanning a full row of the panel body. */
+.ftags-wrap.open {
+  flex-basis: 100%;
+  width: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  border: var(--ctrl-border) solid var(--accent);
+  border-radius: var(--ctrl-radius);
+  background: var(--panel2);
+  overflow: hidden;
+}
+/* The chip becomes the card's header: full-width, accent-tinted, caret pointing up. */
+.ftags-wrap.open #fTags {
+  justify-content: space-between;
+  border: 0;
+  border-radius: 0;
+  background: var(--accent-tint);
+  color: var(--text);
+  font-weight: 600;
+}
+.ftags-wrap.open #fTags::after {
+  transform: translateY(2px) rotate(-135deg);
+  opacity: 0.9;
+}
+/* The tag cloud: the card body — wraps its chips and scrolls internally only if the
+   library has a LOT of tags. (Border/fill come from the card, so it stays transparent.) */
 .ftags-pop {
-  position: absolute;
-  top: calc(100% + 5px);
-  left: 0;
-  z-index: 40;
-  min-width: 190px;
-  max-width: 280px;
-  max-height: 320px;
+  flex-basis: 100%;
+  width: 100%;
+  max-height: 38vh;
   overflow-y: auto;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  background: var(--panel2);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  box-shadow: var(--shadow-menu);
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px;
 }
 .ftags-pop.hidden {
   display: none;
 }
-/* One selectable tag row inside the popover (a toggle); `.on` marks a selected tag. */
+/* Each tag is a toggle chip — the SAME pill vocabulary as the filter chips (`.fchip`),
+   accent when selected — so the whole panel reads as one consistent set of chips. */
 .ftag-opt {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 9px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text);
-  font-size: 12.5px;
-  text-align: left;
+  gap: var(--ctrl-gap);
+  padding: var(--ctrl-pad-y) var(--ctrl-pad-x);
+  border: var(--ctrl-border) solid var(--line);
+  border-radius: var(--ctrl-radius);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--ctrl-font);
   cursor: pointer;
+  white-space: nowrap;
 }
 .ftag-opt:hover {
-  background: var(--surface-hover);
+  border-color: var(--border-hover);
+}
+.ftag-opt.on {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--text);
+  font-weight: 600;
 }
 .ftag-opt .ftag-check {
   flex: 0 0 auto;
@@ -615,22 +758,25 @@ button.small {
   transform: translateY(-1px) rotate(-45deg);
 }
 .ftag-opt .ftag-name {
-  flex: 1 1 auto;
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* "Clear tags" row, separated from the tag list by a hairline. */
+/* "Untagged" is a special pseudo-tag, not a real label — italicise its name so it
+   reads as a distinct option leading the cloud. */
+.ftag-special .ftag-name {
+  font-style: italic;
+}
+/* "Clear tags" sits on its own line at the end of the tag cloud. */
 .ftag-clear {
-  margin-top: 4px;
-  padding-top: 7px;
-  border-top: 1px solid var(--line);
+  flex-basis: 100%;
+  margin-top: 2px;
+  padding: 4px 2px 0;
+  border: 0;
+  background: none;
   color: var(--muted);
   font-size: 11.5px;
-  background: none;
-  border-left: 0;
-  border-right: 0;
-  border-bottom: 0;
   text-align: left;
   cursor: pointer;
 }
@@ -4808,9 +4954,6 @@ body.job-active .toast {
   header button.small {
     padding: 4px 9px;
   }
-  .filterbar {
-    gap: 7px;
-  }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -4902,9 +5045,6 @@ body.job-active .toast {
   .row .spacer {
     flex-basis: 100%;
     height: 0;
-  }
-  .filterbar {
-    gap: 6px;
   }
   .custom {
     padding: 5px 10px;
@@ -5155,16 +5295,18 @@ body.job-active .toast {
      squares with centred 17px icons, reading as one aligned cluster. */
   .hdr-actions .conn #btnScan,
   .hdr-actions #btnSource,
+  .hdr-actions .filterwrap > .ffilters-toggle,
   .hdr-actions .split > .iconmenu {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
+    width: var(--tap-min);
+    height: var(--tap-min);
     padding: 0;
   }
   .hdr-actions .conn #btnScan svg,
   .hdr-actions #btnSource .mi,
+  .hdr-actions .filterwrap > .ffilters-toggle .mi,
   .hdr-actions .split > .iconmenu .ki {
     flex: 0 0 auto;
     width: 17px;
@@ -5182,27 +5324,62 @@ body.job-active .toast {
     width: 16px;
     height: 16px;
   }
-  /* Filters collapse behind the "Filters" toggle: the bar otherwise wraps into
-     ~4 rows (status segment + tri-state chips + Source/Distance + Clear) and eats
-     a big chunk of a phone screen above the list. The toggle stays; the groups
-     and Clear hide until the bar carries `.open`, then stack below the toggle. */
-  .ffilters-toggle {
-    display: inline-flex;
+  /* On a phone the filter panel rises as a full-width bottom sheet instead of a
+     header dropdown, so it's thumb-reachable and the view still peeks above it and
+     updates live. A scrim dims the rest; tap it / Esc / × / Clear dismiss. */
+  .filter-panel {
+    top: auto;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 82vh;
+    overflow-y: auto;
+    border-radius: 18px 18px 0 0;
+    border-bottom: 0;
+    box-shadow: 0 -16px 44px rgba(0, 0, 0, 0.55);
+    padding: 6px 16px max(16px, env(safe-area-inset-bottom));
+    overscroll-behavior: contain;
   }
-  .filterbar .fgroup,
-  .filterbar #fClear {
-    display: none;
+  /* Sheet grabber — the universal "drag/dismiss me" affordance. */
+  .filter-panel::before {
+    content: "";
+    display: block;
+    width: 40px;
+    height: 4px;
+    margin: 6px auto 12px;
+    border-radius: 999px;
+    background: var(--line);
   }
-  .filterbar.open .fgroup {
-    display: inline-flex;
+  /* Keep the title + Clear + × reachable while the chips scroll. */
+  .fp-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: 0 -16px 12px;
+    padding: 4px 16px 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
   }
-  .filterbar.open #fClear:not(.hidden) {
-    display: inline-flex;
+  /* Roomier, thumb-sized chips + fields inside the sheet. */
+  .filter-panel .fp-body {
+    gap: 10px;
   }
-  /* Open: the toggle holds the first line so every group wraps full-width below
-     it, reading as a stacked filter panel rather than trailing the toggle. */
-  .filterbar.open .ffilters-toggle {
-    flex-basis: 100%;
+  .filter-panel .fchip {
+    padding: 9px 13px;
+    font-size: 13.5px;
+  }
+  .filter-panel .fdist input,
+  .filter-panel .fwind input {
+    width: 4.5ch;
+    padding: 6px 4px;
+  }
+  .filter-scrim:not(.hidden) {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.45);
   }
 
   /* -- distance/speed chart panel: reclaim the vertical space its header ate.

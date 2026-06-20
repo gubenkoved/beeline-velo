@@ -312,6 +312,30 @@ describe("matchesFilters — tags (OR)", () => {
   });
 });
 
+describe("matchesFilters — untagged pseudo-tag", () => {
+  it("keeps only rides with no tags when 'untagged' is selected alone", () => {
+    expect(matchesFilters(f({ untagged: true }), ride({ tags: [] }))).toBe(true);
+    expect(matchesFilters(f({ untagged: true }), ride({ tags: ["Commute"] }))).toBe(false);
+  });
+
+  it("treats whitespace-only tags as untagged", () => {
+    expect(matchesFilters(f({ untagged: true }), ride({ tags: ["  "] }))).toBe(true);
+  });
+
+  it("ORs with real tags — an untagged ride OR one carrying a selected tag passes", () => {
+    const filter = f({ tags: ["gravel"], untagged: true });
+    expect(matchesFilters(filter, ride({ tags: [] }))).toBe(true); // untagged
+    expect(matchesFilters(filter, ride({ tags: ["Gravel"] }))).toBe(true); // selected tag
+    expect(matchesFilters(filter, ride({ tags: ["Commute"] }))).toBe(false); // neither
+  });
+
+  it("counts as the one Tags dimension and marks the set active", () => {
+    expect(filterActiveCount(f({ untagged: true }))).toBe(1);
+    expect(filterActiveCount(f({ tags: ["commute"], untagged: true }))).toBe(1);
+    expect(filtersActive(f({ untagged: true }))).toBe(true);
+  });
+});
+
 describe("visibleRides", () => {
   const rides = [
     ride({

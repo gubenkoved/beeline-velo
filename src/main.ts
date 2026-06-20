@@ -874,6 +874,7 @@ function loadFilters(): Filters {
       }
       f.tags = [...seen];
     }
+    if (typeof o.untagged === "boolean") f.untagged = o.untagged;
   } catch {
     /* malformed JSON / storage disabled — fall back to neutral */
   }
@@ -897,6 +898,10 @@ let openMenu: string | null = null;
 // Whether the Tags filter popover (multi-select dropdown) is open. Module-scope so
 // it survives re-renders; closed on outside click / Esc.
 let tagsFilterOpen = false;
+// Whether the global ride-filter panel (the header funnel button's dropdown / mobile
+// bottom sheet) is open. Module-scope so it survives re-renders; stays open while
+// toggling chips, closes on outside click / Esc.
+let filterPanelOpen = false;
 // Whether the queue panel's "Up next" list is expanded. Module-scope so it
 // survives the frequent re-renders the job ticker triggers; starts open so the
 // pending work is visible by default.
@@ -1655,18 +1660,21 @@ function setView(v: ViewName): void {
 }
 
 /**
- * Whether the Stats date slider is narrowed below the full span, and if so a
- * compact label for the selected window (e.g. "filtered · Jan 1 – Mar 1, 2026").
- * Returns "" when the full span is selected so the header flag stays hidden.
+ * Whether the Stats figures are a narrowed subset — either the date slider is below
+ * the full span or the global ride filters are active — and if so a compact label.
+ * Returns "" when neither narrows, so the header flag stays hidden.
  */
 function statsFilteredFlag(): string {
+  const filtersOn = filterActiveCount(filters) > 0;
   const bounds = boundsOf("stats");
   const sel = rangeOf("stats");
-  if (!bounds || !sel) return "";
-  const n = dayCount(bounds);
-  if (n <= 0) return "";
-  const narrowed = dayIndex(bounds, sel.minMs) > 0 || dayIndex(bounds, sel.maxMs) < n;
-  if (!narrowed) return "";
+  const narrowed =
+    !!bounds &&
+    !!sel &&
+    dayCount(bounds) > 0 &&
+    (dayIndex(bounds, sel.minMs) > 0 || dayIndex(bounds, sel.maxMs) < dayCount(bounds));
+  if (!narrowed && !filtersOn) return "";
+  if (!narrowed) return "filtered";
   return `filtered · ${fmtDay(sel.minMs)} – ${fmtDay(sel.maxMs)}`;
 }
 
@@ -1947,23 +1955,33 @@ function syncFilterBar(allRides: AppState["rides"]): void {
     filters.tags = filters.tags.filter((t) => tagKeys.has(t));
     saveFilters();
   }
+  // "Untagged" is offered (and can stay active) only when some ride actually has no
+  // tags — otherwise it would narrow to nothing; drop a now-meaningless one like a tag.
+  const someUntagged = allRides.some((r) => !r.tags.some((t) => tagKey(t)));
+  if (allRides.length > 0 && filters.untagged && !someUntagged) {
+    filters.untagged = false;
+    saveFilters();
+  }
   const tagsWrap = document.getElementById("fTagsWrap");
-  if (tagsWrap) tagsWrap.classList.toggle("hidden", allTags.length === 0);
+  if (tagsWrap) {
+    tagsWrap.classList.toggle("hidden", allTags.length === 0);
+    tagsWrap.classList.toggle("open", tagsFilterOpen && allTags.length > 0);
+  }
   if (allTags.length === 0 && tagsFilterOpen) tagsFilterOpen = false;
   const tagsChip = document.getElementById("fTags");
   if (tagsChip) {
-    const n = filters.tags.length;
+    const n = filters.tags.length + (filters.untagged ? 1 : 0);
     tagsChip.textContent = n === 0 ? "Tags: any" : `Tags: ${n}`;
     tagsChip.classList.toggle("on", n > 0);
     tagsChip.setAttribute("aria-expanded", String(tagsFilterOpen));
   }
-  renderTagsFilterPopover(allTags);
+  renderTagsFilterPopover(allTags, someUntagged);
 
   // Clear button visibility.
   $("#fClear").classList.toggle("hidden", !filtersActive(filters));
 
-  // Mobile "Filters" toggle: badge the count of active dimensions so a collapsed
-  // bar still signals that filtering is on, and accent the toggle to match.
+  // Header "Filters" button: badge the count of active dimensions so a closed panel
+  // still signals that filtering is on, and accent the button to match.
   const n = filterActiveCount(filters);
   const count = document.getElementById("fCount");
   if (count) {
@@ -1973,9 +1991,10 @@ function syncFilterBar(allRides: AppState["rides"]): void {
   document.getElementById("fToggle")?.classList.toggle("on", n > 0);
 }
 
-/** Render the Tags filter popover: one toggle row per existing tag (`.on` when
- *  selected), plus a Clear row when any is active. Visibility tracks `tagsFilterOpen`. */
-function renderTagsFilterPopover(allTags: string[]): void {
+/** Render the Tags filter popover: a leading "Untagged" pseudo-tag (when some ride has
+ *  no tags), one toggle chip per existing tag (`.on` when selected), plus a Clear row
+ *  when any is active. Visibility tracks `tagsFilterOpen`. */
+function renderTagsFilterPopover(allTags: string[], someUntagged: boolean): void {
   const pop = document.getElementById("fTagsPop");
   if (!pop) return;
   pop.classList.toggle("hidden", !tagsFilterOpen);
@@ -1984,6 +2003,12 @@ function renderTagsFilterPopover(allTags: string[]): void {
     return;
   }
   const selected = new Set(filters.tags);
+  // "Untagged" leads the cloud (italic, to read as a special option, not a real tag).
+  const untagged = someUntagged
+    ? `<button type="button" class="ftag-opt ftag-special${
+        filters.untagged ? " on" : ""
+      }" data-ftag-untagged="1"><span class="ftag-check"></span><span class="ftag-name">Untagged</span></button>`
+    : "";
   const rows = allTags
     .map((t) => {
       const on = selected.has(tagKey(t));
@@ -1992,11 +2017,69 @@ function renderTagsFilterPopover(allTags: string[]): void {
       )}"><span class="ftag-check"></span><span class="ftag-name">${escHtml(t)}</span></button>`;
     })
     .join("");
-  const clear = filters.tags.length
-    ? `<button type="button" class="ftag-clear" data-ftag-clear="1">Clear tags</button>`
-    : "";
-  pop.innerHTML = rows + clear;
+  const clear =
+    filters.tags.length || filters.untagged
+      ? `<button type="button" class="ftag-clear" data-ftag-clear="1">Clear tags</button>`
+      : "";
+  pop.innerHTML = untagged + rows + clear;
 }
+
+/** Open or close the global ride-filter panel (the header funnel dropdown / mobile
+ *  bottom sheet). Closing also collapses the nested Tags popover. */
+function setFilterPanel(open: boolean): void {
+  filterPanelOpen = open;
+  const panel = document.getElementById("filterPanel");
+  const scrim = document.getElementById("filterScrim");
+  const btn = document.getElementById("fToggle");
+  panel?.classList.toggle("hidden", !open);
+  panel?.classList.toggle("open", open);
+  scrim?.classList.toggle("hidden", !open);
+  btn?.setAttribute("aria-expanded", open ? "true" : "false");
+  if (open) positionFilterPanel();
+  if (!open) tagsFilterOpen = false;
+  // Reflect the chip/labels/Tags-popover state for the new visibility.
+  syncFilterBar(STATE.rides);
+}
+
+/** Anchor the (body-level, fixed) filter panel under the Filters button on desktop;
+ *  on mobile the CSS bottom-sheet rules own its position, so clear the inline anchors.
+ *  Re-run on open and on window resize/scroll while open. */
+function positionFilterPanel(): void {
+  const panel = document.getElementById("filterPanel");
+  const btn = document.getElementById("fToggle");
+  if (!panel || !btn) return;
+  if (window.matchMedia("(max-width: 768px)").matches) {
+    panel.style.top = panel.style.right = panel.style.left = "";
+    return;
+  }
+  const r = btn.getBoundingClientRect();
+  panel.style.top = `${Math.round(r.bottom + 8)}px`;
+  panel.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+  panel.style.left = "auto";
+}
+
+/** Move the filter panel to <body> and add its tap-to-close scrim. The header carries
+ *  `backdrop-filter`, which makes it the containing block for `position: fixed`
+ *  descendants — leaving the panel inside it pins the mobile bottom sheet to the header
+ *  box (top of the page) instead of the viewport. Relocating to <body> fixes that and
+ *  lets the same element be a desktop dropdown (JS-anchored) or a mobile sheet (CSS). */
+function initFilterPanel(): void {
+  const panel = document.getElementById("filterPanel");
+  if (!panel || panel.parentElement === document.body) return;
+  document.body.appendChild(panel);
+  if (!document.getElementById("filterScrim")) {
+    const scrim = document.createElement("div");
+    scrim.id = "filterScrim";
+    scrim.className = "filter-scrim hidden";
+    document.body.appendChild(scrim);
+  }
+  const reflow = (): void => {
+    if (filterPanelOpen) positionFilterPanel();
+  };
+  window.addEventListener("resize", reflow);
+  window.addEventListener("scroll", reflow, true);
+}
+initFilterPanel();
 
 /** Advance a tri-state chip one step on click. */
 function cycleChip(which: string): void {
@@ -2035,6 +2118,7 @@ function clearFilters(): void {
   filters.distMin = null;
   filters.distMax = null;
   filters.tags = [];
+  filters.untagged = false;
 }
 
 /** Push persisted trim percentages into the sliders/outputs (skip a slider being dragged). */
@@ -2291,8 +2375,9 @@ function render(): void {
   ACTIVE = new Set(jobs.active_keys || []);
   RUNNING = new Set(jobs.current ? jobs.current_keys || [] : []);
 
-  // Filter bar: only useful once there are rides to narrow.
-  $("#filterbar").classList.toggle("hidden", allRides.length === 0);
+  // Filter button: only useful once there are rides to narrow.
+  document.querySelector(".filterwrap")?.classList.toggle("hidden", allRides.length === 0);
+  if (allRides.length === 0 && filterPanelOpen) setFilterPanel(false);
   syncFilterBar(allRides);
 
   // Empty state: distinguish "no rides at all" from "filters hid everything".
@@ -2318,8 +2403,9 @@ function render(): void {
   } else {
     emptyEl.style.display = "none";
   }
-  // The inline stats panel always reflects the full (unfiltered) dataset.
-  renderStats(allRides);
+  // The inline stats panel reflects the active filters, like the group rows below —
+  // narrowing the library narrows its chart + KPIs too (empty when filters hide all).
+  renderStats(rides);
 
   const byMonth = new Map<string, { label: string; rides: AppState["rides"] }>();
   for (const r of rides) {
@@ -3348,12 +3434,11 @@ document.addEventListener("click", (e) => {
     render();
     // fall through so this same click can still trigger whatever it landed on
   }
-  // The Tags filter popover closes when a click lands outside its wrapper (the chip,
-  // the tag rows and the Clear row all live inside `#fTagsWrap`, so they don't close
-  // it here). Falls through so the same click still does its job.
-  if (tagsFilterOpen && !target.closest("#fTagsWrap")) {
-    tagsFilterOpen = false;
-    syncFilterBar(STATE.rides);
+  // The global filter panel closes on any click outside it. Its chips, fields and
+  // Tags section all live inside `#filterPanel`, and the `#fToggle` button toggles it
+  // below, so neither closes it here. Falls through so the same click still does its job.
+  if (filterPanelOpen && !target.closest("#filterPanel, #fToggle")) {
+    setFilterPanel(false);
   }
 
   if (t.dataset?.view) {
@@ -3388,13 +3473,17 @@ document.addEventListener("click", (e) => {
     resetRange(t.dataset.rangereset as RangeView);
     return;
   }
-  // Mobile: the "Filters" toggle expands/collapses the otherwise space-hungry
-  // filter bar. Ephemeral view state, so flip the class directly (the filter bar
-  // is static markup that syncFilterBar mutates in place, never rebuilds) rather
-  // than routing through render().
+  // The header "Filters" button summons the global ride-filter panel (a desktop
+  // dropdown / mobile bottom sheet). It floats over content, so no view re-render is
+  // needed — flip the panel directly (syncFilterBar keeps its chips in step).
   if (t.id === "fToggle") {
-    const open = document.getElementById("filterbar")?.classList.toggle("open");
-    t.setAttribute("aria-expanded", open ? "true" : "false");
+    setFilterPanel(!filterPanelOpen);
+    return;
+  }
+  // The panel's own close (×) button — and the mobile sheet's scrim, which the
+  // outside-click guard below already handles — dismiss the panel.
+  if (t.id === "fClose") {
+    setFilterPanel(false);
     return;
   }
   if (t.dataset?.fchip) {
@@ -3403,15 +3492,21 @@ document.addEventListener("click", (e) => {
     applyState();
     return;
   }
-  // Tags filter: the chip toggles its multi-select popover; each tag row ORs that tag
-  // in/out of the filter; the Clear row empties the selection. The popover stays open
-  // through tag toggles so several can be picked in one go.
+  // Tags filter: the chip toggles its in-panel multi-select section; each tag chip ORs
+  // that tag in/out of the filter; the Clear row empties the selection. The section
+  // stays open through tag toggles so several can be picked in one go.
   if (t.id === "fTags") {
     tagsFilterOpen = !tagsFilterOpen;
     syncFilterBar(STATE.rides);
     return;
   }
   const ftagOpt = t.closest<HTMLElement>(".ftag-opt");
+  if (ftagOpt?.dataset.ftagUntagged) {
+    filters.untagged = !filters.untagged;
+    saveFilters();
+    applyState();
+    return;
+  }
   if (ftagOpt?.dataset.ftagKey) {
     const key = ftagOpt.dataset.ftagKey;
     filters.tags = filters.tags.includes(key)
@@ -3423,6 +3518,7 @@ document.addEventListener("click", (e) => {
   }
   if (t.closest(".ftag-clear")) {
     filters.tags = [];
+    filters.untagged = false;
     saveFilters();
     applyState();
     return;
@@ -3713,6 +3809,10 @@ document.addEventListener("keydown", (e) => {
     closeConfirm(false);
     return;
   }
+  if (filterPanelOpen) {
+    setFilterPanel(false);
+    return;
+  }
   const tagM = document.getElementById("tagModal");
   if (tagM && !tagM.classList.contains("hidden")) {
     closeTagModal();
@@ -3976,6 +4076,7 @@ initClimateView({
 initWindSpeedView({
   getRides: () => STATE.rides,
   ridesInRange,
+  applyFilters: (rides) => visibleRides(filters, rides),
   analyticsRange: () => analyticsRange,
   movingThresholdKmh: () => STATE.settings.movingThresholdKmh,
   weatherFetchedAt: (key) => controller.weatherFetchedAt(key),
@@ -3990,6 +4091,7 @@ applyAnalyticsPrefsToDom();
 initMapView({
   getRides: () => STATE.rides,
   ridesInRange,
+  applyFilters: (rides) => visibleRides(filters, rides),
   mapRange: () => mapRange,
   refreshRange: () => refreshRange("map"),
   syncRangeControl: () => syncRangeControl("map"),
@@ -4000,6 +4102,7 @@ initMapView({
 initStatsView({
   getRides: () => STATE.rides,
   ridesInRange,
+  applyFilters: (rides) => visibleRides(filters, rides),
   statsRange: () => statsRange,
   refreshRange: () => refreshRange("stats"),
   syncRangeControl: () => syncRangeControl("stats"),

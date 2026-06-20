@@ -38,6 +38,8 @@ export interface WindSpeedDeps {
   getRides(): RideView[];
   /** Filter rides to a date selection (the app's shared range helper). */
   ridesInRange(rides: RideView[], range: DateRange): RideView[];
+  /** Apply the app's global ride filters (the shared `visibleRides`). */
+  applyFilters(rides: RideView[]): RideView[];
   /** The current Wind/Speed date selection, or null for the full span. */
   analyticsRange(): DateRange | null;
   /** Speed under which a moment counts as stopped (settings). */
@@ -104,7 +106,7 @@ function segKey(r: RideView): string {
 export function windSpeedVisibleRides(): RideView[] {
   const range = deps.analyticsRange();
   const rides = deps.getRides();
-  const visible = range ? deps.ridesInRange(rides, range) : rides;
+  const visible = deps.applyFilters(range ? deps.ridesInRange(rides, range) : rides);
   return visible.filter((r) => !r.deleted);
 }
 

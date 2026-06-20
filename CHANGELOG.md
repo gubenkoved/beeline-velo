@@ -17,6 +17,61 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## control-geometry design tokens (button/chip size cohesion)
+- **What:** added a `--ctrl-*` token scale (`--ctrl-font[/-sm]`, `--ctrl-pad-y/x[/-sm]`,
+  `--ctrl-radius[/-sm]`, `--ctrl-border`, `--ctrl-gap`, `--tap-min`) as the single source
+  of truth for the button / chip / segmented / field family's height·padding·radius·font,
+  and routed the canonical recipes through it (`button`, `button.small`, `.fchip`, `.seg`,
+  `.custom`, the tag chips, the header icon-squares). Documented it in the style.css
+  design-system header and strengthened the *"One unified design language"* instruction to
+  mandate the tokens. Captured the visual-cohesion value in the instructions.
+- **Why:** we kept fighting button-size drift because there were colour/shadow/radius tokens
+  but NO control-geometry tokens — so every new control eyeballed its own px and ended up a
+  hair off its neighbours (the Filters button, the tag rows). One md/sm token scale removes
+  the drift by construction: a new control inherits the right size instead of guessing, and
+  future changes happen in one place.
+
+## global ride filter across Map / Stats / Wind-Speed
+- **What:** the Explore filter is now a single GLOBAL filter that narrows every
+  track view too. Moved the filter chips out of the Explore-inline `.filterbar` into
+  one header-anchored panel (a desktop dropdown / mobile bottom sheet) summoned by a
+  new "Filters" button in the header actions, and wired the shared `visibleRides(filters,…)`
+  into Map (`mountMapView`), Stats (`mountStatsView`, so totals/records/heatmap all
+  narrow together) and Wind/Speed (`windSpeedVisibleRides`) via a new `applyFilters`
+  dep on each view seam, plus the Explore inline summary panel (`renderStats(rides)` —
+  its "Distance/Speed per …" chart and KPIs now narrow with the filters, matching the
+  group rows below which already did). The Map side note and Stats flag/heat note now say "hidden by
+  filters", and `statsFilteredFlag` flags a narrowed set when filters are active even
+  with the full date span. Panel opens/closes like the Tags popover (stays open while
+  toggling chips; closes on outside-click / Esc / view-switch); the button badges the
+  active-filter count and reveals "Clear filters". The header button is styled to match
+  its neighbours — funnel icon + "Filters" label like Re-sync, with the count as a
+  top-right corner badge so it never inflates the button height, and it folds into the
+  same equal 32×32 icon-square cluster as Pull / Sources / the ⋯ menu on phones. On a
+  phone the panel is a proper bottom sheet (scrim, grabber, sticky header with a close ×,
+  roomy chips, safe-area padding) rather than a cramped dropdown. The panel is moved to
+  `<body>` at runtime (`initFilterPanel`) and JS-anchored under the button on desktop /
+  CSS-pinned to the viewport bottom on mobile, because `<header>`'s `backdrop-filter`
+  otherwise makes it the containing block for `position: fixed` and pins the sheet to the
+  top of the page (the bug that made the narrow-view filters unusable). The Tags filter
+  is an IN-FLOW section of the panel (not a floating popover): clicking the Tags chip
+  expands it into a connected **accordion card** — the chip becomes the card's header (a
+  full-width, accent-tinted bar with an up-caret) and the tag cloud is its body, so the
+  expanded tags read as belonging to the Tags button rather than a detached box; each tag
+  reuses the canonical `.fchip` pill vocabulary (accent when selected) for one consistent
+  set of chips. A
+  leading **"Untagged"** pseudo-tag (shown when some ride has no tags) filters to the
+  un-tagged rides, OR-combined with the real tags — backed by a new `Filters.untagged`
+  flag (persisted, gated/pruned like the tags themselves). The panel header is sticky and
+  the panel scrolls (desktop + mobile) so long content stays usable.
+- **Why:** filtering only existed on the Explore list, yet the Map/Stats/Wind-Speed
+  views are exactly where narrowing to a subset (a tag, a source, a distance band) is
+  most useful. A per-view summon button would have crowded the Map's already-busy
+  corner (area-select / expand / locate + the date slider + the OSM credit); since the
+  filter is conceptually app-level, one global header entry point with a floating panel
+  keeps the Map uncluttered (the panel never shrinks the map) and says each control
+  once — one filter surface, driven by the one persisted `filters`.
+
 ## rename npm package to gpx-toolkit
 - **What:** renamed the npm package `name` from `beeline-uploader-web` to `gpx-toolkit`
   in package.json (and the matching entries in package-lock.json).

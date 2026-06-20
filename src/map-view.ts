@@ -31,6 +31,8 @@ export interface MapViewDeps {
   getRides(): RideView[];
   /** Filter rides to a date selection (the app's shared range helper). */
   ridesInRange(rides: RideView[], range: DateRange): RideView[];
+  /** Apply the app's global ride filters (the shared `visibleRides`). */
+  applyFilters(rides: RideView[]): RideView[];
   /** The current Map date selection, or null for the full span. */
   mapRange(): DateRange | null;
   /** Sync the shared date-range control's bounds for this view. */
@@ -150,8 +152,9 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
   const live = deps.getRides().filter((r) => !r.deleted);
   const range = deps.mapRange();
   const inRange = range ? deps.ridesInRange(live, range) : live;
-  const hidden = live.length - inRange.length;
-  const rides = inRange.slice().sort((a, b) => compareRideKeysDesc(a.key, b.key));
+  const visible = deps.applyFilters(inRange);
+  const hidden = live.length - visible.length;
+  const rides = visible.slice().sort((a, b) => compareRideKeysDesc(a.key, b.key));
   if (live.length === 0) {
     side.innerHTML =
       `<div class="ms-empty">No rides on the map yet. ` +
@@ -179,7 +182,7 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
     ? `${tracks.length} on map · ${missing} without a route`
     : `${tracks.length} on map`;
   const hiddenNote = hidden
-    ? `<div class="ms-hidden">${hidden} hidden by the date filter</div>`
+    ? `<div class="ms-hidden">${hidden} hidden by filters</div>`
     : "";
   side.innerHTML =
     `<div class="ms-head"><h2>All rides</h2><span class="ms-count" id="msCount"></span></div>` +
@@ -194,7 +197,7 @@ export function mountMapView(opts: { fit?: boolean } = {}): void {
   deps.refreshRange();
   const range = deps.mapRange();
   const rides = deps.getRides();
-  const visible = range ? deps.ridesInRange(rides, range) : rides;
+  const visible = deps.applyFilters(range ? deps.ridesInRange(rides, range) : rides);
   const { tracks, missing } = ridesWithTracks(visible);
   currentTracks = tracks;
   currentMissing = missing;

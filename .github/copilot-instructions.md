@@ -94,7 +94,15 @@ out when a request pushes against them (see *Review & challenge the request*).
   slider, accent colours and spacing — rather than inventing a one-off style. The same
   interaction (selecting, filtering, listing rides) should work the same way everywhere it
   appears. When you add a surface, first ask which existing component or class already expresses
-  it; introduce new styling only when nothing fits, and then make it reusable.
+  it; introduce new styling only when nothing fits, and then make it reusable. **Size shared
+  controls from ONE place** — buttons, chips, segmented controls and fields inherit their
+  height / padding / radius / font from the `--ctrl-*` design tokens (`--ctrl-pad-y/x`,
+  `--ctrl-font`, `--ctrl-radius`, the `-sm` compact variants, `--tap-min`) via the canonical
+  recipes (`button` / `button.small`, `.fchip`, `.seg`, `.custom`, the `--tap-min` header
+  icon-square), never ad-hoc per-element px. A one-off button size is exactly how visual
+  drift starts; if you catch yourself writing a literal height/padding/radius on a control,
+  reach for (or extend) the `--ctrl-*` token or its shared class instead, and bring its
+  siblings along.
 - **Proactively keep the UI aligned with itself.** Consistency is an active duty, not a one-off.
   When you touch one surface, look at its siblings and bring them along: if one filter becomes a
   click-through chip, the rest should be chips too (the Strava + Source filters were converted
@@ -128,6 +136,15 @@ out when a request pushes against them (see *Review & challenge the request*).
 - **Guide without overwhelming.** A first-time / empty state should orient the user (what sources
   are, the two ways in, a demo) in a few quiet lines — not a wall of text or a nag. Lead them to
   the next step, then get out of the way. Density is for the working surfaces, not the welcome.
+- **Mobile-friendliness is non-negotiable — preserve it across every change.** This is a
+  phone-first PWA; a feature that works on a wide desktop but is broken or unusable on a narrow
+  viewport is NOT done. Every new surface must be verified at a phone width too. The header already
+  collapses its action buttons to equal 32×32 icon squares (≤560px); overlays/menus must be
+  reachable and dismissable with a thumb — prefer a full-width bottom sheet (with a scrim, a
+  grabber, a visible close, sticky header and `env(safe-area-inset-bottom)` padding) over a tiny
+  anchored dropdown on phones (see the global filter panel: desktop dropdown → mobile bottom
+  sheet). Touch targets stay ≥ ~32px. When you touch layout/CSS, re-check the ≤768px and ≤560px
+  media blocks so nothing regresses; if you can't verify a phone width, say so.
 
 ## Data ingestion integrity (read this first)
 
@@ -352,3 +369,4 @@ none. The table is grouped by concern; keep new modules in the group they belong
 
 - Keep new code dependency-light — this app intentionally has no backend and a tiny dependency set.
 - The `RideSource` seam is kept deliberately even though Beeline is the only implementation; if you add a source, code to the interface and never let the Controller touch a concrete backend.
+- **`position: fixed` breaks inside the header.** `<header>` has `backdrop-filter: blur()`, which (like `transform`/`filter`/`will-change`) makes it the *containing block* for `position: fixed` descendants — a fixed element inside it is positioned relative to the HEADER box (top strip of the page), NOT the viewport. A mobile bottom sheet authored inside the header pins to the top and overlaps content. Fix: render full-screen/viewport-anchored overlays at `<body>` level (the global filter panel is moved to `<body>` at runtime by `initFilterPanel`, then JS-anchored under its button on desktop and CSS-pinned to the viewport bottom on mobile). Never assume `position: fixed` is viewport-relative without checking for a transformed/filtered ancestor.

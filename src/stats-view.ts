@@ -35,6 +35,8 @@ export interface StatsViewDeps {
   getRides(): RideView[];
   /** Filter rides to a date selection (the app's shared range helper). */
   ridesInRange(rides: RideView[], range: DateRange): RideView[];
+  /** Apply the app's global ride filters (the shared `visibleRides`). */
+  applyFilters(rides: RideView[]): RideView[];
   /** The current Stats date selection, or null for the full span. */
   statsRange(): DateRange | null;
   /** Sync the shared date-range control's bounds for this view. */
@@ -237,7 +239,7 @@ export function mountStatsView(opts: { fit?: boolean } = {}): void {
   deps.refreshRange();
   const range = deps.statsRange();
   const rides = deps.getRides();
-  const visible = range ? deps.ridesInRange(rides, range) : rides;
+  const visible = deps.applyFilters(range ? deps.ridesInRange(rides, range) : rides);
   const hidden = live.length - visible.filter((r) => !r.deleted).length;
 
   // When the date slider is narrowed below the full span, the totals/records are
@@ -302,7 +304,7 @@ function mountFreqHeatmap(rides: RideView[], hidden: number, fit?: boolean): voi
       ? ` ${tracks.length} route${tracks.length === 1 ? "" : "s"}` +
         (missing ? ` · ${missing} without a downloaded route` : "")
       : " no downloaded routes yet — press GPX on a ride in Explore";
-    note.textContent = base + (hidden ? ` · ${hidden} hidden by the date filter` : "");
+    note.textContent = base + (hidden ? ` · ${hidden} hidden by filters` : "");
   }
 
   if (!freqHeatMap) {
