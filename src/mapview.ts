@@ -108,7 +108,7 @@ export function dateRange(rides: RideView[]): DateRange | null {
   let max = -Infinity;
   for (const r of rides) {
     if (r.deleted) continue;
-    const dt = rideDatetime(r.key);
+    const dt = rideDatetime(r.date_key);
     if (!dt) continue;
     const t = dt.getTime();
     if (t < min) min = t;
@@ -135,7 +135,7 @@ export function filterRidesByRange(
   toMs: number,
 ): RideView[] {
   return rides.filter((r) => {
-    const dt = rideDatetime(r.key);
+    const dt = rideDatetime(r.date_key);
     if (!dt) return true;
     const t = dt.getTime();
     return t >= fromMs && t <= toMs;

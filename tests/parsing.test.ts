@@ -4,7 +4,9 @@ import {
   autoGranularity,
   bucketRide,
   compareRideKeysDesc,
+  compareRidesByDateDesc,
   parseDurationSec,
+  rideLabel,
   rideMonth,
   sinceFromPreset,
 } from "../src/parsing";
@@ -62,6 +64,20 @@ describe("date helpers", () => {
     expect(autoGranularity([day("garbage")])).toBe("month");
   });
 
+  it("rideLabel is name-driven with the reference date, never the uid", () => {
+    const date = "Sat Jun 13 2026 at 14:22";
+    // Name + reference date → "Name (short date)".
+    expect(rideLabel("Béthune loop", date)).toBe("Béthune loop (Jun 13, 2026, 14:22)");
+    // Name only (unparseable/empty date) → just the name.
+    expect(rideLabel("Béthune loop", "")).toBe("Béthune loop");
+    expect(rideLabel("Béthune loop", "gpx::sha256:deadbeef")).toBe("Béthune loop");
+    // No name → the date alone …
+    expect(rideLabel("", date)).toBe("Jun 13, 2026, 14:22");
+    // … and with neither, a generic word — NEVER a uid/hash.
+    expect(rideLabel("", "")).toBe("ride");
+    expect(rideLabel("  ", "")).toBe("ride");
+  });
+
   it("sinceFromPreset", () => {
     expect(sinceFromPreset("all")).toBeNull();
     const today = sinceFromPreset("today")!;
@@ -96,5 +112,18 @@ describe("date helpers", () => {
       "Wed Jun 3 2026 at 19:04",
       "Wed Jun 3 2026 at 10:39",
     ]);
+  });
+
+  it("compareRidesByDateDesc breaks reference-date ties by name (A→Z)", () => {
+    const same = "Sat Jun 13 2026 at 14:22";
+    const rides = [
+      { date_key: same, title: "Charlie" },
+      { date_key: "Sat Jun 13 2026 at 09:00", title: "Earlybird" },
+      { date_key: same, title: "alpha" }, // lower-case → case-insensitive tie-break
+      { date_key: same, title: "Bravo" },
+    ];
+    const sorted = [...rides].sort(compareRidesByDateDesc).map((r) => r.title);
+    // Newest reference date first; within the shared 14:22 minute, names sort A→Z.
+    expect(sorted).toEqual(["alpha", "Bravo", "Charlie", "Earlybird"]);
   });
 });

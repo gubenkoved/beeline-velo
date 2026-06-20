@@ -308,6 +308,22 @@ export function compareRideKeysDesc(a: string, b: string): number {
 }
 
 /**
+ * Sort comparator for rides: newest **reference date** first, with the ride **name**
+ * (A→Z, case-insensitive) as the tie-breaker for rides that share a reference minute
+ * — common for imported GPX files that fall back to the same upload instant, where a
+ * date-only sort would otherwise be arbitrary. Reads `date_key` (the reference date),
+ * never the uid; an absent name sorts as "".
+ */
+export function compareRidesByDateDesc(
+  a: { date_key: string; title?: string },
+  b: { date_key: string; title?: string },
+): number {
+  const byDate = compareRideKeysDesc(a.date_key, b.date_key);
+  if (byDate !== 0) return byDate;
+  return (a.title ?? "").localeCompare(b.title ?? "", undefined, { sensitivity: "base" });
+}
+
+/**
  * Short, human date for a ride key, e.g. 'Jun 13, 2026, 14:22'. Used to
  * disambiguate rides that share a title in progress/status messages and the map
  * side panel. Returns '' if the key can't be parsed (the caller can fall back to
@@ -319,6 +335,21 @@ export function rideShortLabel(key: string): string {
   const hh = String(dt.getHours()).padStart(2, "0");
   const mm = String(dt.getMinutes()).padStart(2, "0");
   return `${MONTHS[dt.getMonth()].slice(0, 3)} ${dt.getDate()}, ${dt.getFullYear()}, ${hh}:${mm}`;
+}
+
+/**
+ * A user-facing ride label: the ride's NAME with its reference date in parens,
+ * e.g. "Béthune loop (Jun 13, 2026, 14:22)". The name drives the label (for an
+ * imported GPX it's filename-/`<name>`-derived and user-editable); the reference
+ * date is secondary context. Degrades to just the name, or just the date, or the
+ * generic "ride" — but NEVER the uid/identity (a content hash must never surface).
+ * `dateKey` is the ride's reference datetime (`date_key`/`rec.key`), not the uid.
+ */
+export function rideLabel(name: string, dateKey: string): string {
+  const n = (name || "").trim();
+  const when = rideShortLabel(dateKey);
+  if (n && when) return `${n} (${when})`;
+  return n || when || "ride";
 }
 
 /** Return [sortKey 'YYYY-MM', label 'Month YYYY'] for a ride key. */

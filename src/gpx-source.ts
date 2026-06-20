@@ -7,9 +7,10 @@
  *   - metrics (distance / elevation / speed / elapsed) come from the recorded track
  *     (`fullTrackSummary`); `moving_sec` is left unknown (a GPX carries no notion of
  *     "moving" vs "stopped" without a heuristic we deliberately don't apply yet).
- *   - the start instant (and thus the ride key) is the first `<time>` in the track,
- *     else a `YYYY-MM-DD[ HH-MM]` prefix in the filename, else the file's modified
- *     time.
+ *   - the **reference date** (the ride's display datetime, NOT its identity) is the
+ *     first `<time>` in the track, else a `YYYY-MM-DD[ HH-MM]` prefix in the
+ *     filename, else the **upload instant** (when no time information is available).
+ *     It is stamped once on first import and preserved across idempotent re-imports.
  *   - the title is the GPX's own `<name>`/`<desc>`, else a name parsed from the
  *     filename, else a Strava-style time-of-day fallback ("Morning ride").
  *
@@ -48,8 +49,6 @@ const decoder = new TextDecoder();
 interface RawGpx {
   filename: string;
   bytes: Uint8Array;
-  /** The source File's last-modified instant (ms) — the final start-time fallback. */
-  lastModified: number;
 }
 
 export class GpxRideSource implements RideSource {
@@ -111,14 +110,12 @@ export class GpxRideSource implements RideSource {
             gpx.push({
               filename: baseName(e.name),
               bytes: e.bytes,
-              lastModified: f.lastModified,
             });
           }
         } else if (lower.endsWith(".gpx")) {
           gpx.push({
             filename: name,
             bytes: await fileBytes(f),
-            lastModified: f.lastModified,
           });
         } else {
           skipped.push(`${name}: not a .gpx or .zip file`);
@@ -149,10 +146,13 @@ export class GpxRideSource implements RideSource {
     if (ft.points.length === 0) return null;
     const summary = fullTrackSummary(ft);
 
-    // Start instant: first recorded <time> → filename date → file mtime.
+    // Reference date: first recorded <time> → filename date → upload instant. This
+    // is the ride's display datetime, not its identity (that's the content hash), so
+    // a non-deterministic "now" fallback is safe; the Store stamps it once and keeps
+    // it stable across idempotent re-imports of the same bytes.
     const firstTime = ft.times.find((t): t is number => t != null) ?? null;
     const fromName = parseGpxFilename(g.filename);
-    const startMs = firstTime ?? fromName.startMs ?? g.lastModified;
+    const startMs = firstTime ?? fromName.startMs ?? Date.now();
     const dateKey = beelineRideKey(startMs);
     if (!dateKey) return null;
 

@@ -335,9 +335,10 @@ function migrate(data: unknown): Persisted | null {
 }
 
 export interface UpsertFields extends Partial<RideMetrics> {
-  /** The ride's display datetime (`record.key`). Set explicitly for content-
-   *  addressed uids (GPX), whose uid suffix is a content hash, not the datetime;
-   *  Beeline omits it (its uid suffix already IS the datetime). */
+  /** The ride's reference datetime (`record.key`) — its display/sort date, NOT its
+   *  identity. Set on first import for content-addressed uids (GPX), whose uid
+   *  suffix is a content hash; stamped once and preserved across idempotent
+   *  re-imports. Beeline omits it (its uid suffix already IS the datetime). */
   key?: string;
   title?: string;
   title_base?: string;
@@ -522,10 +523,14 @@ export class Store {
 
   upsert(key: string, fields: UpsertFields = {}): RideRecord {
     const uid = toUid(key);
+    const existed = this.rides.has(uid);
     const rec = this.rides.get(uid) ?? blankRecord(uid);
-    // Display datetime for content-addressed (GPX) uids, whose suffix is a hash;
-    // for Beeline the suffix already is the datetime so `key` is omitted there.
-    if (fields.key) rec.key = fields.key;
+    // Reference date (display datetime) for content-addressed (GPX) uids, whose
+    // suffix is a hash. Stamped ONCE on first import and never overwritten by an
+    // idempotent re-import (same bytes → same uid) — like `ingested_at` — so a
+    // timeless GPX whose date initialized to the upload instant stays stable.
+    // Beeline omits `key` (its uid suffix already is the datetime).
+    if (fields.key && !existed) rec.key = fields.key;
     if (fields.title) rec.title = fields.title;    if (fields.title_base) {
       rec.title_base = fields.title_base;
       // Seed the display title from the scan name until a fuller one is checked.

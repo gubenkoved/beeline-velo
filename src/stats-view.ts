@@ -251,7 +251,7 @@ export function mountStatsView(opts: { fit?: boolean } = {}): void {
   if (totalsFlag) totalsFlag.textContent = flag;
   if (recordsFlag) recordsFlag.textContent = flag;
 
-  const s = computeStats(visible);
+  const s = computeStats(visible.map((r) => ({ ...r, key: r.date_key })));
   const totals = document.getElementById("statsTotals");
   if (totals) {
     totals.innerHTML = [

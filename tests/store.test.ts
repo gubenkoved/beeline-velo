@@ -73,6 +73,20 @@ describe("Store", () => {
     expect(byKey(reloaded, "k")!.ingested_at).toBe(at); // persists across reload
   });
 
+  it("stamps the reference date (key) once on first import, stable across re-import", async () => {
+    const s = await Store.load(backend);
+    const uid = rideUid("gpx", "sha256:deadbeefcafe"); // content-addressed GPX uid
+    // First import stamps the reference date (display datetime) on the record.
+    s.upsert(uid, { source: "gpx", key: "Mon Jun 1 2026 at 08:05", title_base: "Loop" });
+    expect(s.rides.get(uid)!.key).toBe("Mon Jun 1 2026 at 08:05");
+    // An idempotent re-import (same content uid) with a DIFFERENT reference date
+    // (e.g. a fresh upload instant) must NOT move the original — set-once, like
+    // ingested_at. Other fields still update.
+    s.upsert(uid, { key: "Sat Jun 20 2026 at 10:00", title: "Renamed loop" });
+    expect(s.rides.get(uid)!.key).toBe("Mon Jun 1 2026 at 08:05"); // unchanged
+    expect(s.rides.get(uid)!.title).toBe("Renamed loop"); // updated
+  });
+
   it("loads a legacy record without ingested_at as empty (unknown)", async () => {
     map.set(STORAGE_KEY, blob({ "beeline::k": { key: "k", title: "Old ride" } }));
     expect(byKey(await Store.load(backend), "k")!.ingested_at).toBe("");

@@ -1024,7 +1024,7 @@ function buildRideMapState(): void {
     cum,
     totalKm: cum[cum.length - 1],
     elapsedSec: ride.elapsed_sec || ride.moving_sec || 0,
-    startMs: rideDatetime(ride.key)?.getTime() ?? null,
+    startMs: rideDatetime(ride.date_key)?.getTime() ?? null,
     px: [],
     full: full && full.points.length >= 2 ? full : null,
     speeds,
@@ -1060,11 +1060,11 @@ export function openRideMap(key: string): void {
   // (no network) so the "Show wind" toggle paints instantly; never auto-fetches.
   getController().showCachedWind(key);
 
-  // Title: the ride's name + location, then its short date.
+  // Title: the ride's name + location, then its short reference date.
   const name = (ride?.title || "Ride") + (ride?.location || "");
-  const when = rideShortLabel(key) || key;
+  const when = rideShortLabel(ride?.date_key ?? "");
   const titleEl = document.getElementById("rideMapTitle");
-  if (titleEl) titleEl.textContent = `${name} · ${when}`;
+  if (titleEl) titleEl.textContent = when ? `${name} · ${when}` : name;
   const hoverEl = document.getElementById("rideMapHover");
   if (hoverEl) hoverEl.textContent = "";
 

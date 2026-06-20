@@ -19,7 +19,7 @@
 import { activeView } from "./app-state";
 import type { RideView } from "./controller";
 import type { DateRange } from "./mapview";
-import { compareRideKeysDesc, rideShortLabel } from "./parsing";
+import { compareRidesByDateDesc, rideShortLabel } from "./parsing";
 import { setSliderFill } from "./slider";
 import type { LatLon } from "./track";
 import { statNum } from "./ui";
@@ -378,7 +378,7 @@ async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Prom
   // dataset) — the date slicer scopes the work, so a narrow window stays cheap.
   const pending = resolved
     .filter((r) => !segCacheByUid.has(segKey(r)))
-    .sort((a, b) => compareRideKeysDesc(a.key, b.key));
+    .sort(compareRidesByDateDesc);
   let done = 0;
   let lastPaint = 0;
   const sweepStart = performance.now();
@@ -405,7 +405,7 @@ async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Prom
     const now = performance.now();
     if (now - sweepStart >= 200 && (now - lastPaint >= 100 || done === pending.length)) {
       lastPaint = now;
-      const label = rideShortLabel(r.key);
+      const label = rideShortLabel(r.date_key);
       showChartMessage(
         "Analysing rides…",
         done / pending.length,

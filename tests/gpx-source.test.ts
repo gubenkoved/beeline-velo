@@ -183,6 +183,20 @@ describe("GpxRideSource", () => {
     // Same content → same identity → the Store upsert updates one ride, never dupes.
     expect(a[0].identity).toBe(b[0].identity);
   });
+
+  it("reference date falls back to the upload instant when the GPX has no time info", async () => {
+    const { source } = makeSource();
+    const before = Date.now();
+    const cards: RideCard[] = [];
+    // No <time> codes, and a filename with no date → only the upload instant remains.
+    await source.importFiles([gpxFile(gpx({ name: "Timeless", times: false }), "loop.gpx")], (c) =>
+      cards.push(c),
+    );
+    const dt = rideDatetime(cards[0].key);
+    expect(dt).not.toBeNull(); // a real reference date, not a content hash
+    // Within a couple of minutes of "now" (the key is minute-resolution).
+    expect(Math.abs(dt!.getTime() - before)).toBeLessThan(120_000);
+  });
 });
 
 describe("Controller + GpxRideSource (multi-source coexistence)", () => {

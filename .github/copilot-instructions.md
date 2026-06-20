@@ -362,6 +362,18 @@ none. The table is grouped by concern; keep new modules in the group they belong
   full set on every interaction. When adding a feature that scans all rides, sanity-check its
   cost against thousands of tracks before considering it done.
 - **Ride keys** are human dates like `"Sat Jun 13 2026 at 14:22"`; months are `"2026-06"` / `"June 2026"`. `beelineRideKey(startMs)` builds one from a Beeline ride's start instant; `rideDatetime()` is its inverse. A ride's `key` is its **display datetime** for all bucketing — distinct from its storage **uid** (`${source}::${identity}`): Beeline's identity is the datetime, but a GPX ride's is a content hash, so for GPX `key` ≠ the uid suffix.
+- **Reference date is the ONLY axis for ordering/bucketing/filtering — never the uid.** A ride's
+  **reference date** is its display datetime (`RideView.date_key`, `RideRecord.key`); the uid/`RideView.key`
+  is **identity only**. Every sort, month/period bucket, date-range filter, granularity pick and date
+  label MUST read the reference date — never parse a date out of a uid (a GPX uid is a content hash and
+  yields `null`, which is exactly what sorted imports after all Beeline rides and printed raw hashes as
+  labels). Sources of the reference date: **Beeline** → the server start instant; **GPX** → the track's
+  first `<time>`, else a `YYYY-MM-DD` filename prefix, else the **upload instant** — stamped once on first
+  import and stable across idempotent re-imports (`Store.upsert` only sets `key` when the record is new).
+- **User-facing ride labels are name-driven, never the uid.** Use `rideLabel(name, dateKey)` (parsing) or
+  the controller's `uidLabel(uid)` — they return "Name (Jun 13, 2026, 14:22)" and degrade to name / date /
+  "ride", but NEVER surface a `gpx::sha256:…` identity. For GPX the name comes from `<name>` → filename →
+  time-of-day and is user-editable.
 - **Job coalescing**: consecutive `upload`/`status`/`download-gpx` tasks merge into one sweep — preserve this when touching `JobQueue`.
 - Only the **Strava** upload path is automated (komoot is detected but left alone).
 

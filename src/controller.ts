@@ -14,6 +14,7 @@ import {
   type RideDetail,
   type RideMetrics,
   rideDatetime,
+  rideLabel,
   rideMonth,
   rideShortLabel,
   rideUid,
@@ -324,6 +325,18 @@ export class Controller {
   }
 
   /**
+   * A user-facing label for a ride uid: its name + reference date (`rideLabel`),
+   * resolved from the stored record — NEVER the raw uid/content hash. Used for task
+   * labels, progress messages and bundle names so a GPX ride reads as e.g.
+   * "Béthune loop (Jun 13, 2026, 14:22)", not its `gpx::sha256:…` identity.
+   */
+  private uidLabel(uid: string): string {
+    const rec = this.store.rides.get(uid);
+    if (rec) return rideLabel(rec.title || rec.title_base, rec.key);
+    return rideShortLabel(uidDateKey(uid)) || "ride";
+  }
+
+  /**
    * Build a route-only ("light") GPX file for one ride synthesized from its cached
    * polyline — no network, no timestamps/elevation. Returns the file, or null when
    * the ride has no usable cached route. Shared by the light export path and the
@@ -583,7 +596,7 @@ export class Controller {
       });
     if (uids.length === 0) return 0;
     for (const uid of uids) this.windBusy.add(uid);
-    const first = rideShortLabel(uidDateKey(uids[0])) || uids[0];
+    const first = this.uidLabel(uids[0]);
     this.jobs.submit("fetch-weather", {
       label:
         uids.length === 1
@@ -1364,7 +1377,7 @@ export class Controller {
             succeeded++;
           } else {
             failures.push(
-              `${rideShortLabel(uidDateKey(uid)) || uid}: no route track to export`,
+              `${this.uidLabel(uid)}: no route track to export`,
             );
           }
           if (task.progress) task.progress.done++;
@@ -1524,7 +1537,7 @@ export class Controller {
   private bundleZipName(files: GpxFile[], mode: GpxMode): string {
     const kind = mode === "full" ? "GPX" : "Routes";
     const dates = files
-      .map((f) => rideDatetime(uidDateKey(f.key)))
+      .map((f) => rideDatetime(this.store.rides.get(f.key)?.key ?? uidDateKey(f.key)))
       .filter((d): d is Date => d !== null)
       .sort((a, b) => a.getTime() - b.getTime());
     const p2 = (n: number) => String(n).padStart(2, "0");
@@ -1647,7 +1660,7 @@ export class Controller {
   rename(key: string, newTitle: string): TaskSnapshotResult {
     const uid = this.normalizeUid(key);
     return this.jobs.submit("rename", {
-      label: rideShortLabel(uidDateKey(uid)) || uid,
+      label: this.uidLabel(uid),
       keys: [uid],
       payload: { title: newTitle },
     });
@@ -1657,7 +1670,7 @@ export class Controller {
   deleteRide(key: string): TaskSnapshotResult {
     const uid = this.normalizeUid(key);
     return this.jobs.submit("delete", {
-      label: rideShortLabel(uidDateKey(uid)) || uid,
+      label: this.uidLabel(uid),
       keys: [uid],
     });
   }

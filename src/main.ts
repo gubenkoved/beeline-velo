@@ -45,7 +45,7 @@ import { type DateRange, dateRange, filterRidesByRange } from "./mapview";
 import {
   autoGranularity,
   bucketRide,
-  compareRideKeysDesc,
+  compareRidesByDateDesc,
   type Granularity,
   rideShortLabel,
   trimmedSpeed,
@@ -1623,11 +1623,11 @@ function renderMatchedCards(keys: string[]): string {
   const matched = keys
     .map((k) => STATE.rides.find((r) => r.key === k && !r.deleted))
     .filter((r): r is RideView => !!r)
-    .sort((a, b) => compareRideKeysDesc(a.key, b.key));
+    .sort(compareRidesByDateDesc);
   if (!matched.length) return "";
   const cards = matched
     .map((r) => {
-      const when = escHtml(rideShortLabel(r.key) || r.key);
+      const when = escHtml(rideShortLabel(r.date_key));
       const name = escHtml((r.title || "Ride") + (r.location || ""));
       const km = escHtml(rideKmText(r));
       const spd = escHtml(rideSpeedText(r));
@@ -2173,7 +2173,7 @@ function renderStats(rides: AppState["rides"]): void {
   panel.classList.remove("hidden");
 
   const g = statGran();
-  const gran: Granularity = g === "auto" ? autoGranularity(rides) : g;
+  const gran: Granularity = g === "auto" ? autoGranularity(rides.map((r) => ({ key: r.date_key }))) : g;
 
   // Outlier-trim sliders belong to the speed view only.
   $("#spTrim").classList.toggle("hidden", statMetric() !== "speed");
@@ -2197,7 +2197,7 @@ function renderStats(rides: AppState["rides"]): void {
   >();
   for (const r of rides) {
     const km = r.distance_km ?? 0;
-    const [bkey, label, short] = bucketRide(r.key, gran);
+    const [bkey, label, short] = bucketRide(r.date_key, gran);
     if (!byM.has(bkey))
       byM.set(bkey, { label, short, km: 0, n: 0, spKm: 0, spSec: 0, spN: 0, rides: [] });
     const e = byM.get(bkey)!;
@@ -2603,7 +2603,7 @@ function render(): void {
 
     const ybody = ybox.querySelector(".ybody")!;
     for (const [mkey, m] of ymonths) {
-      m.rides.sort((a, b) => compareRideKeysDesc(a.key, b.key));
+      m.rides.sort(compareRidesByDateDesc);
       const mkm = m.rides.reduce((s, r) => s + (r.distance_km ?? 0), 0);
       const isOpen = openMonths.has(mkey);
       const mKeys = m.rides.map((r) => r.key);

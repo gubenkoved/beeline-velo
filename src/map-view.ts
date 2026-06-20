@@ -22,7 +22,7 @@ import type { RideView } from "./controller";
 import { createLocate, type Locate } from "./locate";
 import { CLICK_PX, createInteractiveMap, HOT_TRACK, makeExpandToggle } from "./map-core";
 import { type DateRange, type RideTrack, ridesWithTracks } from "./mapview";
-import { compareRideKeysDesc, rideShortLabel } from "./parsing";
+import { compareRidesByDateDesc, rideShortLabel } from "./parsing";
 import { escHtml } from "./ui";
 
 /** What the view needs from the app (injected once via `initMapView`). */
@@ -154,7 +154,7 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
   const inRange = range ? deps.ridesInRange(live, range) : live;
   const visible = deps.applyFilters(inRange);
   const hidden = live.length - visible.length;
-  const rides = visible.slice().sort((a, b) => compareRideKeysDesc(a.key, b.key));
+  const rides = visible.slice().sort(compareRidesByDateDesc);
   if (live.length === 0) {
     side.innerHTML =
       `<div class="ms-empty">No rides on the map yet. ` +
@@ -164,7 +164,7 @@ function renderMapSide(tracks: RideTrack[], missing: number): void {
   }
   const items = rides
     .map((r) => {
-      const when = escHtml(rideShortLabel(r.key) || r.key);
+      const when = escHtml(rideShortLabel(r.date_key));
       const name = escHtml((r.title || "Ride") + (r.location || ""));
       if (!haveKeys.has(r.key)) {
         return (

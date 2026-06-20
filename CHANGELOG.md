@@ -17,6 +17,27 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## fix: order/bucket/label by reference date, never the content-addressed uid
+- **What:** established a hard invariant — a ride's uid/key is **identity only**; everything date-related
+  (sort, month/period bucketing, range-filtering, granularity, date labels) reads the ride's **reference
+  date** (`date_key` on `RideView`, `rec.key` on the record). Switched every date-deriving call site off
+  `.key`: Explore month sort, Selected/Map/Wind-Speed sorts + labels, `dateRange`/`filterRidesByRange`,
+  `computeStats`/`autoGranularity` inputs, the stats chart `bucketRide`, and the single-ride map's start
+  instant. Added a `rideLabel(name, dateKey)` helper (name-driven, reference date in parens — "Béthune
+  loop (Jun 13, 2026, 14:22)") and a controller `uidLabel(uid)` that resolves a record's name+date;
+  used them for the side panels, queue/task labels, bundle names and progress messages so a GPX ride
+  never shows its `gpx::sha256:…` hash. The GPX **reference date** now falls back to the **upload
+  instant** (was the file mtime) when no `<time>`/filename date is present, and is **stamped once** on
+  first import (preserved across idempotent re-imports, like `ingested_at`). Ride-list sorts use a new
+  `compareRidesByDateDesc` that breaks reference-date ties by **name** (A→Z, case-insensitive) so
+  same-minute imports (e.g. GPX files sharing an upload instant) order stably instead of arbitrarily.
+- **Why:** content-addressing made a GPX uid a hash, so any code that parsed a date out of the uid got
+  `null` — sorting every imported ride after all Beeline rides, mis-bucketing stats, letting them ignore
+  the map date slider, and printing the raw hash as a user-facing label. The reference date is the right
+  axis for all of that; the hash is purely storage identity. Making the upload-instant fallback safe (it
+  no longer feeds identity) and set-once keeps a timeless ride's date stable instead of jumping on every
+  re-import.
+
 ## feat: "Drop deleted" — permanently purge tombstoned rides
 - **What:** Deleted rides (soft-delete tombstones kept indefinitely) can now be permanently
   dropped from local state. Added `Store.remove()` (hard delete) + `Controller.dropDeleted(keys?)`
