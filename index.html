@@ -223,6 +223,25 @@
             <input type="range" class="uslider" id="maxSpeed" min="20" max="80" step="1" value="50" />
             <output id="maxSpeedOut">50 km/h</output>
           </label>
+          <div class="seg-tune" title="How a ride is chopped into the roughly-straight stretches that become scatter points">
+            <span class="seg-tune-cap">Segments</span>
+            <label class="trim" title="Look this far along the track before deciding the heading has turned. On slow, dense tracks (a hike) the next point is only a metre or two away, so GPS wiggle looks like constant turning and the ride is shredded into tiny pieces — looking ahead smooths that out. 0 = use the very next point.">
+              Look-ahead
+              <input type="range" class="uslider" id="segLookAhead" min="0" max="50" step="5" value="15" />
+              <output id="segLookAheadOut">15 m</output>
+            </label>
+            <label class="trim" title="Start a new segment once the heading swings more than this from where the segment began. Higher = longer, fewer segments.">
+              Turn
+              <input type="range" class="uslider" id="segTurn" min="15" max="120" step="5" value="35" />
+              <output id="segTurnOut">35°</output>
+            </label>
+            <label class="trim" title="Drop segments shorter than this — too-short stretches are mostly noise.">
+              Min length
+              <input type="range" class="uslider" id="segMinLen" min="50" max="2000" step="50" value="300" />
+              <output id="segMinLenOut">300 m</output>
+            </label>
+            <button type="button" class="ghost small" id="segReset" title="Reset segment tuning to its defaults">Reset</button>
+          </div>
           <button class="ghost small" id="analyticsResolve" style="display:none" title="Resolve historical wind for every ride in the current date range that doesn't have it yet">Resolve wind for rides in range</button>
           <button class="ghost small" id="analyticsFetchGpx" style="display:none" title="Download the full recorded GPX (real timestamps — needed for accurate speed) for the Beeline rides in range that lack it">Fetch full GPX for rides in range</button>
         </div>

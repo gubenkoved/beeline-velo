@@ -122,6 +122,7 @@ import { WindCache } from "./windcache";
 import {
   initWindSpeedView,
   mountWindSpeedView,
+  SEG_TUNE_DEFAULTS,
   windSpeedVisibleRides,
 } from "./windspeed-view";
 
@@ -1095,20 +1096,35 @@ type AnalyticsPrefs = {
   rangeMax: number | null;
   flatOnly: boolean;
   maxSpeed: number;
+  // Segment-geometry tuning (mirrors the sliders; see windspeed-view).
+  lookAheadM: number;
+  turnDeg: number;
+  minLenM: number;
 };
 function loadAnalyticsPrefs(): AnalyticsPrefs {
-  const def: AnalyticsPrefs = { rangeMin: null, rangeMax: null, flatOnly: false, maxSpeed: 50 };
+  const def: AnalyticsPrefs = {
+    rangeMin: null,
+    rangeMax: null,
+    flatOnly: false,
+    maxSpeed: 50,
+    ...SEG_TUNE_DEFAULTS,
+  };
   try {
     const raw = localStorage.getItem(ANALYTICS_PREFS_KEY);
     if (!raw) return def;
     const o = JSON.parse(raw) as Partial<AnalyticsPrefs>;
     const num = (v: unknown): number | null =>
       typeof v === "number" && Number.isFinite(v) ? v : null;
+    const clamp = (v: unknown, lo: number, hi: number, d: number): number =>
+      Math.max(lo, Math.min(hi, num(v) ?? d));
     return {
       rangeMin: num(o.rangeMin),
       rangeMax: num(o.rangeMax),
       flatOnly: o.flatOnly === true,
-      maxSpeed: Math.max(20, Math.min(80, num(o.maxSpeed) ?? 50)),
+      maxSpeed: clamp(o.maxSpeed, 20, 80, 50),
+      lookAheadM: clamp(o.lookAheadM, 0, 50, SEG_TUNE_DEFAULTS.lookAheadM),
+      turnDeg: clamp(o.turnDeg, 15, 120, SEG_TUNE_DEFAULTS.turnDeg),
+      minLenM: clamp(o.minLenM, 50, 2000, SEG_TUNE_DEFAULTS.minLenM),
     };
   } catch {
     return def; // malformed JSON / storage disabled — fall back to neutral
@@ -1121,15 +1137,44 @@ function saveAnalyticsPrefs(): void {
       (document.getElementById("flatOnly") as HTMLInputElement | null)?.checked ?? false;
     const maxEl = document.getElementById("maxSpeed") as HTMLInputElement | null;
     const maxSpeed = maxEl ? parseInt(maxEl.value, 10) || 50 : 50;
+    const segVal = (id: string, d: number): number => {
+      const el = document.getElementById(id) as HTMLInputElement | null;
+      const v = el ? parseInt(el.value, 10) : d;
+      return Number.isFinite(v) ? v : d;
+    };
     const prefs: AnalyticsPrefs = {
       rangeMin: analyticsRange?.minMs ?? null,
       rangeMax: analyticsRange?.maxMs ?? null,
       flatOnly,
       maxSpeed,
+      lookAheadM: segVal("segLookAhead", SEG_TUNE_DEFAULTS.lookAheadM),
+      turnDeg: segVal("segTurn", SEG_TUNE_DEFAULTS.turnDeg),
+      minLenM: segVal("segMinLen", SEG_TUNE_DEFAULTS.minLenM),
     };
     localStorage.setItem(ANALYTICS_PREFS_KEY, JSON.stringify(prefs));
   } catch {
     /* private mode / storage disabled — non-fatal */
+  }
+}
+/** Format a segment-tuning slider's value for its `<output>` (unit per id). */
+function segTuneLabel(id: string, value: number): string {
+  return id === "segTurn" ? `${value}°` : `${value} m`;
+}
+/** Write segment-tuning values into their sliders + outputs (shared by restore-on-boot
+ *  and the Reset button), keeping each `.uslider` accent fill in sync. */
+function setSegTuneDom(v: { lookAheadM: number; turnDeg: number; minLenM: number }): void {
+  for (const [id, value] of [
+    ["segLookAhead", v.lookAheadM],
+    ["segTurn", v.turnDeg],
+    ["segMinLen", v.minLenM],
+  ] as const) {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    if (el) {
+      el.value = String(value);
+      setSliderFill(el);
+    }
+    const out = document.getElementById(`${id}Out`) as HTMLOutputElement | null;
+    if (out) out.value = segTuneLabel(id, value);
   }
 }
 /** Mirror the saved chart filters into their DOM controls (called once at boot). */
@@ -1144,6 +1189,7 @@ function applyAnalyticsPrefsToDom(): void {
   }
   const maxOut = document.getElementById("maxSpeedOut") as HTMLOutputElement | null;
   if (maxOut) maxOut.value = `${p.maxSpeed} km/h`;
+  setSegTuneDom(p);
 }
 // The remembered date window, adopted on the first range computation after load
 // (then cleared so later refreshes reconcile normally).
@@ -3207,6 +3253,13 @@ document.addEventListener("click", (e) => {
     const keys = windSpeedVisibleRides().map((r) => r.key);
     return fetchFullGpx(keys);
   }
+  // Analytics view: restore the segment-geometry knobs to their defaults.
+  if (t.id === "segReset") {
+    setSegTuneDom(SEG_TUNE_DEFAULTS);
+    saveAnalyticsPrefs();
+    void mountWindSpeedView();
+    return;
+  }
 
   // Full-screen single-ride route map: open from a mini-map's expand button, close
   // from its bar button or by clicking the backdrop outside the canvas.
@@ -3729,6 +3782,13 @@ document.addEventListener("change", (e) => {
     saveAnalyticsPrefs();
     void mountWindSpeedView();
   }
+  // Segment-geometry knobs re-chop every ride, so (unlike the cheap max-speed
+  // post-filter) they commit on `change` (slider release) — never mid-drag — and
+  // re-sweep with the existing progress overlay.
+  if (cb.id === "segLookAhead" || cb.id === "segTurn" || cb.id === "segMinLen") {
+    saveAnalyticsPrefs();
+    void mountWindSpeedView();
+  }
 });
 
 // Drag the selected range window (between the two thumbs) to slide it as a whole.
@@ -3809,6 +3869,12 @@ document.addEventListener("input", (e) => {
     ($("#maxSpeedOut") as HTMLOutputElement).value = `${parseInt(el.value, 10) || 0} km/h`;
     saveAnalyticsPrefs();
     void mountWindSpeedView();
+    return;
+  }
+  if (el.id === "segLookAhead" || el.id === "segTurn" || el.id === "segMinLen") {
+    // Live label only while dragging; the re-sweeping recompute commits on `change`.
+    const out = document.getElementById(`${el.id}Out`) as HTMLOutputElement | null;
+    if (out) out.value = segTuneLabel(el.id, parseInt(el.value, 10) || 0);
     return;
   }
   if (el.id === "setMovingThresh") {

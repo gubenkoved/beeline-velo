@@ -28,6 +28,13 @@ export interface SegmentOpts {
   /** Hops at or below this speed (km/h) count as "stopped": they end the current
    *  segment and are excluded from its moving time. Default 1 (= movingThresholdKmh). */
   stopKmh?: number;
+  /** Measure the per-hop heading over at least this much track ahead (metres) rather
+   *  than to the immediately-next point. On slow, dense tracks (e.g. a hike) adjacent
+   *  points are only a metre or two apart, so GPS jitter dominates the bearing and the
+   *  ride is shredded into sub-threshold fragments; looking ~15 m ahead averages that
+   *  noise out while still registering real corners. Default 0 = use the next point
+   *  (legacy behaviour). */
+  lookAheadM?: number;
 }
 
 /** One roughly-straight, moving stretch of a ride: a single scatter point. */
@@ -72,9 +79,20 @@ export function segmentRide(
   const minKm = opts.minKm ?? 0.3;
   const minSec = opts.minSec ?? 20;
   const stopKmh = opts.stopKmh ?? 1;
+  const lookAheadKm = Math.max(0, opts.lookAheadM ?? 0) / 1000;
   const n = points.length;
   if (n < 2 || times.length !== n || along.length !== n) return [];
   const cum = cumulativeKm(points); // cum[i] = km from start to point i
+
+  // Heading at hop i, measured over at least `lookAheadKm` of track (or to the next
+  // point when lookAhead is 0 / the track ends): smooths GPS jitter on slow stretches
+  // so it doesn't read as a turn. Only the turn test uses this; distance/time/wind
+  // still accumulate per raw hop.
+  const headingAt = (i: number): number => {
+    let j = i + 1;
+    while (j < n - 1 && cum[j] - cum[i] < lookAheadKm) j++;
+    return bearingDeg(points[i], points[j]);
+  };
 
   const out: WindSeg[] = [];
   // Accumulators for the open segment.
@@ -128,12 +146,14 @@ export function segmentRide(
       continue;
     }
     const brg = bearingDeg(points[i], points[i + 1]);
-    // Heading turn beyond tolerance → start a fresh segment AT this hop.
-    if (refBrg != null && Math.abs(angleDiff(brg, refBrg)) > turnDeg) {
+    // Heading turn beyond tolerance → start a fresh segment AT this hop. The turn is
+    // judged on the look-ahead heading (jitter-smoothed), not the raw next-point one.
+    const headBrg = lookAheadKm > 0 ? headingAt(i) : brg;
+    if (refBrg != null && Math.abs(angleDiff(headBrg, refBrg)) > turnDeg) {
       flush();
     }
     if (refBrg == null) {
-      refBrg = brg;
+      refBrg = headBrg;
       startEle = eles[i] ?? null;
     }
     segKm += hopKm;

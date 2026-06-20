@@ -3910,6 +3910,44 @@ body.climate-expanded .cl-ctl input[type="range"] {
   min-width: 6ch;
   text-align: right;
 }
+/* Segment-geometry knobs (look-ahead / turn / min-length): a self-contained sub-group
+   so the "how a ride is chopped" controls stay together when the row wraps, set off
+   from the flat-only / max-speed post-filters by a hairline rule + a quiet caption. */
+.seg-tune {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+}
+.seg-tune-cap {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+  color: var(--muted);
+}
+/* Narrow screens: let each control take a full row with a grabbable full-width
+   thumb, and drop the sub-group's left rule/indent so it reads as a clean stack. */
+@media (max-width: 640px) {
+  .chart-controls {
+    gap: 10px;
+  }
+  .seg-tune {
+    width: 100%;
+    padding-left: 0;
+    border-left: 0;
+    gap: 10px;
+  }
+  .chart-controls .trim {
+    width: 100%;
+  }
+  .chart-controls .trim input[type="range"] {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+}
 /* Mirrors `.freq-main`: a flex column so the canvas fills the space and the date
    filter sits in flow beneath it rather than overlaying it. */
 .chart-wrap {

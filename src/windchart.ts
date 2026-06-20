@@ -181,10 +181,14 @@ export function drawWindSpeedChart(
   // Axis captions.
   ctx.fillStyle = colMuted;
   ctx.textAlign = "center";
-  ctx.fillText("← headwind        tailwind →   (km/h)", (x0 + x1) / 2, cssH - 4);
+  // Sit the caption on its baseline just inside the bottom edge — with the tick
+  // labels' "middle" baseline it was clipped in half.
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("← headwind        tailwind →   (km/h)", (x0 + x1) / 2, cssH - 5);
   ctx.save();
   ctx.translate(12, (y0 + y1) / 2);
   ctx.rotate(-Math.PI / 2);
+  ctx.textBaseline = "middle";
   ctx.fillStyle = colText;
   ctx.fillText("avg moving speed (km/h)", 0, 0);
   ctx.restore();

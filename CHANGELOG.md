@@ -17,6 +17,20 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## tunable wind-vs-speed segmentation (look-ahead bearing + knobs)
+- **What:** the Wind/Speed chopper now derives each hop's heading over a configurable
+  **look-ahead distance** (default 15 m) instead of the immediately-next point, and
+  exposes three end-user sliders in the chart controls — Look-ahead, Turn tolerance,
+  Min segment length — grouped under a "Segments" sub-group with a Reset, persisted in
+  the analytics prefs and applied live (geometry knobs re-sweep on release; the cache
+  key folds in the tuning). Responsive: the controls stack full-width under 640 px.
+- **Why:** a slow, dense track (e.g. a Wikiloc hike at ~3 km/h) has points a metre or
+  two apart, so the next-point bearing is dominated by GPS jitter and the ride was
+  shredded into sub-threshold fragments that all got dropped — a 15.5 km hike yielded a
+  single segment. Looking ahead averages the jitter out so real headings hold, and the
+  knobs let any track type (hike → MTB) be dialled in; `lookAheadM:0` preserves the
+  exact legacy behaviour (regression-tested).
+
 ## capture a per-ride library ingest date
 - **What:** added an `ingested_at` (ISO-8601) field to each `RideRecord`, stamped
   once on the very first `upsert` and never overwritten by later syncs/checks

@@ -126,6 +126,60 @@ describe("segmentRide", () => {
     // Mismatched array lengths → defensive empty.
     expect(segmentRide(points, times, [null], [0], OPTS, "u1")).toEqual([]);
   });
+
+  // A slow, dense track (a hike): tiny eastward hops with alternating lateral GPS
+  // jitter, so each raw next-point bearing swings wildly even though the real heading
+  // is dead east. This is exactly what defeats the next-point chopper.
+  function jitterEast(
+    k: number,
+    hopM: number,
+    jitterM: number,
+    dtSec: number,
+  ): { points: LatLon[]; times: number[] } {
+    const lat0 = 52;
+    const lon0 = 4;
+    const mPerLat = 111320;
+    const mPerLon = 111320 * Math.cos((lat0 * Math.PI) / 180);
+    const points: LatLon[] = [];
+    const times: number[] = [];
+    for (let i = 0; i < k; i++) {
+      const north = i % 2 === 0 ? -jitterM : jitterM;
+      points.push([lat0 + north / mPerLat, lon0 + (i * hopM) / mPerLon]);
+      times.push(i * dtSec * 1000);
+    }
+    return { points, times };
+  }
+
+  it("look-ahead bearing rescues a slow, jittery track from over-fragmentation", () => {
+    const { points, times } = jitterEast(50, 10, 3, 5);
+    const along = points.map(() => 2);
+    const eles = points.map(() => null);
+    // Next-point heading: every hop reads as a >35° turn, so all fragments fall below
+    // the min length/duration and are dropped → no usable segments.
+    const raw = segmentRide(points, times, eles, along, { stopKmh: 1 }, "u1");
+    expect(raw.length).toBe(0);
+    // Looking ~30 m ahead averages out the jitter, so the dead-east heading holds and
+    // the stretch survives as a real segment.
+    const look = segmentRide(points, times, eles, along, { stopKmh: 1, lookAheadM: 30 }, "u1");
+    expect(look.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("lookAheadM:0 is byte-identical to omitting it (legacy behaviour preserved)", () => {
+    // An out-and-back with a stop, exercising turn + stop + accumulation paths.
+    const points: LatLon[] = [
+      [52.0, 4.0],
+      [52.02, 4.0],
+      [52.04, 4.0],
+      [52.04, 4.02],
+      [52.04, 4.04],
+    ];
+    const times = points.map((_, i) => i * 300 * 1000);
+    const along = [5, 5, -3, -3, -3];
+    const eles = [0, 10, 20, 30, 40];
+    const legacy = segmentRide(points, times, eles, along, { stopKmh: 1 }, "u1");
+    const explicit0 = segmentRide(points, times, eles, along, { stopKmh: 1, lookAheadM: 0 }, "u1");
+    expect(explicit0).toEqual(legacy);
+  });
 });
 
 describe("linearRegression", () => {

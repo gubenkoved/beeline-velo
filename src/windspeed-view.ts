@@ -89,9 +89,15 @@ export function initWindSpeedView(d: WindSpeedDeps): void {
 }
 
 /** Memo key for a ride's segments: uid + wind version + full-GPX presence, so a
- *  re-resolve or a full-GPX fetch busts it. */
+ *  re-resolve or a full-GPX fetch busts it. The segment-geometry tuning (look-ahead /
+ *  turn / min-length) also changes the chopper's output, so its signature is folded
+ *  in — a knob change yields fresh cache entries and reverting reuses the old ones. */
 function segKey(r: RideView): string {
-  return `${r.key}::${deps.weatherFetchedAt(r.key)}::${r.gpx_cached ? "g" : "_"}`;
+  const t = segmentTuning();
+  return (
+    `${r.key}::${deps.weatherFetchedAt(r.key)}::${r.gpx_cached ? "g" : "_"}` +
+    `::la${t.lookAheadM}t${t.turnDeg}m${t.minLenM}`
+  );
 }
 
 /** The non-deleted rides within the current Wind/Speed date selection. */
@@ -108,6 +114,26 @@ function analyticsMaxSpeed(): number {
   const el = document.getElementById("maxSpeed") as HTMLInputElement | null;
   const v = el ? parseInt(el.value, 10) : 50;
   return Number.isFinite(v) ? Math.max(20, Math.min(80, v)) : 50;
+}
+
+/** Default segment-geometry tuning (also the values the Reset button restores). */
+export const SEG_TUNE_DEFAULTS = { lookAheadM: 15, turnDeg: 35, minLenM: 300 };
+
+/** Read + clamp the segment-geometry knobs from their sliders. These feed BOTH the
+ *  chopper (`SegmentOpts`) and the segment-cache key, so they must be read in one
+ *  canonical place. Unlike the max-speed / flat-only post-filters, changing any of
+ *  these re-runs the per-ride segmentation (the cache key changes). */
+function segmentTuning(): { lookAheadM: number; turnDeg: number; minLenM: number } {
+  const read = (id: string, lo: number, hi: number, def: number): number => {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    const v = el ? parseInt(el.value, 10) : def;
+    return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : def;
+  };
+  return {
+    lookAheadM: read("segLookAhead", 0, 50, SEG_TUNE_DEFAULTS.lookAheadM),
+    turnDeg: read("segTurn", 15, 120, SEG_TUNE_DEFAULTS.turnDeg),
+    minLenM: read("segMinLen", 50, 2000, SEG_TUNE_DEFAULTS.minLenM),
+  };
 }
 
 /** Render the empty/blocked state, adapting message + CTA to whether the blocker is
@@ -282,7 +308,13 @@ async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Prom
     return;
   }
 
-  const opts: SegmentOpts = { stopKmh: deps.movingThresholdKmh() };
+  const tune = segmentTuning();
+  const opts: SegmentOpts = {
+    stopKmh: deps.movingThresholdKmh(),
+    lookAheadM: tune.lookAheadM,
+    turnDeg: tune.turnDeg,
+    minKm: tune.minLenM / 1000,
+  };
   // Sweep only the wind-resolved rides inside the selected window (not the whole
   // dataset) — the date slicer scopes the work, so a narrow window stays cheap.
   const pending = resolved
