@@ -208,6 +208,13 @@ export interface RideRecord extends RideMetrics {
   /** Source-native id: the Beeline push-id, or an imported GPX's content hash. */
   source_id: string;
   last_seen: string;
+  /** ISO-8601 time the ride first entered the local library. Set once on the very
+   *  first upsert and never overwritten by later syncs/checks. Empty for legacy
+   *  records written before this field existed (ingest date unknown). */
+  ingested_at: string;
+  /** ISO-8601 time the ride first reached "uploaded" on Strava. Set once on that
+   *  status transition and never re-stamped. Beeline-only: GPX rides can't upload
+   *  to Strava, so theirs stays empty for good. Empty until (and unless) uploaded. */
   uploaded_at: string;
   /** True when the ride was known locally but has since vanished from the source. */
   deleted: boolean;
@@ -256,6 +263,7 @@ function blankRecord(uid: string): RideRecord {
     source: source as RideSource,
     source_id: "",
     last_seen: "",
+    ingested_at: "",
     uploaded_at: "",
     deleted: false,
     deleted_at: "",
@@ -542,6 +550,9 @@ export class Store {
     // Seeing a ride again means it is NOT deleted (clear any stale flag).
     rec.deleted = false;
     rec.deleted_at = "";
+    // Stamp the library ingest date once, the first time the ride is seen, and
+    // never overwrite it on later syncs/checks (mirrors uploaded_at/deleted_at).
+    if (!rec.ingested_at) rec.ingested_at = nowIso();
     rec.last_seen = nowIso();
     this.rides.set(uid, rec);
     return rec;

@@ -17,6 +17,15 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## capture a per-ride library ingest date
+- **What:** added an `ingested_at` (ISO-8601) field to each `RideRecord`, stamped
+  once on the very first `upsert` and never overwritten by later syncs/checks
+  (mirroring `uploaded_at`/`deleted_at`). Legacy records load with it empty.
+- **Why:** we now record *when* a ride first entered the local library, distinct
+  from its start time (`key`) and `last_seen`. It rides along in the persisted/
+  backup blob with no UI surface for now — a foundation for future "recently
+  added" sorting/filtering without re-deriving it later.
+
 ## gpx-relay deploy: normalize origins to scheme://host, default concurrency 1
 - **What:** `deploy.sh` now reduces every `ALLOWED_ORIGINS` entry to a bare origin
   (`scheme://host[:port]`), stripping any path/query/fragment as well as the existing

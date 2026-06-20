@@ -59,6 +59,25 @@ describe("Store", () => {
     expect(byKey(s, "k")!.uploaded_at).toBe(at);
   });
 
+  it("stamps ingested_at once on first upsert and never overwrites it", async () => {
+    const s = await Store.load(backend);
+    s.upsert("k", { title_base: "Morning ride" });
+    const at = byKey(s, "k")!.ingested_at;
+    expect(at).not.toBe(""); // stamped the first time the ride is seen
+    s.upsert("k", { distance_km: 12.3 }); // a later sync/check
+    expect(byKey(s, "k")!.ingested_at).toBe(at); // unchanged
+
+    s.save();
+    await s.flush();
+    const reloaded = await Store.load(backend);
+    expect(byKey(reloaded, "k")!.ingested_at).toBe(at); // persists across reload
+  });
+
+  it("loads a legacy record without ingested_at as empty (unknown)", async () => {
+    map.set(STORAGE_KEY, blob({ "beeline::k": { key: "k", title: "Old ride" } }));
+    expect(byKey(await Store.load(backend), "k")!.ingested_at).toBe("");
+  });
+
   it("scrubs known bad titles on load", async () => {
     map.set(STORAGE_KEY, blob({ "beeline::k": { key: "k", title: "Heatmap" } }));
     expect(byKey(await Store.load(backend), "k")!.title).toBe("");
