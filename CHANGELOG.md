@@ -17,6 +17,50 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## refactor: collapse the Wind/Speed controls into one grouped Settings accordion
+- **What:** Replaced the three accordion cards (Settings / Crosswind / Segments) with a
+  SINGLE "Settings" accordion (`#accSettings`, open by default) whose body splits the
+  controls into all-caps labelled groups (FILTERS, CROSSWIND, SEGMENTS). Each group is a
+  tight cluster — a quiet uppercase caption sitting directly above its own control row
+  (`.ctl-grp` / `.ctl-grp-head` / `.ctl-grp-row`) — with the hairline separator BETWEEN
+  adjacent groups (never under a header, which read as splitting it off from its controls).
+  Inner-control styling re-scoped from `.ctl-acc-body` to `.ctl-grp-row`.
+- **Why:** Three separate cards (three borders, three chevrons) read as too many
+  accordions. One card with quiet between-group separators is lighter and more cohesive,
+  while still collapsible to a single bar.
+
+## refactor: fold the Wind/Speed basics into a Settings accordion
+- **What:** Wrapped the two basic filters (Flat segments only, Max speed) in a third
+  `<details>` accordion card ("Settings", open by default) matching Crosswind/Segments,
+  so the whole control area is one cohesive stack of accordion cards. The contextual
+  resolve/fetch action buttons moved below the stack (`.chart-controls`, no own margin
+  so they leave no gap while hidden).
+- **Why:** The basics sat as a loose row above the two accordion cards, reading as a
+  different style. Folding them into a peer accordion (kept open so the primary filters
+  stay visible) makes the area visually consistent.
+
+## fix: hide the Wind/Speed hover tooltip at rest (stray accent pill)
+- **What:** Added a `.chart-tip.hidden { display: none }` backing rule. The hover
+  tooltip (`#windSpeedTip`) is shown/hidden purely via the `hidden` class, but this
+  sheet has no global `.hidden`, so the empty tooltip rendered as a stray
+  `--accent-dim`-bordered pill at the chart's top-left until the first hover.
+- **Why:** Pre-existing gap from the "tap a dot" feature, surfaced while polishing the
+  controls. Same class of bug as other components here — each must back its own
+  `.hidden` state explicitly.
+
+## feat: fold the Wind/Speed advanced knobs into Crosswind + Segments accordions
+- **What:** Reworked the wind-vs-speed control bar. The two basic filters (Flat
+  segments only, Max speed) stay visible; the two advanced groups (Crosswind,
+  Segments) each became a self-contained `<details>` accordion card (`.ctl-acc`):
+  a clickable header with a rotating CSS chevron, collapsed by default, whose own
+  controls expand directly beneath it. Native `<details>` drives open/close (no JS
+  toggle, no persisted flag).
+- **Why:** The first pass used one detached "Tweak" panel whose button read as
+  disconnected from what it opened. Per-group accordions keep each knob visually
+  attached to the group it belongs to, read consistently, and give a calm default
+  look without losing any capability.
+
+
 ## feat: tap a Wind/Speed dot to find + open its ride
 - **What:** Made the wind-vs-speed scatter interactive. `drawWindSpeedChart` now returns
   a hit-test layout (`ChartLayout`/`ChartDot`, CSS-px dot geometry); new pure

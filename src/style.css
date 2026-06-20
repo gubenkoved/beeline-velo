@@ -465,7 +465,7 @@ button.small {
 /* Flat mode of the .custom range: drops the pill box (no background / border / pad) so
    it blends straight into a controls row instead of reading as a separate chip — the
    underlined inputs stay as the only affordance. Used for the Wind/Speed crosswind
-   band, where the surrounding .ctl-group already frames it. */
+   band, where the surrounding accordion body already frames it. */
 .custom.flat,
 .custom.flat:hover,
 .custom.flat:focus-within,
@@ -4040,52 +4040,138 @@ body.climate-expanded .cl-ctl input[type="range"] {
 }
 
 /* -- analytics view (wind-vs-speed scatter) ------------------------------- */
-.chart-controls {
+/* One shared row treatment for the contextual action-button row (`.chart-controls`)
+   and each settings group's control row (`.ctl-grp-row`), so every cluster and its
+   inner controls read identically. */
+.chart-controls,
+.ctl-grp-row {
   display: flex;
   align-items: center;
   gap: 14px;
   flex-wrap: wrap;
-  margin: 0 0 10px;
   color: var(--muted);
   font-size: 12px;
 }
-.chart-controls .trim {
+/* No own margin: the accordion above already provides the spacing, and the
+   resolve/fetch buttons inside are usually hidden — an own margin would leave a
+   phantom gap before the chart in the common (no-buttons) case. */
+.chart-controls {
+  margin: 0;
+}
+.chart-controls .trim,
+.ctl-grp-row .trim {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
 }
-.chart-controls .trim input[type="checkbox"] {
+.chart-controls .trim input[type="checkbox"],
+.ctl-grp-row .trim input[type="checkbox"] {
   accent-color: var(--accent);
 }
-.chart-controls input[type="range"] {
+.chart-controls input[type="range"],
+.ctl-grp-row input[type="range"] {
   width: 110px;
 }
-.chart-controls output {
+.chart-controls output,
+.ctl-grp-row output {
   font-family: var(--mono);
   font-size: 12px;
   color: var(--text);
   min-width: 6ch;
   text-align: right;
 }
-/* A self-contained sub-group of related controls (e.g. Segments, Crosswind): keeps
-   them together when the row wraps, set off from the leading filters by a hairline
-   rule + a quiet uppercase caption. One canonical grouping treatment for the chart
-   controls so every cluster reads the same. */
-.ctl-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding-left: 14px;
-  border-left: 1px solid var(--line);
+.ctl-grp-row .cw-filter input[type="number"] {
+  width: 4.5ch;
 }
-.ctl-group-cap {
+/* A single "Settings" accordion holding every tuning knob, its body split into all-caps
+   groups (Filters, Crosswind, Segments). One card with quiet internal separators reads
+   lighter than a stack of separate cards. */
+.ctl-accordions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.ctl-acc {
+  border: var(--ctrl-border) solid var(--line);
+  border-radius: var(--ctrl-radius);
+  background: var(--panel-2, rgba(255, 255, 255, 0.02));
+}
+.ctl-acc > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  padding: var(--ctrl-pad-y) var(--ctrl-pad-x);
+  border-radius: inherit;
+}
+.ctl-acc > summary::-webkit-details-marker {
+  display: none;
+}
+.ctl-acc > summary:hover .ctl-acc-cap {
+  color: var(--text);
+}
+/* Chevron sits at the trailing edge and rotates open — drawn as a CSS triangle, no glyph. */
+.ctl-acc > summary::after {
+  content: "";
+  margin-left: auto;
+  align-self: center;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--muted);
+  transition: transform 0.15s ease;
+}
+.ctl-acc[open] > summary::after {
+  transform: rotate(180deg);
+}
+.ctl-acc[open] > summary {
+  border-bottom: var(--ctrl-border) solid var(--line);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.ctl-acc-cap {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 11px;
   color: var(--muted);
 }
+.ctl-acc-hint {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+/* Body = a vertical stack of labelled groups. Each group is a TIGHT cluster: a quiet
+   all-caps caption sitting directly above its controls (small gap, no rule between them
+   — a rule there reads as splitting the header off from what it labels). The hairline
+   separator goes BETWEEN adjacent groups instead, so each header clearly belongs to the
+   controls beneath it. */
+.ctl-acc-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--ctrl-pad-x);
+}
+.ctl-grp {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px 0;
+}
+.ctl-grp + .ctl-grp {
+  border-top: var(--ctrl-border) solid var(--line);
+}
+.ctl-grp-head {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
 /* Crosswind colour legend: a calm→strong gradient strip with 0/max end-labels, shown
    under the chart controls only while "Colour by crosswind" is on. */
 .wind-legend {
@@ -4111,26 +4197,18 @@ body.climate-expanded .cl-ctl input[type="range"] {
   font-family: var(--mono);
   color: var(--text);
 }
-/* Crosswind min–max filter: the number inputs match the shared `.custom` range look. */
-.chart-controls .cw-filter input[type="number"] {
-  width: 4.5ch;
-}
-/* Narrow screens: let each control take a full row with a grabbable full-width
-   thumb, and drop the sub-group's left rule/indent so it reads as a clean stack. */
+/* Narrow screens: let each control take a full row with a grabbable full-width thumb. */
 @media (max-width: 640px) {
-  .chart-controls {
+  .chart-controls,
+  .ctl-grp-row {
     gap: 10px;
   }
-  .ctl-group {
-    width: 100%;
-    padding-left: 0;
-    border-left: 0;
-    gap: 10px;
-  }
-  .chart-controls .trim {
+  .chart-controls .trim,
+  .ctl-grp-row .trim {
     width: 100%;
   }
-  .chart-controls .trim input[type="range"] {
+  .chart-controls .trim input[type="range"],
+  .ctl-grp-row .trim input[type="range"] {
     flex: 1;
     width: auto;
     min-width: 0;
@@ -4199,6 +4277,12 @@ body.climate-expanded .cl-ctl input[type="range"] {
   font-size: 11.5px;
   color: var(--text);
   line-height: 1.35;
+}
+/* No global `.hidden` rule exists (each component scopes its own), so back the resting
+   state explicitly — otherwise the empty tooltip shows as a stray accent-bordered pill
+   at the chart's top-left until the first hover. */
+.chart-tip.hidden {
+  display: none;
 }
 /* Calm status overlay centred over the scatter (analysing / nothing in range). It
    never resizes the layout — pointer-events stay off so the date slider beneath it
