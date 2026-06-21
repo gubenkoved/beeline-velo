@@ -830,7 +830,11 @@ function showRideTrackPoint(latLng: [number, number], idx: number, km: number): 
     // instead of snapping on each rebuilt node.
     const els = ensureHoverEls(out);
     els.text.textContent = parts.join(" · ");
-    const w = windProjectionAt(latLng);
+    // The wind dial belongs to wind colour mode only — it's the live readout for the
+    // head/tailwind colouring. Outside wind mode it must vanish completely (not linger
+    // as a narrow pill) even when wind has been resolved for the route, so gate it on
+    // the colour mode, not merely on wind data being available.
+    const w = rideMapColorMode === "wind" ? windProjectionAt(latLng) : null;
     if (w) {
       updateWindDial(els.dial, w);
       els.dial.classList.remove("hidden");
@@ -1288,6 +1292,9 @@ export function fetchRideMapFull(): void {
 /** Switch the route-colouring mode (plain / by elevation / by speed). */
 export function setRideMapColor(mode: "none" | "height" | "speed"): void {
   rideMapColorMode = mode;
+  // Leaving wind mode: drop the wind dial immediately rather than letting it linger
+  // until the next hover move (these modes are never "wind").
+  windDialEl?.classList.add("hidden");
   drawRideLine();
   syncRideMapControls();
 }

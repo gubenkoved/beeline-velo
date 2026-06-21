@@ -17,6 +17,40 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## ridemap: hide the empty wind-info strip when wind isn't resolved
+- **What:** the wind summary strip (`#rideMapWind`, the faint-blue band that shows the
+  resolved head/tailwind + data provenance) was leaking as an empty ~15px band between the
+  stats summary and the map whenever wind wasn't resolved. Root cause: this sheet has no
+  global `.hidden` rule, and `.ridemap-wind` never backed its own — so the element's
+  `hidden` class did nothing and it rendered empty. Added `.ridemap-wind.hidden {
+  display: none }`.
+- **Why:** an empty coloured band reads as a broken/unexplained gap; the strip should only
+  occupy space when it actually has wind content to show.
+
+## ridemap: show the wind dial only in wind colour mode
+- **What:** the hover readout's wind dial (the little compass pill) now appears only when
+  the route is in **wind** colour mode. Previously it surfaced on hover whenever wind had
+  been resolved for the ride — so after resolving wind once, it kept showing as a narrow
+  pill even in plain/height/speed modes. Gated the dial on `rideMapColorMode === "wind"`,
+  and it's dropped immediately when you switch colour mode away from wind (not lingering
+  until the next hover).
+- **Why:** the dial is the live readout *for* the head/tailwind colouring; outside wind
+  mode it's just stray, unexplained chrome. Tying it to the mode keeps the readout honest —
+  it shows wind only when wind is what you're looking at.
+
+## ridemap: stop the bar resizing when you start hovering the track
+- **What:** in the full-screen ride map, entering scrub mode (hovering the route / dragging
+  the profile) no longer changes the header bar's height. The toolbar is the bar's tallest
+  child; scrub mode used to `display:none` it, so the bar collapsed by a few px to the
+  shorter readout — a visible, jerky jump on every hover (the `min-height: 51px` floor was
+  below the real ~54px control-row height once the seg controls show). Now scrub mode keeps
+  the toolbar occupying its full height (collapsed to zero width + `visibility:hidden`)
+  instead of removing it, so the bar box is byte-for-byte identical resting vs scrubbing
+  while the freed width still gives the live readout centre stage.
+- **Why:** the resizing read as jerky/broken; holding the bar height truly constant
+  (verified delta 0 in-browser) makes scrubbing feel stable, and tracking the real toolbar
+  height auto-covers the compact-fold case rather than relying on a magic pixel floor.
+
 ## strava: quiet the per-card upload button, add "Show in Strava"
 - **What:** the loud accent "Push to Strava" button is gone from the always-visible ride
   row; per-ride upload now lives as a quiet item inside the `⋯` overflow menu (bulk "Push

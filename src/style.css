@@ -2150,6 +2150,12 @@ span.caret.open::before {
   font-size: 12.5px;
   color: var(--text);
 }
+/* This sheet has NO global `.hidden` rule — each component backs its own. Without this
+   the wind strip leaked as an empty faint-blue band between the stats summary and the
+   map whenever wind wasn't resolved (it's only populated in wind mode). */
+.ridemap-wind.hidden {
+  display: none;
+}
 .ridemap-wind .wind-main {
   font-variant-numeric: tabular-nums;
 }
@@ -2236,12 +2242,9 @@ body.ridemap-open {
   padding: 10px 14px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
-  /* Pin the bar to the height of its control row (the tallest content). Scrub mode
-     (below) hides those controls, so without this the bar would shrink to the shorter
-     readout — a visible vertical jump AND, because the bar's own ResizeObserver drives
-     the icon-fold, a size change that re-evaluates the fold and makes the buttons
-     unfold/refold for no reason. Holding the height constant means scrubbing changes
-     nothing about the bar box: no jump, no spurious fold animation. */
+  /* A floor only — the bar's true height is governed by its tallest child (the toolbar
+     control row), which scrub mode keeps occupying its full height (see below) so the
+     box never changes size between resting and scrubbing. */
   min-height: 51px;
 }
 /* "Scrub" / discovery mode: while you actively follow the track (desktop hover) or drag
@@ -2252,9 +2255,24 @@ body.ridemap-open {
    centre stage. */
 .ridemap.scrubbing .ridemap-title,
 .ridemap.scrubbing .ridemap-est,
-.ridemap.scrubbing .ridemap-tools,
 .ridemap.scrubbing #btnRideMapClose {
   display: none;
+}
+/* The toolbar is the bar's TALLEST child, so it — not the shorter readout — must keep
+   defining the bar height while scrubbing; removing it from layout (display:none) let
+   the bar collapse by a few px every time you started hovering the track (a visible,
+   jerky jump, made worse by the resize re-triggering the icon-fold). Instead collapse
+   it to zero width and hide it: it still occupies its full height (so the bar box is
+   byte-for-byte identical resting vs scrubbing — no jump, no fold churn), while the
+   freed width lets the live readout take centre stage. */
+.ridemap.scrubbing .ridemap-tools {
+  visibility: hidden;
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
 }
 .ridemap.scrubbing .ridemap-hover {
   color: var(--text);
