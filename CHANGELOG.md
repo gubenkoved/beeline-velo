@@ -17,6 +17,20 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## strava: quiet the per-card upload button, add "Show in Strava"
+- **What:** the loud accent "Push to Strava" button is gone from the always-visible ride
+  row; per-ride upload now lives as a quiet item inside the `⋯` overflow menu (bulk "Push
+  selected to Strava" is unchanged). A new "Show in Strava" overflow item opens the ride on
+  strava.com when its activity id is known. To make that link possible, the Strava activity
+  id Beeline already reports (`raw.strava_activity.id`) is now persisted: a new optional
+  `strava_activity_id` threads through `mapBeelineRide` → `UpsertFields`/`RideRecord` →
+  `RideDetail`/`persistDetail` → `RideView`, populated on the next pull/upload (no schema
+  migration; absent ids never clobber a known one).
+- **Why:** the per-card upload button grabbed too much attention for a secondary action —
+  *simplify by consolidating, never amputating*: the capability stays (menu + bulk), it's
+  just no longer shouting. "Show in Strava" closes the loop for already-uploaded rides, and
+  is gated on a real signal (a known id) so a GPX-only library never sees it.
+
 ## filters: hide a chip when it can't actually narrow anything
 - **What:** every binary toggle filter chip (Route, Full GPX, Destination, Named,
   Deleted, Wind) now shows only when the library is *split* on that dimension — some

@@ -62,6 +62,8 @@ describe("mapBeelineRide", () => {
     expect(f.source_id).toBe(UPLOADED);
     expect(f.device_model).toBe(LABEL);
     expect(f.strava_status).toBe("uploaded");
+    // The Strava activity id is captured so the UI can link out to strava.com.
+    expect(f.strava_activity_id).toBe(FIXTURE[UPLOADED].strava_activity?.id);
 
     // Metrics: Beeline's SI units converted straight into the app's normalized
     // numbers (metres→km, m/s→km/h, ms→seconds), no localized strings.
@@ -110,6 +112,8 @@ describe("mapBeelineRide", () => {
   it("treats a never-uploaded ride as pending and omits zero metrics", () => {
     const m = mapBeelineRide(PENDING, FIXTURE[PENDING], LABEL);
     expect(m?.fields.strava_status).toBe("pending");
+    // No strava_activity → no Strava id to link out to.
+    expect(m?.fields.strava_activity_id).toBeUndefined();
     // Zero distance/speed must not produce bogus 0-valued metrics.
     expect(m?.fields.distance_km).toBeUndefined();
     expect(m?.fields.avg_speed_kmh).toBeUndefined();

@@ -1807,17 +1807,8 @@ const KEBAB_ICON =
   '<circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>';
 
 /**
- * Inline SVG for the "Push to Strava" action — an up-arrow into a tray, drawn
- * with strokes (matching the app's other line icons) so it reads as "send/upload"
- * at a glance. Shown only when the button collapses to icon-only on narrow screens
- * (the text label carries the meaning on wider ones); `currentColor` inherits
- * the accent button's text colour. Inline SVG, never a Unicode glyph.
+ * Per-ride queue-state badge: "working" while a task runs, "queued" while pending.
  */
-const UPLOAD_ICON =
-  '<svg class="mi mi-upl" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
-  '<path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>';
-
 function queueBadge(key: string): string {
   if (RUNNING.has(key)) return `<span class="badge working">working</span>`;
   if (ACTIVE.has(key)) return `<span class="badge queued">queued</span>`;
@@ -2754,9 +2745,10 @@ function render(): void {
             ${so ? detailsBlock(r) : ""}
           </div>
           <div class="rbtns${openMenu === `ovr-r:${r.key}` ? " open" : ""}">
-            ${r.can_upload ? `<button class="small accent" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ' title="Push to Strava (via Beeline)"'}>${UPLOAD_ICON}<span class="btn-label">Push to Strava</span></button>` : ""}
             <button class="small ghost ovr" data-splitmenu="ovr-r:${r.key}" aria-haspopup="true" aria-expanded="${openMenu === `ovr-r:${r.key}`}" title="More ride actions">${KEBAB_ICON}</button>
             <span class="ovr-items">
+              ${r.can_upload ? `<button class="small ghost" data-act="upload-one" data-key="${r.key}"${r.status === "uploaded" ? ' disabled title="Already uploaded to Strava"' : ' title="Push this ride to Strava (via Beeline)"'}>Push to Strava</button>` : ""}
+              ${r.strava_activity_id ? `<button class="small ghost" data-act="strava-open-one" data-key="${r.key}" title="Open this ride on Strava in a new tab">Show in Strava</button>` : ""}
               <button class="small ghost" data-act="gpx-save-one" data-key="${r.key}" title="Save the route-only GPX (the stored shape — no timestamps or elevation; instant, works offline)">Save route GPX</button>
               <button class="small ghost" data-act="gpx-save-full-one" data-key="${r.key}" title="Download the full recorded GPX (real timestamps + elevation) and save it to disk">Save full GPX</button>
               <button class="small ghost" data-act="gpx-fetch-one" data-key="${r.key}" title="${r.gpx_cached ? "Full GPX is cached — fetch again to refresh it (no file saved)" : "Fetch the full recorded GPX into the local cache without saving a file (pre-warms offline use + the map)"}">${r.gpx_cached ? "Fetch full GPX ✓" : "Fetch full GPX"}</button>
@@ -3919,9 +3911,24 @@ document.addEventListener("click", (e) => {
   }
   if (act === "upload-one") {
     const ride = STATE.rides.find((r) => r.key === t.dataset.key);
+    openMenu = null;
+    render();
     if (ride && ride.status === "uploaded") return toast("Already uploaded to Strava.");
     trackEvent("strava-upload");
     return withBeelineAccess(() => run(() => controller.upload([t.dataset.key!])));
+  }
+  if (act === "strava-open-one") {
+    const ride = STATE.rides.find((r) => r.key === t.dataset.key);
+    openMenu = null;
+    render();
+    if (!ride?.strava_activity_id) return;
+    trackEvent("strava-open");
+    window.open(
+      `https://www.strava.com/activities/${ride.strava_activity_id}`,
+      "_blank",
+      "noopener",
+    );
+    return;
   }
   if (act === "rename-one") {
     const key = t.dataset.key!;

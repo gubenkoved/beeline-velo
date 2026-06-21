@@ -194,6 +194,9 @@ export interface RideRecord extends RideMetrics {
   /** Short list-card name (e.g. "Morning ride"); the prefix of the fuller `title`. */
   title_base: string;
   strava_status: StravaStatus;
+  /** Strava activity id once the ride is on Strava (Beeline reports it). Lets us link
+   *  out to strava.com/activities/<id>. Beeline-only; absent until known/uploaded. */
+  strava_activity_id?: number;
   /** Rough encoded-polyline sketch of the route (see track.ts). Empty when unknown. */
   track: string;
   /** Lat/lon points read from the downloaded GPX (0 when unknown). */
@@ -343,6 +346,7 @@ export interface UpsertFields extends Partial<RideMetrics> {
   title?: string;
   title_base?: string;
   strava_status?: StravaStatus;
+  strava_activity_id?: number;
   track?: string;
   track_src_points?: number;
   track_points?: number;
@@ -579,6 +583,9 @@ export class Store {
       }
       rec.strava_status = fields.strava_status;
     }
+    // Strava activity id, once Beeline reports it; never clear a known id with an
+    // absent one (a later partial scan may not carry it).
+    if (fields.strava_activity_id != null) rec.strava_activity_id = fields.strava_activity_id;
     // Seeing a ride again means it is NOT deleted (clear any stale flag).
     rec.deleted = false;
     rec.deleted_at = "";

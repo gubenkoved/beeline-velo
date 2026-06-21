@@ -173,6 +173,8 @@ export interface RideView extends RideMetrics {
   /** True when this ride's source can push it to Strava (Beeline only). Gates the
    *  per-row Upload action and Strava status chrome. */
   can_upload: boolean;
+  /** Strava activity id when known (Beeline-only) — drives the "Show in Strava" link. */
+  strava_activity_id?: number;
   month_key: string;
   month_label: string;
   /** ISO-8601 time the ride first entered the local library (carried from the
@@ -1081,6 +1083,7 @@ export class Controller {
         device_model: r.device_model,
         source: r.source,
         can_upload: this.canUpload(r.source),
+        strava_activity_id: r.strava_activity_id,
         month_key: monthKey(r),
         month_label: monthLabel(r),
         ingested_at: r.ingested_at,
@@ -1312,6 +1315,7 @@ export class Controller {
       ...this.deviceFieldsFor(kind),
       title_base: d.title,
       strava_status: d.stravaStatus,
+      ...(d.stravaActivityId != null ? { strava_activity_id: d.stravaActivityId } : {}),
       ...d.metrics,
     });
     this.store.save();

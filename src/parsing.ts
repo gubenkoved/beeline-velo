@@ -142,6 +142,8 @@ export interface RideDetail {
   title: string;
   metrics: RideMetrics;
   stravaStatus: StravaStatus;
+  /** Strava activity id when known (Beeline-only); enables a "Show in Strava" link. */
+  stravaActivityId?: number;
 }
 
 // --- ride identity (multi-source) --------------------------------------------

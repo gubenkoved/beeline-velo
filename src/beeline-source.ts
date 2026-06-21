@@ -252,6 +252,7 @@ export class BeelineRideSource implements RideSource {
       title: f?.title_base ?? "",
       metrics,
       stravaStatus: f?.strava_status ?? "unknown",
+      stravaActivityId: f?.strava_activity_id,
     };
   }
 

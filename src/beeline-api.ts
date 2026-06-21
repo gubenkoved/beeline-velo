@@ -624,6 +624,9 @@ export function mapBeelineRide(
     device_model: sourceLabel,
     strava_status: stravaStatusOf(raw),
   };
+  if (typeof raw.strava_activity?.id === "number") {
+    fields.strava_activity_id = raw.strava_activity.id;
+  }
 
   // Metrics: convert Beeline's SI units straight into the app's normalized numbers.
   if (typeof raw.totalDistance === "number" && raw.totalDistance > 0) {

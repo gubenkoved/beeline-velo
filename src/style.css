@@ -1779,15 +1779,6 @@ span.caret.open::before {
   gap: 6px;
   flex: 0 0 auto;
 }
-/* The "Upload to Strava" button carries its text label on wide screens; the
-   inline upload icon only surfaces when the button collapses to icon-only on
-   narrow viewports (see the mobile block). Keep both in the DOM so the swap is
-   pure CSS — no re-render. */
-.rbtns .accent .mi-upl {
-  display: none;
-  width: 16px;
-  height: 16px;
-}
 /* The "⋯" overflow toggle and its grouping wrapper exist only for the mobile
    layout: on desktop the toggle is hidden and `.ovr-items` collapses (display:
    contents) so the real action buttons flow directly inside the cluster flex
@@ -1818,6 +1809,10 @@ span.caret.open::before {
 }
 .rbtns .ovr {
   display: inline-flex;
+  /* Icon-only: square it up with equal padding instead of inheriting the
+     text-button's wide horizontal padding (which made the lone "⋯" a fat pill). */
+  padding: var(--ctrl-pad-y-sm);
+  aspect-ratio: 1;
 }
 .rbtns .ovr-items {
   display: none;
@@ -5371,20 +5366,6 @@ body.job-active .toast {
   }
   .rname {
     min-width: 0;
-  }
-
-  /* -- "Upload to Strava" collapses to an icon-only square, reclaiming the
-        ~90px the text label ate so the content column (stats grid + mini-map,
-        which live inside .rmain) gets real width instead of being crushed. --- */
-  .rbtns .accent .btn-label {
-    display: none;
-  }
-  .rbtns .accent .mi-upl {
-    display: block;
-  }
-  .rbtns .accent {
-    padding: 7px;
-    line-height: 0;
   }
 
   /* -- expanded details: pack more stat columns into the now-wider content,
