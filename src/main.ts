@@ -127,8 +127,11 @@ import { escHtml } from "./ui";
 import { WindCache } from "./windcache";
 import {
   initWindSpeedView,
+  MAX_GRADE_OFF,
+  maxGradeLabel,
   mountWindSpeedView,
   SEG_TUNE_DEFAULTS,
+  syncColorByGating,
   windSpeedVisibleRides,
 } from "./windspeed-view";
 
@@ -1297,10 +1300,13 @@ let analyticsRangeBounds: DateRange | null = null;
 type AnalyticsPrefs = {
   rangeMin: number | null;
   rangeMax: number | null;
-  flatOnly: boolean;
+  /** Max net grade kept (percent); `MAX_GRADE_OFF` = off (any grade). */
+  maxGrade: number;
   maxSpeed: number;
-  /** Tint scatter dots by crosswind magnitude (the "Colour by crosswind" toggle). */
-  colorByCross: boolean;
+  /** Wind dimension on the X axis: head/tailwind (along-track) or crosswind. */
+  xAxis: "along" | "cross";
+  /** Which dimension tints the dots (or none). */
+  colorBy: "none" | "along" | "cross";
   /** Crosswind band filter (km/h); null = no bound on that side. */
   cwMin: number | null;
   cwMax: number | null;
@@ -1313,9 +1319,10 @@ function loadAnalyticsPrefs(): AnalyticsPrefs {
   const def: AnalyticsPrefs = {
     rangeMin: null,
     rangeMax: null,
-    flatOnly: false,
+    maxGrade: MAX_GRADE_OFF,
     maxSpeed: 50,
-    colorByCross: false,
+    xAxis: "along",
+    colorBy: "none",
     cwMin: null,
     cwMax: null,
     ...SEG_TUNE_DEFAULTS,
@@ -1323,17 +1330,35 @@ function loadAnalyticsPrefs(): AnalyticsPrefs {
   try {
     const raw = localStorage.getItem(ANALYTICS_PREFS_KEY);
     if (!raw) return def;
-    const o = JSON.parse(raw) as Partial<AnalyticsPrefs>;
+    const o = JSON.parse(raw) as Partial<AnalyticsPrefs> & {
+      colorByCross?: unknown;
+      flatOnly?: unknown;
+    };
     const num = (v: unknown): number | null =>
       typeof v === "number" && Number.isFinite(v) ? v : null;
     const clamp = (v: unknown, lo: number, hi: number, d: number): number =>
       Math.max(lo, Math.min(hi, num(v) ?? d));
+    // Migrate the legacy "colour by crosswind" checkbox: on → colour by crosswind.
+    const colorBy: AnalyticsPrefs["colorBy"] =
+      o.colorBy === "along" || o.colorBy === "cross" || o.colorBy === "none"
+        ? o.colorBy
+        : o.colorByCross === true
+          ? "cross"
+          : "none";
+    // Migrate the legacy binary "Flat segments only" checkbox: on → cap at 1.5%, off → any.
+    const maxGrade =
+      num(o.maxGrade) !== null
+        ? clamp(o.maxGrade, 0.5, MAX_GRADE_OFF, MAX_GRADE_OFF)
+        : o.flatOnly === true
+          ? 1.5
+          : MAX_GRADE_OFF;
     return {
       rangeMin: num(o.rangeMin),
       rangeMax: num(o.rangeMax),
-      flatOnly: o.flatOnly === true,
+      maxGrade,
       maxSpeed: clamp(o.maxSpeed, 20, 80, 50),
-      colorByCross: o.colorByCross === true,
+      xAxis: o.xAxis === "cross" ? "cross" : "along",
+      colorBy,
       cwMin: num(o.cwMin),
       cwMax: num(o.cwMax),
       lookAheadM: clamp(o.lookAheadM, 0, 50, SEG_TUNE_DEFAULTS.lookAheadM),
@@ -1347,8 +1372,8 @@ function loadAnalyticsPrefs(): AnalyticsPrefs {
 /** Persist the current Wind/Speed window + chart filters (non-fatal if unavailable). */
 function saveAnalyticsPrefs(): void {
   try {
-    const flatOnly =
-      (document.getElementById("flatOnly") as HTMLInputElement | null)?.checked ?? false;
+    const gradeEl = document.getElementById("maxGrade") as HTMLInputElement | null;
+    const maxGrade = gradeEl ? parseFloat(gradeEl.value) || MAX_GRADE_OFF : MAX_GRADE_OFF;
     const maxEl = document.getElementById("maxSpeed") as HTMLInputElement | null;
     const maxSpeed = maxEl ? parseInt(maxEl.value, 10) || 50 : 50;
     const readNum = (id: string): number | null => {
@@ -1361,14 +1386,20 @@ function saveAnalyticsPrefs(): void {
       const v = el ? parseInt(el.value, 10) : d;
       return Number.isFinite(v) ? v : d;
     };
+    const activeSeg = (id: string, attr: string): string | undefined =>
+      document.querySelector<HTMLElement>(`#${id} button.active[data-${attr}]`)?.dataset[
+        attr
+      ];
     const prefs: AnalyticsPrefs = {
       rangeMin: analyticsRange?.minMs ?? null,
       rangeMax: analyticsRange?.maxMs ?? null,
-      flatOnly,
+      maxGrade,
       maxSpeed,
-      colorByCross:
-        (document.getElementById("colorByCross") as HTMLInputElement | null)?.checked ??
-        false,
+      xAxis: activeSeg("analyticsXAxis", "xaxis") === "cross" ? "cross" : "along",
+      colorBy: ((): AnalyticsPrefs["colorBy"] => {
+        const v = activeSeg("analyticsColorBy", "colorby");
+        return v === "along" || v === "cross" ? v : "none";
+      })(),
       cwMin: readNum("cwMin"),
       cwMax: readNum("cwMax"),
       lookAheadM: segVal("segLookAhead", SEG_TUNE_DEFAULTS.lookAheadM),
@@ -1404,8 +1435,13 @@ function setSegTuneDom(v: { lookAheadM: number; turnDeg: number; minLenM: number
 /** Mirror the saved chart filters into their DOM controls (called once at boot). */
 function applyAnalyticsPrefsToDom(): void {
   const p = loadAnalyticsPrefs();
-  const flat = document.getElementById("flatOnly") as HTMLInputElement | null;
-  if (flat) flat.checked = p.flatOnly;
+  const grade = document.getElementById("maxGrade") as HTMLInputElement | null;
+  if (grade) {
+    grade.value = String(p.maxGrade);
+    setSliderFill(grade); // keep the `.uslider` accent fill in sync with the restored value
+  }
+  const gradeOut = document.getElementById("maxGradeOut") as HTMLOutputElement | null;
+  if (gradeOut) gradeOut.value = maxGradeLabel(p.maxGrade);
   const max = document.getElementById("maxSpeed") as HTMLInputElement | null;
   if (max) {
     max.value = String(p.maxSpeed);
@@ -1413,13 +1449,25 @@ function applyAnalyticsPrefsToDom(): void {
   }
   const maxOut = document.getElementById("maxSpeedOut") as HTMLOutputElement | null;
   if (maxOut) maxOut.value = `${p.maxSpeed} km/h`;
-  const colorCb = document.getElementById("colorByCross") as HTMLInputElement | null;
-  if (colorCb) colorCb.checked = p.colorByCross;
+  // Mirror the saved X-axis + colour-by selections into their segmented controls, then
+  // gate the colour options against the X dimension.
+  setActiveSeg("analyticsXAxis", "xaxis", p.xAxis);
+  setActiveSeg("analyticsColorBy", "colorby", p.colorBy);
+  syncColorByGating();
   const cwMin = document.getElementById("cwMin") as HTMLInputElement | null;
   if (cwMin) cwMin.value = p.cwMin != null ? String(p.cwMin) : "";
   const cwMax = document.getElementById("cwMax") as HTMLInputElement | null;
   if (cwMax) cwMax.value = p.cwMax != null ? String(p.cwMax) : "";
   setSegTuneDom(p);
+}
+/** Set the active button of a `.seg` segmented control to the one whose `data-*` value
+ *  matches `value` (clearing the others). */
+function setActiveSeg(id: string, attr: string, value: string): void {
+  const seg = document.getElementById(id);
+  if (!seg) return;
+  for (const btn of seg.querySelectorAll<HTMLElement>(`button[data-${attr}]`)) {
+    btn.classList.toggle("active", btn.dataset[attr] === value);
+  }
 }
 // The remembered date window, adopted on the first range computation after load
 // (then cleared so later refreshes reconcile normally).
@@ -3635,6 +3683,26 @@ document.addEventListener("click", (e) => {
     void mountWindSpeedView();
     return;
   }
+  // Analytics view: pick the wind dimension plotted on the X axis. Flipping X can make
+  // the active colour dimension invalid (you can't colour by the axis you're on), so
+  // re-gate the colour options before the cheap redraw (no re-sweep).
+  if (t.dataset?.xaxis && t.closest("#analyticsXAxis")) {
+    setActiveSeg("analyticsXAxis", "xaxis", t.dataset.xaxis);
+    syncColorByGating();
+    saveAnalyticsPrefs();
+    void mountWindSpeedView();
+    return;
+  }
+  // Analytics view: pick the dimension that tints the dots (cheap redraw). Ignore the
+  // hidden (X-matching) option.
+  if (t.dataset?.colorby && t.closest("#analyticsColorBy")) {
+    if (!t.classList.contains("hidden")) {
+      setActiveSeg("analyticsColorBy", "colorby", t.dataset.colorby);
+      saveAnalyticsPrefs();
+      void mountWindSpeedView();
+    }
+    return;
+  }
 
   // Full-screen single-ride route map: open from a mini-map's expand button, close
   // from its bar button or by clicking the backdrop outside the canvas.
@@ -4246,15 +4314,6 @@ document.addEventListener("change", (e) => {
     void importLocationHistory(cb.files[0]);
     cb.value = "";
   }
-  if (cb.id === "flatOnly") {
-    saveAnalyticsPrefs();
-    void mountWindSpeedView();
-  }
-  // Colour-by-crosswind toggle: a cheap redraw (no re-sweep), like the post-filters.
-  if (cb.id === "colorByCross") {
-    saveAnalyticsPrefs();
-    void mountWindSpeedView();
-  }
   // Segment-geometry knobs re-chop every ride, so (unlike the cheap max-speed
   // post-filter) they commit on `change` (slider release) — never mid-drag — and
   // re-sweep with the existing progress overlay.
@@ -4340,6 +4399,16 @@ document.addEventListener("input", (e) => {
   }
   if (el.id === "maxSpeed") {
     ($("#maxSpeedOut") as HTMLOutputElement).value = `${parseInt(el.value, 10) || 0} km/h`;
+    saveAnalyticsPrefs();
+    void mountWindSpeedView();
+    return;
+  }
+  // Max-grade filter: a cheap post-filter (grade is precomputed per segment), so it
+  // re-renders live as the slider moves — like Max-speed.
+  if (el.id === "maxGrade") {
+    ($("#maxGradeOut") as HTMLOutputElement).value = maxGradeLabel(
+      parseFloat(el.value) || MAX_GRADE_OFF,
+    );
     saveAnalyticsPrefs();
     void mountWindSpeedView();
     return;

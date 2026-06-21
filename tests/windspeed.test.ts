@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { LatLon } from "../src/track";
 import {
+  alongColor,
   crossColor,
   linearRegression,
   type SegmentOpts,
@@ -295,5 +296,24 @@ describe("crossColor", () => {
     expect(crossColor(40, 20)).toBe(strong);
     // A zero/negative scale degrades to t = 0 (the calm end) without throwing.
     expect(crossColor(5, 0)).toBe(crossColor(0, 1));
+  });
+});
+
+describe("alongColor", () => {
+  it("diverges headwind→red / tailwind→green and scales with magnitude", () => {
+    const head = alongColor(-20, 20);
+    const tail = alongColor(20, 20);
+    expect(head).toMatch(/^hsl\(0,/); // headwind hue = red
+    expect(tail).toMatch(/^hsl\(140,/); // tailwind hue = green
+    expect(head).not.toBe(tail);
+    // Calm is the desaturated end of either hue; a strong wind is more saturated.
+    const calm = alongColor(0, 20);
+    expect(calm).not.toBe(tail);
+  });
+  it("clamps past the max and degrades a zero/negative scale without throwing", () => {
+    // Past the max clamps to t = 1 (same colour as the max on that side).
+    expect(alongColor(40, 20)).toBe(alongColor(20, 20));
+    // A zero scale degrades to t = 0 (sign still picks the hue).
+    expect(alongColor(5, 0)).toBe(alongColor(0, 1));
   });
 });

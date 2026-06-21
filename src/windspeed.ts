@@ -262,3 +262,22 @@ export function crossColor(magKmh: number, maxKmh: number): string {
   const light = 64 - 6 * t; // 64 (azure) → 58 (red): keep red from glowing too pale
   return `hsl(${hue.toFixed(0)}, ${sat}%, ${light.toFixed(0)}%)`;
 }
+
+/**
+ * Colour for a signed along-track wind (km/h) on a diverging headwind↔tailwind ramp,
+ * normalised to `maxAbsKmh` (the strongest |along| in view; floored by the caller).
+ * Headwind (negative) runs to red, tailwind (positive) to green, with a neutral grey
+ * at calm — mirroring the ride map's head/tailwind palette (and the chart's faint
+ * red/green halves) so colouring by this dimension reads the same everywhere. Returns
+ * an `hsl()` string; magnitude `t = clamp(|along|/maxAbsKmh, 0..1)` sets the saturation
+ * + how far the hue leaves neutral.
+ */
+export function alongColor(alongKmh: number, maxAbsKmh: number): string {
+  const t = maxAbsKmh > 0 ? Math.min(1, Math.abs(alongKmh) / maxAbsKmh) : 0;
+  // Tailwind → green (140°), headwind → red (0°); near-calm stays a dim, desaturated
+  // grey that recedes into the dark panel rather than glowing in the middle.
+  const hue = alongKmh >= 0 ? 140 : 0;
+  const sat = Math.round(8 + t * 74); // 8% (calm, near-grey) → 82% (strong)
+  const light = 38 + t * 18; // 38% (calm, dim) → 56% (strong)
+  return `hsl(${hue}, ${sat}%, ${light.toFixed(0)}%)`;
+}

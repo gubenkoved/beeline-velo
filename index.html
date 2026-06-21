@@ -240,16 +240,40 @@
       <section class="stats-section">
         <div class="ctl-accordions">
           <details class="ctl-acc" id="accSettings" open>
-            <summary title="Tune what the scatter is built from — which segments to keep, crosswind colouring, and how rides are split into points">
+            <summary title="Tune what the scatter is built from — which axes to plot, how dots are coloured, which segments to keep, and how rides are split into points">
               <span class="ctl-acc-cap">Settings</span>
-              <span class="ctl-acc-hint">filters · crosswind · segments</span>
+              <span class="ctl-acc-hint">axes · filters · segments</span>
             </summary>
             <div class="ctl-acc-body">
               <div class="ctl-grp">
+                <div class="ctl-grp-head">Axes</div>
+                <div class="ctl-grp-row">
+                  <label class="trim ctl-seg-lbl">
+                    X axis
+                    <!-- biome-ignore lint/a11y/useSemanticElements: role="group" with aria-label is correct for this labelled segmented-control toolbar; no native element fits -->
+                    <span class="seg" id="analyticsXAxis" role="group" aria-label="Plot against">
+                      <button type="button" data-xaxis="along" class="active" title="Plot speed against head/tailwind — the wind along your direction of travel">Head/tailwind</button>
+                      <button type="button" data-xaxis="cross" title="Plot speed against crosswind magnitude — the side-wind, regardless of which side">Crosswind</button>
+                    </span>
+                  </label>
+                  <label class="trim ctl-seg-lbl">
+                    Colour by
+                    <!-- biome-ignore lint/a11y/useSemanticElements: role="group" with aria-label is correct for this labelled segmented-control toolbar; no native element fits -->
+                    <span class="seg" id="analyticsColorBy" role="group" aria-label="Colour the dots by">
+                      <button type="button" data-colorby="none" class="active" title="Plain dots — no colour dimension">Off</button>
+                      <button type="button" data-colorby="along" title="Tint each dot by head/tailwind — red for headwind, green for tailwind">Head/tailwind</button>
+                      <button type="button" data-colorby="cross" title="Tint each dot by crosswind magnitude — blue for calm, red for strong">Crosswind</button>
+                    </span>
+                  </label>
+                </div>
+              </div>
+              <div class="ctl-grp">
                 <div class="ctl-grp-head">Filters</div>
                 <div class="ctl-grp-row">
-                  <label class="trim" title="Drop segments that climb or descend, so hills don't muddy the wind signal">
-                    <input type="checkbox" id="flatOnly" /> Flat segments only
+                  <label class="trim" title="Drop segments steeper than this (by net grade over the segment), so hills don't muddy the wind signal. At the far right it's off — any grade is kept; segments with no elevation data are dropped once you set a limit.">
+                    Max grade
+                    <input type="range" class="uslider" id="maxGrade" min="0.5" max="20" step="0.5" value="20" />
+                    <output id="maxGradeOut">any</output>
                   </label>
                   <label class="trim" title="Drop segments whose average speed is above this — a bike can't really average that fast, so they're GPS glitches">
                     Max speed
@@ -261,9 +285,6 @@
               <div class="ctl-grp">
                 <div class="ctl-grp-head">Crosswind</div>
                 <div class="ctl-grp-row">
-                  <label class="trim" title="Tint each segment dot by how strong its crosswind (side-wind) was — blue for calm, red for strong.">
-                    <input type="checkbox" id="colorByCross" /> Colour
-                  </label>
                   <label class="custom flat cw-filter" id="cwRange" title="Keep only segments whose crosswind magnitude is within this band, in km/h. Leave a side blank for no bound — set a max to drop side-windy stretches, or a min to study them.">
                     <input id="cwMin" type="number" min="0" step="1" inputmode="numeric" placeholder="min" />–<input id="cwMax" type="number" min="0" step="1" inputmode="numeric" placeholder="max" /> km/h
                   </label>
@@ -292,10 +313,6 @@
               </div>
             </div>
           </details>
-        </div>
-        <div class="chart-controls">
-          <button class="ghost small" id="analyticsResolve" style="display:none" title="Resolve historical wind for every ride in the current date range that doesn't have it yet">Resolve wind for rides in range</button>
-          <button class="ghost small" id="analyticsFetchGpx" style="display:none" title="Download the full recorded GPX (real timestamps — needed for accurate speed) for the Beeline rides in range that lack it">Fetch full GPX for rides in range</button>
         </div>
         <div class="wind-legend hidden" id="crosswindLegend"></div>
         <div class="chart-wrap">

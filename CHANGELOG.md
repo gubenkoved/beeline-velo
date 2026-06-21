@@ -17,6 +17,57 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## wind/speed: generalise "Flat segments only" into a Max-grade slider
+- **What:** replaced the binary "Flat segments only" checkbox (a fixed 1.5% preset) with a
+  **Max grade** slider (0.5–20%, top = "any"). Below the top it drops segments steeper than
+  the set net grade — and any with unknown grade — generalising the old preset to a tunable
+  threshold; at the top it's off (keeps every grade, like the old unchecked state). Wired as a
+  cheap live post-filter (grade is precomputed per segment) like Max-speed, with an `≤N%` / `any`
+  output, an analysed-note "N over X% grade dropped" count, and a prefs migration (`flatOnly:true`
+  → cap 1.5%, else any). Replaces `FLAT_GRADE_PCT` with the shared `MAX_GRADE_OFF` sentinel.
+- **Why:** a single fixed flatness cutoff is a blunt instrument — some questions want only truly
+  flat stretches, others tolerate gentle grades. A slider lets the user dial in how much hill to
+  forgive, mirroring the Max-speed knob, without adding a second control.
+
+## wind/speed: fix highlight-ring alignment over dots
+- **What:** the hover/selection rings are drawn on the `#windSpeedHover` overlay canvas,
+  but the base scatter canvas has a 1px border and the overlay didn't — so the overlay's
+  drawing origin sat 1px in from the dots and every ring landed slightly up-left of its dot.
+  Gave the overlay a matching `1px solid transparent` border so the two content boxes line
+  up pixel-for-pixel.
+- **Why:** a ring that doesn't sit centred on its dot reads as a rendering bug; matching the
+  border is the minimal, robust alignment (both canvases are `box-sizing: border-box`).
+
+## wind/speed: consolidate prep actions into the centre gate card
+- **What:** removed the standalone "Resolve wind for rides in range" / "Fetch full GPX for
+  rides in range" button row (`.chart-controls`) that sat above the scatter. Those actions now
+  live inside the centre confirm-to-run gate, under the "Analyse N rides" button (only shown
+  when some rides in range actually need wind resolved or full GPX). Dropped the now-dead
+  `syncAnalyticsActions`; the buttons keep their `#analyticsResolve` / `#analyticsFetchGpx`
+  ids so the existing delegated handlers fire unchanged. Also darkened the `alongColor`
+  diverging ramp's calm midpoint (dim, near-grey) so the legend/dots don't glow in the middle.
+- **Why:** one card to act on — analyse, or first prepare the data — reads lighter than a
+  separate always-there button row competing with the gate. The prep actions belong exactly
+  where the user is already looking to trigger the run; consolidating loses no capability.
+
+## wind/speed: selectable X axis (head/tailwind ↔ crosswind) + generic colour-by
+- **What:** the Wind/Speed scatter's X axis is now a choice — head/tailwind (along-track,
+  the old behaviour) or **crosswind magnitude** — via a segmented control at the top of the
+  Settings accordion. The old "Colour by crosswind" checkbox was promoted to a generic
+  **Colour by** segmented picker (Off / Head-tailwind / Crosswind); the dimension that's on
+  X is hidden from the colour options (you can't colour by the axis you're plotting), and
+  flipping X auto-switches an invalidated colour to the opposite wind dimension. The chart
+  renderer (`drawWindSpeedChart`) gained `xValue`/`xSigned`/`xCaption` opts so crosswind plots
+  one-sided `[0,max]` with no head/tail tinted halves; a new `alongColor` diverging ramp
+  (headwind-red ↔ tailwind-green, mirroring the map) backs the head/tailwind colour mode, and
+  the legend + KPI labels (still-air vs calm-air, tailwind vs crosswind slope) adapt to the
+  axis. Prefs migrate the legacy `colorByCross` flag into the new `xAxis`/`colorBy` pair.
+- **Why:** plotting speed against crosswind too lets you read the side-wind drag dependency,
+  not just the head/tailwind one — the same regression machinery, a second question answered.
+  Colour-by had to move up and generalise because tinting by crosswind is meaningless once
+  crosswind is the axis; one generic picker keeps the two wind dimensions symmetric (whichever
+  isn't on X can colour the dots) without a one-off control.
+
 ## datepicker: clear-this-date button in the calendar header
 - **What:** the shared date-picker ([datepicker.ts](src/datepicker.ts)) gained an optional
   eraser button beside the month nav that clears just the bound being edited. It shows only

@@ -31,6 +31,7 @@ import {
   nearestDot,
 } from "./windchart";
 import {
+  alongColor,
   crossColor,
   linearRegression,
   type SegmentOpts,
@@ -92,8 +93,9 @@ let analyticsRerunQueued = false;
  *  (possibly heavy) sweep — we never auto-analyse on entering the tab. Resets on
  *  reload; once armed the view runs live (slider / filter changes re-sweep). */
 let analyticsArmed = false;
-/** |net grade| above this (percent) means a segment isn't "flat". */
-const FLAT_GRADE_PCT = 1.5;
+/** Slider top (percent): the Max-grade knob at this value means "off — keep any grade".
+ *  Below it, segments steeper than the set value (or with unknown grade) are dropped. */
+export const MAX_GRADE_OFF = 20;
 
 // -- Dot ↔ ride discovery -------------------------------------------------- //
 // The last drawn scatter's hit-test geometry, plus which segment the user has
@@ -150,11 +152,45 @@ function analyticsMaxSpeed(): number {
   return Number.isFinite(v) ? Math.max(20, Math.min(80, v)) : 50;
 }
 
-/** Whether to tint each scatter dot by its crosswind magnitude (the toggle). */
-function analyticsColorByCross(): boolean {
-  return (
-    (document.getElementById("colorByCross") as HTMLInputElement | null)?.checked ?? false
-  );
+/** Current max-grade cap (percent) from the slider (0.5..MAX_GRADE_OFF). At the top it's
+ *  `any` (no grade filter); below it, segments steeper than `pct` — or with unknown grade
+ *  — are dropped, generalising the old binary "Flat segments only" preset. */
+function analyticsMaxGrade(): { pct: number; any: boolean } {
+  const el = document.getElementById("maxGrade") as HTMLInputElement | null;
+  const v = el ? parseFloat(el.value) : MAX_GRADE_OFF;
+  const pct = Number.isFinite(v) ? Math.max(0.5, Math.min(MAX_GRADE_OFF, v)) : MAX_GRADE_OFF;
+  return { pct, any: pct >= MAX_GRADE_OFF };
+}
+
+/** Label for the Max-grade slider's `<output>`: `any` at the top, else `≤N.N%`. Always
+ *  one decimal so the width doesn't jump between integer and half steps as the slider
+ *  moves. Shared by the live render and the boot/restore path so wording can't drift. */
+export function maxGradeLabel(pct: number): string {
+  return pct >= MAX_GRADE_OFF ? "any" : `≤${pct.toFixed(1)}%`;
+}
+
+/** Whether the wind dimension is signed (head/tailwind, plotted on a 0-centred axis)
+ *  or a one-sided magnitude (crosswind). */
+type WindDim = "along" | "cross";
+/** What colours the dots: nothing, head/tailwind, or crosswind magnitude. */
+type ColorBy = "none" | WindDim;
+
+/** Read the active button of a `.seg` segmented control by its `data-*` attribute,
+ *  falling back to `def` when the control is absent. */
+function activeSeg<T extends string>(id: string, attr: string, def: T): T {
+  const btn = document.querySelector<HTMLElement>(`#${id} button.active[data-${attr}]`);
+  const v = btn?.dataset[attr];
+  return (v as T) ?? def;
+}
+
+/** The wind dimension plotted on the X axis (head/tailwind by default). */
+function analyticsXAxis(): WindDim {
+  return activeSeg<WindDim>("analyticsXAxis", "xaxis", "along");
+}
+
+/** The dimension dots are coloured by (off by default). */
+function analyticsColorBy(): ColorBy {
+  return activeSeg<ColorBy>("analyticsColorBy", "colorby", "none");
 }
 
 /** The crosswind-magnitude band to keep (km/h), read from the min/max inputs. A blank
@@ -180,29 +216,48 @@ function crosswindLabel(cw: { min: number; max: number }): string {
   return "any";
 }
 
-/** Show/hide + fill the crosswind colour legend: a calm→strong gradient strip scaled
- *  to the strongest crosswind in view, with 0 and max end-labels. Visible only when
- *  the "Colour by crosswind" toggle is on. */
-function renderCrosswindLegend(on: boolean, maxKmh: number): void {
+/** Show/hide + fill the colour legend below the chart, matching the active "Colour by"
+ *  dimension. Hidden when colouring is off. For crosswind it's a calm→strong strip
+ *  (azure→red) scaled to the strongest |cross| in view; for head/tailwind a diverging
+ *  strip (headwind-red ← calm → tailwind-green) scaled to the strongest |along|. */
+function renderColorLegend(mode: ColorBy, maxKmh: number): void {
   const el = document.getElementById("crosswindLegend");
   if (!el) return;
-  if (!on) {
+  if (mode === "none") {
     el.classList.add("hidden");
     el.innerHTML = "";
     return;
   }
-  const stops: string[] = [];
   const N = 6;
-  for (let i = 0; i <= N; i++) {
-    const t = i / N;
-    stops.push(`${crossColor(t * maxKmh, maxKmh)} ${Math.round(t * 100)}%`);
+  const stops: string[] = [];
+  let cap: string;
+  let lo: string;
+  let hi: string;
+  if (mode === "cross") {
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      stops.push(`${crossColor(t * maxKmh, maxKmh)} ${Math.round(t * 100)}%`);
+    }
+    cap = "crosswind";
+    lo = "0";
+    hi = `${maxKmh} km/h`;
+  } else {
+    // Diverging: full headwind (−max, red) on the left → calm (grey) → full tailwind
+    // (+max, green) on the right.
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      stops.push(`${alongColor((t * 2 - 1) * maxKmh, maxKmh)} ${Math.round(t * 100)}%`);
+    }
+    cap = "head/tailwind";
+    lo = `−${maxKmh}`;
+    hi = `+${maxKmh} km/h`;
   }
   el.classList.remove("hidden");
   el.innerHTML =
-    `<span class="cw-cap">crosswind</span>` +
-    `<span class="cw-end">0</span>` +
+    `<span class="cw-cap">${cap}</span>` +
+    `<span class="cw-end">${lo}</span>` +
     `<span class="cw-bar" style="background:linear-gradient(90deg, ${stops.join(", ")})"></span>` +
-    `<span class="cw-end">${maxKmh} km/h</span>`;
+    `<span class="cw-end">${hi}</span>`;
 }
 
 /** Default segment-geometry tuning (also the values the Reset button restores). */
@@ -247,62 +302,95 @@ function renderAnalyticsEmpty(kind: "wind" | "gpx", n: number): void {
   }
 }
 
+/** Labels for the two wind-dependent KPI cards (intercept + slope), adapted to which
+ *  wind dimension is on the X axis. Shared by the live render and the placeholder so
+ *  the wording can't drift. "Still-air" / "calm-air" name the X=0 condition (no wind
+ *  along the axis); the slope names a km/h of that axis' wind. */
+function kpiLabels(x: WindDim): { intercept: string; slope: string } {
+  return x === "cross"
+    ? { intercept: "calm-air speed", slope: "km/h per km/h of crosswind" }
+    : { intercept: "still-air speed", slope: "km/h per km/h of tailwind" };
+}
+
 /** Blank the KPI cards to placeholders (used while the confirm gate is shown — no
  *  analysis has run yet, so there are no numbers to report). */
 function setAnalyticsCardsPlaceholder(): void {
   const cards = document.getElementById("analyticsCards");
   if (!cards) return;
+  const lab = kpiLabels(analyticsXAxis());
   cards.innerHTML = [
-    statNum({ value: "—", label: "still-air speed" }),
-    statNum({ value: "—", label: "km/h per km/h of tailwind" }),
+    statNum({ value: "—", label: lab.intercept }),
+    statNum({ value: "—", label: lab.slope }),
     statNum({ value: "—", label: "R² (wind explains)" }),
     statNum({ value: "—", label: "segments" }),
   ].join("");
 }
 
+/** Context-aware gating of the "Colour by" segmented control: the option whose
+ *  dimension is already on the X axis is meaningless (you'd colour by the axis you're
+ *  plotting), so it's hidden. If that option was the active one, fall the colour over
+ *  to the OTHER wind dimension so flipping X keeps a useful cross-dimension view alive
+ *  rather than silently going monochrome. Returns nothing; mutates the DOM. */
+export function syncColorByGating(): void {
+  const x = analyticsXAxis();
+  const seg = document.getElementById("analyticsColorBy");
+  if (!seg) return;
+  const opposite: WindDim = x === "along" ? "cross" : "along";
+  for (const btn of seg.querySelectorAll<HTMLElement>("button[data-colorby]")) {
+    const dim = btn.dataset.colorby;
+    const clash = dim === x; // colouring by the axis dimension
+    btn.classList.toggle("hidden", clash);
+    if (clash && btn.classList.contains("active")) {
+      // The hidden option was selected — move the selection to the opposite dimension.
+      btn.classList.remove("active");
+      const next = seg.querySelector<HTMLElement>(`button[data-colorby="${opposite}"]`);
+      next?.classList.add("active");
+    }
+  }
+}
+
 /** The confirm-to-run gate: a centred card stating exactly how many rides the current
- *  window will analyse (it live-updates as the slider moves) plus an "Analyse" button
- *  that arms the sweep. Shown until the user opts in (once per session). */
+ *  window will analyse (it live-updates as the slider moves) plus the "Analyse" button
+ *  that arms the sweep. When some rides in range still need wind resolved or full GPX
+ *  fetched, those actions live here too — right where the user is already looking — so
+ *  there's no separate button row cluttering the view. Shown until the user opts in. */
 function renderAnalyticsGate(rideCount: number, unresolved: number, needGpx: number): void {
   const el = document.getElementById("analyticsChartMsg");
   if (!el) return;
   const ridesWord = rideCount === 1 ? "ride" : "rides";
-  const hints: string[] = [];
-  if (needGpx) hints.push(`${needGpx} need full GPX for speed`);
-  if (unresolved) hints.push(`${unresolved} not yet wind-resolved`);
+  // Prep actions appear only when they can act on rides in range, with the affected
+  // count in the label. They reuse the delegated #analyticsResolve / #analyticsFetchGpx
+  // handlers (no per-render wiring), so the IDs must stay stable.
+  const actions: string[] = [];
+  if (unresolved) {
+    actions.push(
+      `<button type="button" class="ghost small" id="analyticsResolve">` +
+        `Resolve wind for ${unresolved} ${unresolved === 1 ? "ride" : "rides"}</button>`,
+    );
+  }
+  if (needGpx) {
+    actions.push(
+      `<button type="button" class="ghost small" id="analyticsFetchGpx">` +
+        `Fetch full GPX for ${needGpx} ${needGpx === 1 ? "ride" : "rides"}</button>`,
+    );
+  }
   el.innerHTML =
     `<span class="cm-card cm-gate">` +
     `<b class="cm-head">Analyse wind vs speed</b>` +
     `<span class="cm-detail"><b>${rideCount}</b> ${ridesWord} in the selected date window</span>` +
-    (hints.length ? `<span class="cm-detail">${hints.join(" · ")}</span>` : "") +
     `<button type="button" class="primary small cm-go" id="analyticsRun"${
       rideCount === 0 ? " disabled" : ""
     }>Analyse ${rideCount} ${ridesWord}</button>` +
+    (actions.length
+      ? `<span class="cm-detail cm-or">or first prepare the data:</span>` +
+        `<span class="cm-actions">${actions.join("")}</span>`
+      : "") +
     `</span>`;
   el.style.display = "flex";
   document.getElementById("analyticsRun")?.addEventListener("click", () => {
     analyticsArmed = true;
     void mountWindSpeedView();
   });
-}
-
-/** Show each action button only when it can act on rides in range, with the affected
- *  count in its label. */
-function syncAnalyticsActions(inRange: RideView[]): void {
-  const unresolved = inRange.filter((r) => !r.wind_resolved && !!r.track).length;
-  const needGpx = inRange.filter((r) => r.source !== "gpx" && !r.gpx_cached).length;
-  const resolveBtn = document.getElementById("analyticsResolve");
-  if (resolveBtn) {
-    resolveBtn.style.display = unresolved === 0 ? "none" : "";
-    resolveBtn.textContent =
-      unresolved === 1 ? "Resolve wind for 1 ride" : `Resolve wind for ${unresolved} rides`;
-  }
-  const gpxBtn = document.getElementById("analyticsFetchGpx");
-  if (gpxBtn) {
-    gpxBtn.style.display = needGpx === 0 ? "none" : "";
-    gpxBtn.textContent =
-      needGpx === 1 ? "Fetch full GPX for 1 ride" : `Fetch full GPX for ${needGpx} rides`;
-  }
 }
 
 /** Show (or clear) a calm centred message over the chart area without changing the
@@ -384,7 +472,6 @@ async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Prom
 
   empty?.classList.add("hidden");
   body?.classList.remove("hidden");
-  syncAnalyticsActions(inRange);
 
   // Confirm-to-run gate: never auto-sweep. Until the user presses "Analyse" once this
   // session, show a card naming exactly how many rides the current window will
@@ -450,13 +537,13 @@ async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Prom
   }
   if (my !== analyticsSeq) return;
 
-  const flatOnly =
-    (document.getElementById("flatOnly") as HTMLInputElement | null)?.checked ?? false;
+  const grade = analyticsMaxGrade();
   const cw = analyticsCrosswind();
   let usableRides = 0;
   let needGpxRides = 0;
   let skippedRides = 0;
   let crossFiltered = 0;
+  let gradeFiltered = 0;
   const segs: WindSeg[] = [];
   for (const r of resolved) {
     const entry = segCacheByUid.get(segKey(r));
@@ -466,9 +553,13 @@ async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Prom
     if (entry.status !== "ok") continue;
     usableRides++;
     for (const seg of entry.segs) {
-      if (flatOnly) {
-        if (!Number.isFinite(seg.netGradePct)) continue;
-        if (Math.abs(seg.netGradePct) > FLAT_GRADE_PCT) continue;
+      // Max-grade filter: once a limit is set, drop segments steeper than it — and any
+      // with unknown grade, since we can't assess them. At the top ("any") it's off.
+      if (!grade.any) {
+        if (!Number.isFinite(seg.netGradePct) || Math.abs(seg.netGradePct) > grade.pct) {
+          gradeFiltered++;
+          continue;
+        }
       }
       // Crosswind band filter (on |cross| magnitude): drop side-windy or too-calm
       // stretches per the min/max inputs.
@@ -480,6 +571,13 @@ async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Prom
       segs.push(seg);
     }
   }
+
+  // Reflect the Max-grade knob into its output + accent fill (a cheap post-filter, like
+  // Max-speed below).
+  const gradeOut = document.getElementById("maxGradeOut") as HTMLOutputElement | null;
+  if (gradeOut) gradeOut.value = maxGradeLabel(grade.pct);
+  const gradeEl = document.getElementById("maxGrade") as HTMLInputElement | null;
+  if (gradeEl) setSliderFill(gradeEl);
 
   // Drop physically-impossible segments above the Max-speed cap (GPS glitches).
   const maxSpeed = analyticsMaxSpeed();
@@ -494,31 +592,53 @@ async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Prom
   const shown = keep.map((i) => segs[i]);
   const trimmed = segs.length - shown.length;
 
-  const xs = shown.map((s) => s.avgAlongKmh);
+  // Keep the "Colour by" options in step with the X axis (the X dimension can't be a
+  // colour), then read both. X picks the plotted wind dimension; head/tailwind stays
+  // 0-centred (signed), crosswind is a one-sided magnitude.
+  syncColorByGating();
+  const xAxis = analyticsXAxis();
+  const xSigned = xAxis === "along";
+  const xValue = (s: WindSeg): number =>
+    xAxis === "cross" ? Math.abs(s.avgCrossKmh) : s.avgAlongKmh;
+
+  const xs = shown.map(xValue);
   const ys = shown.map((s) => s.avgSpeedKmh);
   const w = shown.map((s) => s.distanceKm);
   const reg = linearRegression(xs, ys, w);
 
-  // Crosswind colouring: tint each dot by its |cross| when the toggle is on, on a
-  // ramp normalised to the strongest crosswind in view (floored so a near-still chart
-  // doesn't exaggerate tiny side-winds). The legend mirrors the same scale.
-  const colorByCross = analyticsColorByCross();
+  // Dot colouring: tint each dot by the chosen wind dimension's magnitude, on a ramp
+  // normalised to the strongest value in view (floored so a near-still chart doesn't
+  // exaggerate tiny winds). The legend mirrors the same scale.
+  const colorBy = analyticsColorBy();
   let crossMax = 0;
-  for (const s of shown) crossMax = Math.max(crossMax, Math.abs(s.avgCrossKmh));
+  let alongMax = 0;
+  for (const s of shown) {
+    crossMax = Math.max(crossMax, Math.abs(s.avgCrossKmh));
+    alongMax = Math.max(alongMax, Math.abs(s.avgAlongKmh));
+  }
   crossMax = Math.max(5, Math.ceil(crossMax));
-  renderCrosswindLegend(colorByCross, crossMax);
+  alongMax = Math.max(5, Math.ceil(alongMax));
+  const legendMax = colorBy === "cross" ? crossMax : alongMax;
+  renderColorLegend(colorBy, legendMax);
+  const dotColor =
+    colorBy === "cross"
+      ? (s: WindSeg) => crossColor(Math.abs(s.avgCrossKmh), crossMax)
+      : colorBy === "along"
+        ? (s: WindSeg) => alongColor(s.avgAlongKmh, alongMax)
+        : undefined;
 
   const cards = document.getElementById("analyticsCards");
   if (cards) {
     const has = shown.length > 0;
+    const lab = kpiLabels(xAxis);
     cards.innerHTML = [
       statNum({
         value: has ? `${reg.intercept.toFixed(1)} km/h` : "—",
-        label: "still-air speed",
+        label: lab.intercept,
       }),
       statNum({
         value: has ? `${reg.slope >= 0 ? "+" : ""}${reg.slope.toFixed(2)}` : "—",
-        label: "km/h per km/h of tailwind",
+        label: lab.slope,
       }),
       statNum({ value: has ? reg.r2.toFixed(2) : "—", label: "R² (wind explains)" }),
       statNum({
@@ -535,7 +655,7 @@ async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Prom
       (needGpxRides ? ` · ${needGpxRides} need full GPX` : "") +
       (unresolved ? ` · ${unresolved} not yet wind-resolved` : "") +
       (skippedRides ? ` · ${skippedRides} skipped` : "") +
-      (flatOnly ? " · flat segments only" : "") +
+      (gradeFiltered ? ` · ${gradeFiltered} over ${grade.pct.toFixed(1)}% grade dropped` : "") +
       (trimmed ? ` · ${trimmed} over ${maxSpeed} km/h dropped` : "") +
       (crossFiltered ? ` · ${crossFiltered} outside crosswind ${crosswindLabel(cw)}` : "");
   }
@@ -553,9 +673,12 @@ async function runAnalyticsView(my: number, _opts: { fit?: boolean } = {}): Prom
     showChartMessage(null);
     if (canvas) {
       chartLayout = drawWindSpeedChart(canvas, shown, reg, {
-        dotColor: colorByCross
-          ? (s) => crossColor(Math.abs(s.avgCrossKmh), crossMax)
-          : undefined,
+        dotColor,
+        xValue,
+        xSigned,
+        xCaption: xSigned
+          ? "← headwind        tailwind →   (km/h)"
+          : "crosswind →   (km/h)",
       });
       reconcileSegSelection(shown);
       applyDotHighlights();

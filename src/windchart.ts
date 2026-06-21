@@ -47,6 +47,14 @@ function cssVar(name: string, fallback: string): string {
 export interface ChartOpts {
   /** Per-dot fill colour (e.g. crosswind-tinted); falls back to the flat accent. */
   dotColor?: (seg: WindSeg) => string;
+  /** The X value plotted per segment. Defaults to along-track wind (`avgAlongKmh`). */
+  xValue?: (seg: WindSeg) => number;
+  /** Whether X is a signed quantity centred on 0 (head/tailwind: symmetric domain,
+   *  tinted halves + dashed zero line) or a one-sided magnitude (crosswind: domain
+   *  `[0, max]`, no halves). Defaults to `true`. */
+  xSigned?: boolean;
+  /** Caption drawn under the X axis. Defaults to the head/tailwind caption. */
+  xCaption?: string;
 }
 
 /** One plotted dot's screen geometry, in CSS pixels — the seam that lets the view
@@ -141,12 +149,14 @@ export function drawDotHighlights(
 }
 
 /**
- * Draw the wind-vs-speed scatter + regression on a canvas. X = along-track (true)
- * wind, 0-centred so the two halves read as mirror images (← headwind / tailwind →);
- * Y = average moving speed. Each dot is a segment, sized by its distance and (when
- * `opts.dotColor` is given) tinted by its crosswind. The headwind half is tinted
- * faint red and the tailwind half faint green, matching the ride map's wind
- * colouring. DPR-aware so it stays crisp on retina + after a resize.
+ * Draw the wind-vs-speed scatter + regression on a canvas. X is chosen by the caller
+ * via `opts.xValue` (default along-track/true wind): when `opts.xSigned` (default) it
+ * is 0-centred so the two halves read as mirror images (← headwind / tailwind →) with
+ * the headwind half tinted faint red and the tailwind half faint green (matching the
+ * ride map's wind colouring); when not signed (e.g. crosswind magnitude) the domain
+ * runs `[0, max]` with no tinted halves. Y = average moving speed. Each dot is a
+ * segment, sized by its distance and (when `opts.dotColor` is given) tinted. DPR-aware
+ * so it stays crisp on retina + after a resize.
  */
 export function drawWindSpeedChart(
   canvas: HTMLCanvasElement,
@@ -164,6 +174,10 @@ export function drawWindSpeedChart(
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
 
+  const xValue = opts.xValue ?? ((s: WindSeg) => s.avgAlongKmh);
+  const xSigned = opts.xSigned ?? true;
+  const xCaption = opts.xCaption ?? "← headwind        tailwind →   (km/h)";
+
   const colText = cssVar("--text", "#e8edf2");
   const colMuted = cssVar("--muted", "#8a97a6");
   const colLine = cssVar("--line", "#2a3340");
@@ -175,24 +189,29 @@ export function drawWindSpeedChart(
   const y0 = cssH - m.b;
   const y1 = m.t;
 
-  // Domains. X symmetric around 0 so headwind/tailwind read as mirror halves.
+  // Domains. For signed X, symmetric around 0 so headwind/tailwind read as mirror
+  // halves; for a magnitude, one-sided from 0.
   let maxAbsX = 1;
   let maxY = 1;
   for (const s of segs) {
-    maxAbsX = Math.max(maxAbsX, Math.abs(s.avgAlongKmh));
+    maxAbsX = Math.max(maxAbsX, Math.abs(xValue(s)));
     maxY = Math.max(maxY, s.avgSpeedKmh);
   }
   maxAbsX = Math.ceil(maxAbsX * 1.1);
   maxY = Math.ceil(maxY * 1.1);
-  const sx = makeScale(-maxAbsX, maxAbsX, x0, x1);
+  const xMin = xSigned ? -maxAbsX : 0;
+  const xMax = maxAbsX;
+  const sx = makeScale(xMin, xMax, x0, x1);
   const sy = makeScale(0, maxY, y0, y1);
 
-  // Head/tail tinted halves.
+  // Head/tail tinted halves — only meaningful for the signed (head/tailwind) axis.
   const mid = sx(0);
-  ctx.fillStyle = "rgba(239,68,68,0.06)"; // headwind (left)
-  ctx.fillRect(x0, y1, mid - x0, y0 - y1);
-  ctx.fillStyle = "rgba(34,197,94,0.06)"; // tailwind (right)
-  ctx.fillRect(mid, y1, x1 - mid, y0 - y1);
+  if (xSigned) {
+    ctx.fillStyle = "rgba(239,68,68,0.06)"; // headwind (left)
+    ctx.fillRect(x0, y1, mid - x0, y0 - y1);
+    ctx.fillStyle = "rgba(34,197,94,0.06)"; // tailwind (right)
+    ctx.fillRect(mid, y1, x1 - mid, y0 - y1);
+  }
 
   // Gridlines + tick labels.
   ctx.font = "11px system-ui, sans-serif";
@@ -201,9 +220,9 @@ export function drawWindSpeedChart(
   ctx.lineWidth = 1;
   ctx.fillStyle = colMuted;
   ctx.textAlign = "center";
-  for (const t of niceTicks(-maxAbsX, maxAbsX)) {
+  for (const t of niceTicks(xMin, xMax)) {
     const px = sx(t);
-    ctx.globalAlpha = t === 0 ? 0 : 1; // the 0-line is drawn separately (dashed)
+    ctx.globalAlpha = xSigned && t === 0 ? 0 : 1; // the 0-line is drawn separately (dashed)
     ctx.beginPath();
     ctx.moveTo(px, y1);
     ctx.lineTo(px, y0);
@@ -221,14 +240,17 @@ export function drawWindSpeedChart(
     ctx.fillText(String(t), x0 - 8, py);
   }
 
-  // 0-wind reference (dashed).
-  ctx.strokeStyle = colMuted;
-  ctx.setLineDash([4, 4]);
-  ctx.beginPath();
-  ctx.moveTo(mid, y1);
-  ctx.lineTo(mid, y0);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // 0-wind reference (dashed) — only for the signed (head/tailwind) axis, where 0 sits
+  // in the middle. For a magnitude axis the left edge already IS zero.
+  if (xSigned) {
+    ctx.strokeStyle = colMuted;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(mid, y1);
+    ctx.lineTo(mid, y0);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   // Axes (L-shape).
   ctx.strokeStyle = colLine;
@@ -252,7 +274,7 @@ export function drawWindSpeedChart(
   if (!dotColor) ctx.fillStyle = colAccent;
   for (const s of segs) {
     const r = Math.max(2, Math.min(7, Math.sqrt(s.distanceKm) * 1.6));
-    const cx = sx(s.avgAlongKmh);
+    const cx = sx(xValue(s));
     const cy = sy(s.avgSpeedKmh);
     dots.push({ seg: s, x: cx, y: cy, r });
     if (dotColor) ctx.fillStyle = dotColor(s);
@@ -265,10 +287,10 @@ export function drawWindSpeedChart(
   // Regression line across the X domain. A thin dark casing lifts it off the
   // same-hue scatter just enough to read, without the heavy halo of a bright outline.
   if (reg.n >= 2) {
-    const yL = reg.intercept + reg.slope * -maxAbsX;
-    const yR = reg.intercept + reg.slope * maxAbsX;
-    const xa = sx(-maxAbsX);
-    const xb = sx(maxAbsX);
+    const yL = reg.intercept + reg.slope * xMin;
+    const yR = reg.intercept + reg.slope * xMax;
+    const xa = sx(xMin);
+    const xb = sx(xMax);
     const ya = sy(yL);
     const yb = sy(yR);
     ctx.lineCap = "round";
@@ -296,7 +318,7 @@ export function drawWindSpeedChart(
   // Sit the caption on its baseline just inside the bottom edge — with the tick
   // labels' "middle" baseline it was clipped in half.
   ctx.textBaseline = "alphabetic";
-  ctx.fillText("← headwind        tailwind →   (km/h)", (x0 + x1) / 2, cssH - 5);
+  ctx.fillText(xCaption, (x0 + x1) / 2, cssH - 5);
   ctx.save();
   ctx.translate(12, (y0 + y1) / 2);
   ctx.rotate(-Math.PI / 2);
