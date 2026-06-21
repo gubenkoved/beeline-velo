@@ -40,6 +40,7 @@ function ride(over: Partial<RideView> = {}): RideView {
     can_upload: true,
     month_key: "2026-06",
     month_label: "June 2026",
+    ingested_at: "2026-06-14T09:30:00+00:00",
     uploaded_at: "",
     deleted: false,
     deleted_at: "",
@@ -280,6 +281,52 @@ describe("matchesFilters — distance band", () => {
     const unknown = ride({ distance_km: null });
     expect(matchesFilters(f({ distMin: 1 }), unknown)).toBe(false);
     expect(matchesFilters(f({ distMax: 50 }), unknown)).toBe(true);
+  });
+});
+
+describe("matchesFilters — ingestion-date band", () => {
+  // Build an ISO instant for a given LOCAL wall-clock time, so the day-boundary
+  // edges are exact regardless of the machine timezone (the filter bounds are
+  // local-day too).
+  const at = (y: number, mo: number, d: number, hh = 12, mm = 0, ss = 0, ms = 0): string =>
+    new Date(y, mo - 1, d, hh, mm, ss, ms).toISOString();
+
+  it("includes rides ingested within an inclusive from–to day range", () => {
+    const r = ride({ ingested_at: at(2026, 6, 15) });
+    expect(matchesFilters(f({ ingestedFrom: "2026-06-10", ingestedTo: "2026-06-20" }), r)).toBe(
+      true,
+    );
+    expect(matchesFilters(f({ ingestedFrom: "2026-06-16" }), r)).toBe(false);
+    expect(matchesFilters(f({ ingestedTo: "2026-06-14" }), r)).toBe(false);
+  });
+
+  it("includes the very start of the from day and the very end of the to day", () => {
+    const start = ride({ ingested_at: at(2026, 6, 10, 0, 0, 0, 0) });
+    const end = ride({ ingested_at: at(2026, 6, 20, 23, 59, 59, 999) });
+    expect(matchesFilters(f({ ingestedFrom: "2026-06-10" }), start)).toBe(true);
+    expect(matchesFilters(f({ ingestedTo: "2026-06-20" }), end)).toBe(true);
+  });
+
+  it("excludes an instant just before the from day and just after the to day", () => {
+    const justBefore = ride({ ingested_at: at(2026, 6, 9, 23, 59, 59, 999) });
+    const justAfter = ride({ ingested_at: at(2026, 6, 21, 0, 0, 0, 0) });
+    expect(matchesFilters(f({ ingestedFrom: "2026-06-10" }), justBefore)).toBe(false);
+    expect(matchesFilters(f({ ingestedTo: "2026-06-20" }), justAfter)).toBe(false);
+  });
+
+  it("drops legacy rides with no ingestion date once a bound is set, keeps them when neutral", () => {
+    const legacy = ride({ ingested_at: "" });
+    expect(matchesFilters(f({ ingestedFrom: "2026-06-10" }), legacy)).toBe(false);
+    expect(matchesFilters(f({ ingestedTo: "2026-06-20" }), legacy)).toBe(false);
+    expect(matchesFilters(f({}), legacy)).toBe(true);
+  });
+
+  it("counts the ingestion band as a single active dimension", () => {
+    expect(filterActiveCount(f({ ingestedFrom: "2026-06-10" }))).toBe(1);
+    expect(
+      filterActiveCount(f({ ingestedFrom: "2026-06-10", ingestedTo: "2026-06-20" })),
+    ).toBe(1);
+    expect(filtersActive(f({ ingestedTo: "2026-06-20" }))).toBe(true);
   });
 });
 

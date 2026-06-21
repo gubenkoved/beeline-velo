@@ -40,6 +40,12 @@ export interface Filters {
   /** Inclusive distance bounds in km; null means unbounded on that side. */
   distMin: number | null;
   distMax: number | null;
+  /** Inclusive ingestion-date bounds as local `"YYYY-MM-DD"` day strings (the day a
+   *  ride entered the library, per `RideView.ingested_at`); null = unbounded on that
+   *  side. The `from` day is taken from its local 00:00:00.000, the `to` day through
+   *  its local 23:59:59.999, so both picked days are fully included. */
+  ingestedFrom: string | null;
+  ingestedTo: string | null;
   /** Selected tags, as lowercase comparison keys (see tags.ts). OR semantics: a ride
    *  passes when it carries ANY selected tag. Empty = no-op. */
   tags: string[];
@@ -64,6 +70,8 @@ export function emptyFilters(): Filters {
     device: "all",
     distMin: null,
     distMax: null,
+    ingestedFrom: null,
+    ingestedTo: null,
     tags: [],
     untagged: false,
   };
@@ -76,6 +84,28 @@ export function emptyFilters(): Filters {
  */
 export function rideKm(r: RideView): number {
   return r.distance_km ?? 0;
+}
+
+/** Parse a `"YYYY-MM-DD"` day string into [year, month0, day], or null if malformed. */
+function parseDay(day: string): [number, number, number] | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]) - 1, Number(m[3])];
+}
+
+/** Local-time epoch ms at the very start of a `"YYYY-MM-DD"` day (00:00:00.000). */
+function dayStartMs(day: string): number | null {
+  const p = parseDay(day);
+  if (!p) return null;
+  return new Date(p[0], p[1], p[2], 0, 0, 0, 0).getTime();
+}
+
+/** Local-time epoch ms at the very end of a `"YYYY-MM-DD"` day (23:59:59.999), so a
+ *  ride ingested any time on the picked day is included. */
+function dayEndMs(day: string): number | null {
+  const p = parseDay(day);
+  if (!p) return null;
+  return new Date(p[0], p[1], p[2], 23, 59, 59, 999).getTime();
 }
 
 /** True when at least one dimension narrows the list (drives Clear + totals hint). */
@@ -103,6 +133,7 @@ export function filterActiveCount(f: Filters): number {
   if (f.source !== "all") n++;
   if (f.device !== "all") n++;
   if (f.distMin !== null || f.distMax !== null) n++;
+  if (f.ingestedFrom !== null || f.ingestedTo !== null) n++;
   if (f.tags.length > 0 || f.untagged) n++;
   return n;
 }
@@ -173,6 +204,25 @@ export function matchesFilters(f: Filters, r: RideView): boolean {
     const km = rideKm(r);
     if (f.distMin !== null && km < f.distMin) return false;
     if (f.distMax !== null && km > f.distMax) return false;
+  }
+
+  // Ingestion-date band (the day the ride entered the library). The `from` day is
+  // included from its local 00:00:00.000, the `to` day through its local
+  // 23:59:59.999, so both picked days are fully inside the range. A ride with no
+  // recorded ingestion date (legacy import, empty `ingested_at`) can't satisfy a
+  // known range, so it drops out once either bound is set.
+  if (f.ingestedFrom !== null || f.ingestedTo !== null) {
+    if (!r.ingested_at) return false;
+    const t = Date.parse(r.ingested_at);
+    if (Number.isNaN(t)) return false;
+    if (f.ingestedFrom !== null) {
+      const fromMs = dayStartMs(f.ingestedFrom);
+      if (fromMs !== null && t < fromMs) return false;
+    }
+    if (f.ingestedTo !== null) {
+      const toMs = dayEndMs(f.ingestedTo);
+      if (toMs !== null && t > toMs) return false;
+    }
   }
 
   // Tags (OR): once any tag (or the "untagged" pseudo-tag) is selected, a ride must

@@ -17,6 +17,24 @@ humans and the assistant can read this file as a compressed history of decisions
 
 ---
 
+## ingestion-date ("Added") range filter
+- **What:** added an "Added" from/to date filter to the global filter panel that
+  narrows the library by each ride's *ingestion date* (when it entered the library,
+  `RideRecord.ingested_at`) — independent of the ride's own date. Bounds are
+  inclusive whole local days (from → start-of-day 00:00:00.000, to → end-of-day
+  23:59:59.999); legacy rides with no recorded ingestion date are excluded once
+  either bound is set. Both triggers reuse the shared styled date-picker
+  (extracted from the Timeline view into `src/datepicker.ts`), constrained so the
+  two bounds can't cross. Wired through `Filters`/`matchesFilters`, so it applies
+  uniformly across Explore, Map, Stats and Wind/Speed. To smooth the rollout, the
+  store backfills any legacy ride missing `ingested_at` with "now" once on load
+  (and persists it), so every ride has a defined ingestion date from day one.
+- **Why:** a power user re-importing or syncing history wants to find "what did I
+  just add", which the ride-date filter can't express. Reusing one canonical
+  date-picker (rather than the unstylable native `<input type="date">`) keeps the
+  control consistent with the rest of the UI and removes the Timeline's private
+  calendar copy.
+
 ## drop the "rough approximation only" route note
 - **What:** Removed the per-ride caveat shown under imported-GPX mini-maps
   ("Rough approximation only — not the full GPX") in `trackBlock`, plus its now-dead

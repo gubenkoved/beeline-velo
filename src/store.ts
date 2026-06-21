@@ -422,6 +422,7 @@ export class Store {
     }
     const rides = data.rides;
     if (!rides || typeof rides !== "object") return;
+    let backfilledIngested = false;
     for (const [uid, raw] of Object.entries(
       rides as unknown as Record<string, Record<string, unknown>>,
     )) {
@@ -458,8 +459,19 @@ export class Store {
       if (typeof rec.device_model !== "string") rec.device_model = "";
       if (typeof rec.source_id !== "string") rec.source_id = "";
       rec.deleted = rec.deleted === true; // coerce missing/odd values to a real boolean
+      // Rollout backfill: legacy records predate ingestion-date tracking and have an
+      // empty `ingested_at`. The true moment is unknowable, so stamp "now" once on
+      // first load after the feature shipped — guaranteeing every ride has a defined
+      // ingestion date (so the Added filter never silently drops them). Persisted
+      // below so the stamp is stable instead of re-minted on each reload.
+      if (!rec.ingested_at) {
+        rec.ingested_at = nowIso();
+        backfilledIngested = true;
+      }
       this.rides.set(uid, rec);
     }
+    // Persist the one-time backfill so the stamped dates stick across reloads.
+    if (backfilledIngested) this.save();
   }
 
   private serialize(): Persisted {

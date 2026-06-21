@@ -22,6 +22,7 @@ import L from "leaflet";
 import "leaflet.heat";
 
 import { type AreaSelect, createAreaSelect } from "./areaselect";
+import { closeDatePicker, openDatePicker } from "./datepicker";
 import type { LocRecord, VisitType } from "./loc-model";
 import { type LocationHistoryStore, monthKey } from "./loc-store";
 import type { RideTrack } from "./mapview";
@@ -329,7 +330,7 @@ export function leaveTimelineView(): void {
   if (areaSelect?.isArmed()) areaSelect.setMode(false);
   clearDayPreview();
   clearEventHighlight();
-  closeCalendar();
+  closeDatePicker();
   toggleHelp(false);
 }
 
@@ -752,159 +753,32 @@ function jumpDateHtml(): string {
 }
 
 // --------------------------------------------------------------------------- //
-// Custom day-picker calendar — a styled popover replacing the unstylable native
-// `<input type="date">` picker. Reused by the overview "Open day" trigger and the
-// day-bar date control; bounded to the imported day range. Picking opens that day's
-// replay.
+// Day-picker calendar — the "Open day" / day-bar date controls open the shared
+// styled popover (src/datepicker.ts), bounded to the imported day range and
+// restricted to days that actually have data; picking opens that day's replay.
 // --------------------------------------------------------------------------- //
-const CAL_DOW = ["M", "T", "W", "T", "F", "S", "S"];
-/** Open calendar state: which trigger, the month on view, and the anchor element. */
-let calState: {
-  target: "jump" | "date";
-  year: number;
-  month: number;
-  anchor: HTMLElement;
-} | null = null;
-let calOutside: ((e: PointerEvent) => void) | null = null;
-let calKeydown: ((e: KeyboardEvent) => void) | null = null;
-
-/** ISO "YYYY-MM-DD" for a year + 0-based month + day. */
-function isoDay(y: number, m0: number, d: number): string {
-  return `${y}-${String(m0 + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-}
 
 /** Compact "Mon D, YYYY" label for a "YYYY-MM-DD" day key. */
 function calBtnLabel(day: string): string {
   return fmtRangeDay(Date.parse(`${day}T00:00:00Z`));
 }
 
+/** Open the shared day-picker for the "jump" (overview) or "date" (day-bar) trigger. */
 function openCalendar(target: "jump" | "date", anchor: HTMLElement): void {
   if (!visitDays.length) return;
-  // Base the visible month on the current day (day bar) or the latest day (overview).
-  const base = (target === "date" && dayKey) || visitDays[visitDays.length - 1];
-  const [y, m] = base.split("-").map(Number);
-  calState = { target, year: y, month: m - 1, anchor };
-  renderCalendar();
-  // Defer wiring the dismiss listeners so the opening click doesn't immediately close it.
-  setTimeout(() => {
-    if (!calState) return;
-    calOutside = (e) => {
-      const t = e.target as HTMLElement;
-      if (!t.closest("#tlCal") && !t.closest('[data-tl="open-cal"]')) closeCalendar();
-    };
-    calKeydown = (e) => {
-      if (e.key === "Escape" && calState) {
-        e.stopPropagation();
-        closeCalendar();
-      }
-    };
-    document.addEventListener("pointerdown", calOutside, true);
-    document.addEventListener("keydown", calKeydown, true);
-  }, 0);
-}
-
-function closeCalendar(): void {
-  calState = null;
-  document.getElementById("tlCal")?.remove();
-  document.getElementById("tlCalBack")?.remove();
-  if (calOutside) document.removeEventListener("pointerdown", calOutside, true);
-  if (calKeydown) document.removeEventListener("keydown", calKeydown, true);
-  calOutside = calKeydown = null;
-}
-
-/** Phones stack the side panel under the map, so anchoring the popover to its
- * trigger drops it far up over the map. Below this width we render it as a
- * centered modal with a backdrop instead. Matches the `.tl-wrap` stacking cutoff. */
-function calIsModal(): boolean {
-  return window.matchMedia("(max-width: 768px)").matches;
-}
-
-/** Build/refresh the calendar popover for the month in `calState` and position it. */
-function renderCalendar(): void {
-  if (!calState) return;
-  const { year, month, anchor } = calState;
-  const minDay = visitDays[0];
-  const maxDay = visitDays[visitDays.length - 1];
-  const curMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
-  const prevOff = curMonth <= minDay.slice(0, 7);
-  const nextOff = curMonth >= maxDay.slice(0, 7);
-  const monthLabel = new Date(Date.UTC(year, month, 1)).toLocaleDateString(undefined, {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
+  const parent = document.getElementById("timelineView");
+  if (!parent) return;
+  openDatePicker({
+    anchor,
+    parent,
+    value: target === "date" ? dayKey : null,
+    min: visitDays[0],
+    max: visitDays[visitDays.length - 1],
+    allowedDays: new Set(visitDays),
+    esc: deps.esc,
+    icons: { chevLeft: ICONS.chevLeft, chevRight: ICONS.chevRight },
+    onPick: (day) => void enterDay(day),
   });
-  const firstDow = (new Date(Date.UTC(year, month, 1)).getUTCDay() + 6) % 7; // Mon=0
-  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-  const today = new Date().toISOString().slice(0, 10);
-
-  let cells = "";
-  for (let i = 0; i < firstDow; i++) cells += `<span class="tl-cal-cell empty"></span>`;
-  for (let d = 1; d <= daysInMonth; d++) {
-    const iso = isoDay(year, month, d);
-    const out = iso < minDay || iso > maxDay;
-    const sel = calState.target === "date" && iso === dayKey;
-    const cls = `tl-cal-cell${sel ? " sel" : ""}${iso === today ? " today" : ""}`;
-    cells += out
-      ? `<span class="tl-cal-cell out">${d}</span>`
-      : `<button class="${cls}" data-tl="cal-pick" data-day="${iso}">${d}</button>`;
-  }
-
-  let pop = document.getElementById("tlCal");
-  if (!pop) {
-    pop = document.createElement("div");
-    pop.id = "tlCal";
-    pop.className = "tl-cal";
-    document.getElementById("timelineView")?.appendChild(pop);
-  }
-  pop.innerHTML =
-    `<div class="tl-cal-head">` +
-    `<span class="tl-cal-month">${deps.esc(monthLabel)}</span>` +
-    `<span class="tl-cal-nav">` +
-    `<button class="tl-cal-arrow" data-tl="cal-nav" data-dir="-1" ${prevOff ? "disabled" : ""} aria-label="Previous month">${ICONS.chevLeft}</button>` +
-    `<button class="tl-cal-arrow" data-tl="cal-nav" data-dir="1" ${nextOff ? "disabled" : ""} aria-label="Next month">${ICONS.chevRight}</button>` +
-    `</span></div>` +
-    `<div class="tl-cal-grid tl-cal-dow">${CAL_DOW.map((d) => `<span class="tl-cal-cell dow">${d}</span>`).join("")}</div>` +
-    `<div class="tl-cal-grid">${cells}</div>`;
-
-  // Phones: a centered modal over a backdrop (CSS centers it); clear any inline
-  // coords left from a desktop render so they don't fight the centering rule.
-  if (calIsModal()) {
-    pop.classList.add("tl-cal--modal");
-    pop.style.left = pop.style.top = "";
-    pop.style.visibility = "visible";
-    if (!document.getElementById("tlCalBack")) {
-      const back = document.createElement("div");
-      back.id = "tlCalBack";
-      back.className = "tl-cal-back";
-      document.getElementById("timelineView")?.appendChild(back);
-    }
-    return;
-  }
-  pop.classList.remove("tl-cal--modal");
-  document.getElementById("tlCalBack")?.remove();
-
-  // Desktop: position above the trigger (the bar sits low); clamp within the viewport.
-  pop.style.visibility = "hidden";
-  pop.style.left = "0px";
-  const a = anchor.getBoundingClientRect();
-  const w = pop.offsetWidth;
-  const h = pop.offsetHeight;
-  let left = a.left;
-  left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
-  let top = a.top - h - 8;
-  if (top < 8) top = a.bottom + 8; // not enough room above → drop below
-  pop.style.left = `${left}px`;
-  pop.style.top = `${top}px`;
-  pop.style.visibility = "visible";
-}
-
-/** Shift the visible calendar month by `dir` (±1), then re-render in place. */
-function navCalendar(dir: number): void {
-  if (!calState) return;
-  const d = new Date(Date.UTC(calState.year, calState.month + dir, 1));
-  calState.year = d.getUTCFullYear();
-  calState.month = d.getUTCMonth();
-  renderCalendar();
 }
 
 // --------------------------------------------------------------------------- //
@@ -1629,16 +1503,6 @@ function onClick(e: Event): void {
       break;
     case "open-cal":
       openCalendar(el.dataset.cal === "date" ? "date" : "jump", el);
-      break;
-    case "cal-nav":
-      navCalendar(Number(el.dataset.dir));
-      break;
-    case "cal-pick":
-      if (el.dataset.day) {
-        const day = el.dataset.day;
-        closeCalendar();
-        void enterDay(day);
-      }
       break;
     case "tz":
       // Flip UTC ↔ area-local and refresh the time readouts in place (no map rebuild).

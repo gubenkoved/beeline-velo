@@ -87,9 +87,14 @@ describe("Store", () => {
     expect(s.rides.get(uid)!.title).toBe("Renamed loop"); // updated
   });
 
-  it("loads a legacy record without ingested_at as empty (unknown)", async () => {
+  it("backfills ingested_at for a legacy record missing it (rollout)", async () => {
     map.set(STORAGE_KEY, blob({ "beeline::k": { key: "k", title: "Old ride" } }));
-    expect(byKey(await Store.load(backend), "k")!.ingested_at).toBe("");
+    const stamped = byKey(await Store.load(backend), "k")!.ingested_at;
+    // Legacy records predate ingestion-date tracking; the store stamps "now" once on
+    // load so every ride has a defined ingestion date (else the Added filter would
+    // silently drop them). The exact value is unknowable, so just assert it's set.
+    expect(stamped).not.toBe("");
+    expect(Number.isNaN(Date.parse(stamped))).toBe(false);
   });
 
   it("scrubs known bad titles on load", async () => {

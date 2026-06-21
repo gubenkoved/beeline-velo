@@ -175,6 +175,10 @@ export interface RideView extends RideMetrics {
   can_upload: boolean;
   month_key: string;
   month_label: string;
+  /** ISO-8601 time the ride first entered the local library (carried from the
+   *  record). Independent of the ride's own datetime; drives the ingestion-date
+   *  filter. Empty for legacy records written before the field existed. */
+  ingested_at: string;
   uploaded_at: string;
   deleted: boolean;
   deleted_at: string;
@@ -1079,6 +1083,7 @@ export class Controller {
         can_upload: this.canUpload(r.source),
         month_key: monthKey(r),
         month_label: monthLabel(r),
+        ingested_at: r.ingested_at,
         uploaded_at: r.uploaded_at,
         deleted: r.deleted,
         deleted_at: r.deleted_at,

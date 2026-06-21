@@ -43,6 +43,7 @@ function ride(over: Partial<RideView> = {}): RideView {
     can_upload: true,
     month_key: "2026-06",
     month_label: "June 2026",
+    ingested_at: "2026-06-14T09:30:00+00:00",
     uploaded_at: "",
     deleted: false,
     deleted_at: "",

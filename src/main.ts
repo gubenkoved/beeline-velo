@@ -14,6 +14,7 @@ import L from "leaflet";
 
 import { activeView, setActiveView, type ViewName } from "./app-state";
 import { setSliderFill } from "./slider";
+import { closeDatePicker, openDatePicker } from "./datepicker";
 import { type AppState, Controller, type RideView } from "./controller";
 import {
   emptyFilters,
@@ -845,6 +846,12 @@ function sanitizeBound(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
 }
 
+/** Accept only a well-formed `"YYYY-MM-DD"` day string (else null), so malformed
+ *  storage for the ingestion-date filter falls back to neutral. */
+function sanitizeDay(v: unknown): string | null {
+  return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+}
+
 /**
  * Load the persisted filters, sanitizing every field against its allowed values
  * so old or malformed storage falls back to neutral rather than corrupting the
@@ -870,6 +877,8 @@ function loadFilters(): Filters {
     f.distMax = sanitizeBound(o.distMax);
     f.windMin = sanitizeBound(o.windMin);
     f.windMax = sanitizeBound(o.windMax);
+    f.ingestedFrom = sanitizeDay(o.ingestedFrom);
+    f.ingestedTo = sanitizeDay(o.ingestedTo);
     if (Array.isArray(o.tags)) {
       // Persisted as lowercase comparison keys; re-normalize + dedupe defensively.
       const seen = new Set<string>();
@@ -894,6 +903,80 @@ function saveFilters(): void {
   } catch {
     /* private mode / storage disabled — non-fatal */
   }
+}
+
+// -- ingestion-date filter pickers -----------------------------------------
+// The Added (ingestion-date) filter reuses the shared styled date-picker popover
+// (the same one the Timeline view uses). Two triggers — earliest ("from") and
+// latest ("to") — each open the picker constrained so the two bounds can't cross.
+const DP_CHEV_LEFT =
+  '<svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m15 18-6-6 6-6"/></svg>';
+const DP_CHEV_RIGHT =
+  '<svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 18 6-6-6-6"/></svg>';
+
+/** Local `"YYYY-MM-DD"` for an ISO instant (the ingestion-date filter works in
+ *  local days, matching the picker and `matchesFilters`). Null if unparseable. */
+function localDay(iso: string): string | null {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  const d = new Date(t);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Today as a local `"YYYY-MM-DD"`. */
+function todayDay(): string {
+  return localDay(new Date().toISOString())!;
+}
+
+/** A short, human label for a `"YYYY-MM-DD"` filter bound (e.g. "Jun 14, 2026"). */
+function dayLabel(day: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return day;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+/** Earliest ingestion day across the library (or today if none recorded). The
+ *  selectable range runs from there up to today. */
+function earliestIngestionDay(): string {
+  let min: string | null = null;
+  for (const r of STATE.rides) {
+    const day = localDay(r.ingested_at);
+    if (day && (min === null || day < min)) min = day;
+  }
+  return min ?? todayDay();
+}
+
+/** Open the shared date-picker for one ingestion-date bound, keeping from ≤ to. */
+function openIngestionPicker(which: "from" | "to", anchor: HTMLElement): void {
+  const earliest = earliestIngestionDay();
+  const today = todayDay();
+  // Constrain each side against the other so the two bounds can never cross.
+  const min = which === "to" ? (filters.ingestedFrom ?? earliest) : earliest;
+  const max = which === "from" ? (filters.ingestedTo ?? today) : today;
+  openDatePicker({
+    anchor,
+    parent: document.getElementById("filterPanel") ?? document.body,
+    value: which === "from" ? filters.ingestedFrom : filters.ingestedTo,
+    min,
+    max,
+    esc: escHtml,
+    icons: { chevLeft: DP_CHEV_LEFT, chevRight: DP_CHEV_RIGHT },
+    onPick: (day) => {
+      if (which === "from") {
+        filters.ingestedFrom = day;
+        if (filters.ingestedTo && filters.ingestedTo < day) filters.ingestedTo = day;
+      } else {
+        filters.ingestedTo = day;
+        if (filters.ingestedFrom && filters.ingestedFrom > day) filters.ingestedFrom = day;
+      }
+      saveFilters();
+      applyState();
+    },
+  });
 }
 
 const filters: Filters = loadFilters();
@@ -1974,6 +2057,19 @@ function syncFilterBar(allRides: AppState["rides"]): void {
   if (max && document.activeElement !== max)
     max.value = filters.distMax === null ? "" : String(filters.distMax);
 
+  // Added (ingestion-date) triggers — show the chosen day or the "from"/"to"
+  // placeholder, and light the field when either bound is set.
+  const ingFrom = document.getElementById("fIngFrom");
+  const ingTo = document.getElementById("fIngTo");
+  if (ingFrom) {
+    ingFrom.textContent = filters.ingestedFrom ? dayLabel(filters.ingestedFrom) : "from";
+    ingFrom.classList.toggle("placeholder", !filters.ingestedFrom);
+  }
+  if (ingTo) {
+    ingTo.textContent = filters.ingestedTo ? dayLabel(filters.ingestedTo) : "to";
+    ingTo.classList.toggle("placeholder", !filters.ingestedTo);
+  }
+
   // Tags filter: a single chip opening a multi-select popover (OR). Shown only once
   // some ride is tagged; gated on the real signal like the Source/Wind chips. Any
   // selected tag that no longer exists in the library is pruned so a hidden/absent
@@ -2066,6 +2162,8 @@ function setFilterPanel(open: boolean): void {
   btn?.setAttribute("aria-expanded", open ? "true" : "false");
   if (open) positionFilterPanel();
   if (!open) tagsFilterOpen = false;
+  // The ingestion-date picker lives inside the panel — dismiss it when the panel closes.
+  if (!open) closeDatePicker();
   // Reflect the chip/labels/Tags-popover state for the new visibility.
   syncFilterBar(STATE.rides);
 }
@@ -2146,6 +2244,8 @@ function clearFilters(): void {
   filters.device = "all";
   filters.distMin = null;
   filters.distMax = null;
+  filters.ingestedFrom = null;
+  filters.ingestedTo = null;
   filters.tags = [];
   filters.untagged = false;
 }
@@ -3566,6 +3666,14 @@ document.addEventListener("click", (e) => {
     cycleChip(t.dataset.fchip);
     saveFilters();
     applyState();
+    return;
+  }
+  // Added (ingestion-date) range: each trigger opens the shared styled date-picker
+  // constrained so the two bounds can't cross. The picker itself persists + re-renders
+  // on pick, so there's nothing to do here but open it.
+  const ingTrigger = t.closest<HTMLElement>("#fIngFrom, #fIngTo");
+  if (ingTrigger) {
+    openIngestionPicker(ingTrigger.id === "fIngFrom" ? "from" : "to", ingTrigger);
     return;
   }
   // Tags filter: the chip toggles its in-panel multi-select section; each tag chip ORs
